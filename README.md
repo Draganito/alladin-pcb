@@ -11,6 +11,16 @@ Deutsche Einstiegsanleitung: [ANLEITUNG_FUER_ANFAENGER.md](ANLEITUNG_FUER_ANFAEN
 
 ![Alladin PCB](docs/screenshot.png)
 
+## Download (precompiled, nothing to build)
+
+Grab the ready-to-run beta from the
+**[Releases page](https://github.com/Draganito/alladin-pcb/releases)**:
+`alladin-pcb-beta-linux-x86_64.zip` (under *Assets*) contains the Alladin
+binary **plus** a working copy of the external autorouter with its
+precompiled Rust core — unzip, run `./alladin-pcb`, done. Linux x86-64,
+glibc 2.39+. Everything below is only needed if you want to build from
+source.
+
 ## What you get
 
 - **Own board format** — Alladin `.json` is the source of truth.
