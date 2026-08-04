@@ -1,0 +1,43 @@
+Alladin PCB — Binary-Paket
+==========================
+
+Vorkompilierter Linux-Build von Alladin PCB (AGPL-3.0).
+Quellcode: https://github.com/Draganito/alladin-pcb
+Lizenzhinweise: LICENSE.txt
+
+Inhalt
+------
+  alladin-pcb          PCB-Editor (Linux x86-64)
+  KiCadRoutingTools/   Optionaler Autorouter, unverändert mitgeliefert
+                       (MIT, Andy Haas) — gehört NICHT zum Alladin-
+                       Quell-Repository; nur Einstiegshilfe
+  cursor-setup/        Cursor-MCP-Konfiguration
+  docs/                Screenshot + Hershey-Hinweis
+
+Voraussetzungen
+---------------
+- Linux x86-64, X11/Wayland, glibc 2.39+ (ldd --version)
+- Nur Autorouter: sudo apt install python3-numpy python3-scipy python3-shapely
+- KiCad optional (nur eigenes DRC). Fertigung nativ; Boards = Alladin-.json
+
+Start
+-----
+  chmod +x alladin-pcb
+  ./alladin-pcb
+
+  Mit KI-Schreibzugriff: ./alladin-pcb --allow-ai-write
+  Dann cursor-setup/.cursor in den Cursor-Projektordner kopieren.
+
+Produkt
+-------
+- Eigenes .json-Format; kein KiCad-Import/Export in der UI
+- "Export manufacturing files..." → Gerber-Zip + CPL + BOM (nativ)
+- Hershey-Futural-Silkscreen (Vorschau = Gerber)
+- Autorouter: Dialog "Autoroute (extern)" auf diesen KiCadRoutingTools-
+  Ordner zeigen (route.py). Ordner darf unabhängig aktualisiert werden.
+- Der kompilierte Rust-Kern des Autorouters
+  (rust_router/grid_router.so, Linux x86-64) liegt fertig bei —
+  nichts muss gebaut werden. Später aktualisieren/neu bauen:
+  "python3 build_router.py" im KiCadRoutingTools-Ordner (lädt das
+  passende Fertig-Binary; mit --from-source baut es per Rust/cargo
+  selbst). Alles Weitere: KiCadRoutingTools/README.md.

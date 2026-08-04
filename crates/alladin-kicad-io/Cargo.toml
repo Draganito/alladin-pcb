@@ -1,0 +1,21 @@
+[package]
+name = "alladin-kicad-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alladin-sexpr = { path = "../alladin-sexpr" }
+alladin-geom = { path = "../alladin-geom" }
+alladin-core = { path = "../alladin-core" }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+# Only used by the `import_route_export_check` dev example (real-file
+# validation, see that file's doc comment) -- the library itself has no
+# routing dependency, keeping the import/export layer decoupled from the
+# routing engine.
+alladin-router = { path = "../alladin-router" }

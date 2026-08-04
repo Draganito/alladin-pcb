@@ -1,0 +1,19 @@
+Alladin PCB
+Copyright (C) 2026 Dragan Bojovic
+
+This program is free software under the GNU Affero General Public License
+v3.0; see the file LICENSE.
+
+Third-party notices
+-------------------
+
+Silkscreen stroke font (Hershey Futural / Simplex Roman)
+  Originally created by Dr. A. V. Hershey (U.S. National Bureau of Standards).
+  Distribution format by James Hurt (Cognition, Inc.).
+  Full use-restriction text: tools/hershey/USE_RESTRICTION.txt
+
+Optional external autorouter (not shipped in this source repository)
+  KiCadRoutingTools by Andy Haas (drandyhaas), MIT License
+  https://github.com/drandyhaas/KiCadRoutingTools
+  Alladin invokes it unmodified via subprocess when the user configures it.
+  Convenience binary packages may bundle an unmodified copy separately.

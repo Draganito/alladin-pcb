@@ -1,0 +1,12 @@
+[package]
+name = "alladin-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alladin-geom = { path = "../alladin-geom" }
+alladin-core = { path = "../alladin-core" }
+rstar = { workspace = true }
+rustc-hash = { workspace = true }
+rayon = { workspace = true }

@@ -1,0 +1,30 @@
+# Build
+/target/
+router/target/
+
+# External autorouter — clone beside the repo; never vendor it here.
+# Bundled only in the optional binary convenience package (dist/).
+KiCadRoutingTools/
+
+# Old KiCad vendor / probe trees (not part of Alladin)
+kicad-source/
+probe-build/
+
+# Beta / binary package build outputs (templates stay in dist/beta-package/)
+dist/alladin-test/
+dist/alladin-pcb-test.zip
+*.zip
+
+# Private / local-only (not for the public AGPL tree)
+/RESEARCH.md
+/docs/DEVLOG-router.md
+/PUBLISH_CHECKLIST.md
+/.cursor/
+**/*.bak
+**/*~
+
+# Regenerable manufacturing exports next to example boards
+examples/*_gerbers.zip
+examples/*_cpl.csv
+examples/*_bom.csv
+Test/

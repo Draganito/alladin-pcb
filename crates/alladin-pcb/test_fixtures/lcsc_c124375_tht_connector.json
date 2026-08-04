@@ -1,0 +1,50 @@
+{
+  "success": true,
+  "code": 0,
+  "result": {
+    "title": "210S-1*2P L=11.6MMGold-plated black",
+    "description": "",
+    "tags": ["Pin Headers"],
+    "lcsc": {
+      "id": 125650,
+      "number": "C124375",
+      "step": 20,
+      "min": 20,
+      "price": 0.0163,
+      "stock": 9880,
+      "url": "https://lcsc.com/product-detail/Male-Header_Headers-Pins-1-2P-2-54mm-Straight-line_C124375.html"
+    },
+    "packageDetail": {
+      "dataStr": {
+        "head": {
+          "docType": "4",
+          "editorVersion": "6.5.48",
+          "c_para": {
+            "package": "HDR-TH_2P-P2.54-V-M-1",
+            "pre": "H?",
+            "Contributor": "lcsc",
+            "link": "https://item.szlcsc.com/366904.html",
+            "3DModel": "HDR-M-2.54_1x2"
+          },
+          "hasIdFlag": true,
+          "x": 3996.5,
+          "y": 3003.5,
+          "uuid": "7ae61b24ec5d431087f34ea7cfebbd9e",
+          "utime": 1741078127,
+          "importFlag": 0,
+          "transformList": "",
+          "uuid_3d": ""
+        },
+        "shape": [
+          "CIRCLE~3986.5~3008.5~0.118~0.2362~101~gge126~0~~",
+          "SOLIDREGION~99~~M 3986.5 3008.5 L 3986.5 2998.5 L 4006.5 2998.5 L 4006.5 3008.5 Z ~solid~gge117~~~~0",
+          "RECT~3986.5~2998.5~20~10~3~gge16~0~1~none~~~",
+          "SOLIDREGION~100~~M 3990.2402 3002.2402 L 3992.7598 3002.2402 L 3992.7598 3004.7598 L 3990.2402 3004.7598 Z~solid~gge120~~~~0",
+          "SOLIDREGION~100~~M 4000.2402 3002.2402 L 4002.7598 3002.2402 L 4002.7598 3004.7598 L 4000.2402 3004.7598 Z~solid~gge123~~~~0",
+          "PAD~ELLIPSE~4001.5~3003.5~7.0866~7.0866~11~~2~2.1654~~0~gge14~0~~Y~0~0~0.2~4001.5,3003.5",
+          "PAD~RECT~3991.5~3003.5~7.0866~7.0866~11~~1~2.1654~3987.9567 2999.9567 3995.0433 2999.9567 3995.0433 3007.0433 3987.9567 3007.0433~0~gge15~0~~Y~0~0~0.2~3991.5,3003.5"
+        ]
+      }
+    }
+  }
+}
