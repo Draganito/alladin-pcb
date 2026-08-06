@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
-# Builds the optional binary convenience package for Alladin PCB.
+# Builds the binary release package for Alladin PCB.
 #
 # Result (always under dist/):
-#   dist/alladin-pcb-test.zip   packaged folder "alladin-test/"
-#   dist/alladin-test/          stage folder (same contents, for git push)
-#
-# Package contents:
-#   alladin-pcb          freshly built, stripped release binary
-#   KiCadRoutingTools/   external autorouter, bundled unmodified
-#                        (without .git/.venv/__pycache__) — NOT in the
-#                        AGPL source tree; only here for easier first run
-#   README.md, LIESMICH.txt, LICENSE.txt, cursor-setup/, docs/
-#                        from dist/beta-package/
+#   dist/alladin-pcb_<version>_amd64.deb   THE release file: binary +
+#                                          bundled KiCadRoutingTools +
+#                                          docs + cursor-setup (see
+#                                          Cargo.toml's [package.metadata.deb])
+#   dist/alladin-test/                     internal stage folder (cleaned
+#                                          KiCadRoutingTools copy the deb
+#                                          build references; not shipped)
 #
 # Usage:  dist/make_beta_package.sh [--skip-build]
+#
+# One-time prerequisite:  cargo install cargo-deb --locked
 
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_DIR="$PROJECT_DIR/dist/beta-package"
 STAGE="$PROJECT_DIR/dist/alladin-test"
-ZIP="$PROJECT_DIR/dist/alladin-pcb-test.zip"
 
 # Respect CARGO_TARGET_DIR (Cursor/sandbox often redirects the target
 # tree). Falling back to ./target only when unset.
@@ -36,51 +34,8 @@ fi
 [[ -x "$BIN" ]] || { echo "ERROR: $BIN missing"; exit 1; }
 echo "==> binary: $BIN ($(date -r "$BIN" '+%Y-%m-%d %H:%M'), $(du -h "$BIN" | cut -f1))"
 
-# 2. Assemble the stage folder
-echo "==> assembling $STAGE"
-rm -rf "$STAGE"
-mkdir -p "$STAGE"
-
-cp "$BIN" "$STAGE/alladin-pcb"
-strip "$STAGE/alladin-pcb"
-chmod +x "$STAGE/alladin-pcb"
-
-[[ -d "$PROJECT_DIR/KiCadRoutingTools" ]] \
-    || { echo "ERROR: $PROJECT_DIR/KiCadRoutingTools missing (clone beside the source tree; needed unmodified for the binary package only)"; exit 1; }
-cp -a "$PROJECT_DIR/KiCadRoutingTools" "$STAGE/KiCadRoutingTools"
-rm -rf "$STAGE/KiCadRoutingTools/.git" "$STAGE/KiCadRoutingTools/.venv"
-find "$STAGE/KiCadRoutingTools" -type d -name __pycache__ -prune -exec rm -rf {} +
-
-cp "$TEMPLATE_DIR/README.md" "$TEMPLATE_DIR/LIESMICH.txt" "$TEMPLATE_DIR/LICENSE.txt" "$STAGE/"
-cp -a "$TEMPLATE_DIR/docs" "$STAGE/docs"
-mkdir -p "$STAGE/cursor-setup/.cursor/rules"
-cp "$TEMPLATE_DIR/cursor-setup/.cursor/mcp.json" "$STAGE/cursor-setup/.cursor/"
-cp "$TEMPLATE_DIR/cursor-setup/.cursor/rules/alladin-mcp.mdc" "$STAGE/cursor-setup/.cursor/rules/"
-cp "$TEMPLATE_DIR/cursor-setup/.cursorignore" "$STAGE/cursor-setup/"
-
-# 3. Zip (contents rooted at alladin-test/)
-echo "==> zipping $ZIP"
-rm -f "$ZIP"
-(cd "$PROJECT_DIR/dist" && zip -qr "$ZIP" alladin-test)
-
-# 4. Sanity checks
-echo "==> checks"
-LISTING=$(unzip -l "$ZIP")
-for f in README.md LIESMICH.txt LICENSE.txt alladin-pcb KiCadRoutingTools/LICENSE cursor-setup/.cursor/mcp.json cursor-setup/.cursor/rules/alladin-mcp.mdc cursor-setup/.cursorignore docs/screenshot.png docs/hershey-USE_RESTRICTION.txt; do
-    grep -q "alladin-test/$f" <<<"$LISTING" \
-        || { echo "ERROR: $f missing in zip"; exit 1; }
-done
-if grep -qE "\.git/|\.venv/|__pycache__/" <<<"$LISTING"; then
-    echo "ERROR: .git/.venv/__pycache__ leaked into zip"; exit 1
-fi
-# Never ship Alladin source in the binary package.
-if grep -qE "alladin-test/crates/|alladin-test/Cargo\.toml|alladin-test/\.git/" <<<"$LISTING"; then
-    echo "ERROR: Alladin source tree leaked into zip"; exit 1
-fi
-BIG=$(find "$STAGE" -type f -size +95M | wc -l)
-[[ "$BIG" -eq 0 ]] || { echo "ERROR: file(s) over GitHub's 100 MB limit"; exit 1; }
-
-HELP=$("$STAGE/alladin-pcb" --help)
+# 2. Binary sanity checks (before packaging anything)
+HELP=$("$BIN" --help)
 echo "$HELP" | grep -q 'export-manufacturing' \
     || { echo "ERROR: binary missing export-manufacturing"; exit 1; }
 if echo "$HELP" | grep -qE 'export-kicad|import-kicad|export-bom'; then
@@ -90,6 +45,54 @@ fi
 echo "$HELP" | grep -q '_bom.csv' \
     || { echo "ERROR: export-manufacturing help must mention BOM CSV"; exit 1; }
 
+# 3. Stage a cleaned KiCadRoutingTools copy (what the deb bundles)
+echo "==> staging cleaned KiCadRoutingTools in $STAGE"
+[[ -d "$PROJECT_DIR/KiCadRoutingTools" ]] \
+    || { echo "ERROR: $PROJECT_DIR/KiCadRoutingTools missing (clone beside the source tree; needed unmodified for the binary package only)"; exit 1; }
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp -a "$PROJECT_DIR/KiCadRoutingTools" "$STAGE/KiCadRoutingTools"
+rm -rf "$STAGE/KiCadRoutingTools/.git" "$STAGE/KiCadRoutingTools/.venv"
+find "$STAGE/KiCadRoutingTools" -type d -name __pycache__ -prune -exec rm -rf {} +
+
+# 4. Debian package (uses the binary from step 1 and the stage from step 3)
+echo "==> cargo deb"
+command -v cargo-deb >/dev/null \
+    || { echo "ERROR: cargo-deb not installed (fix: cargo install cargo-deb --locked)"; exit 1; }
+rm -f "$PROJECT_DIR"/dist/alladin-pcb_*.deb
+DEB=$(cd "$PROJECT_DIR" && cargo deb -p alladin-pcb --no-build -o "$PROJECT_DIR/dist/" | tail -1)
+[[ -f "$DEB" ]] || { echo "ERROR: cargo deb produced no package"; exit 1; }
+
+# 5. Deb sanity checks
+DEB_LISTING=$(dpkg-deb -c "$DEB")
+for f in ./usr/bin/alladin-pcb \
+         ./usr/share/alladin-pcb/KiCadRoutingTools/route.py \
+         ./usr/share/alladin-pcb/KiCadRoutingTools/LICENSE \
+         ./usr/share/alladin-pcb/KiCadRoutingTools/rust_router/grid_router.so \
+         ./usr/share/alladin-pcb/cursor-setup/.cursor/mcp.json \
+         ./usr/share/alladin-pcb/cursor-setup/.cursor/rules/alladin-mcp.mdc \
+         ./usr/share/alladin-pcb/cursor-setup/.cursorignore \
+         ./usr/share/doc/alladin-pcb/README.md \
+         ./usr/share/doc/alladin-pcb/LIESMICH.txt \
+         ./usr/share/doc/alladin-pcb/LICENSE.txt \
+         ./usr/share/doc/alladin-pcb/docs/screenshot.png \
+         ./usr/share/doc/alladin-pcb/docs/hershey-USE_RESTRICTION.txt; do
+    grep -q " $f\$" <<<"$DEB_LISTING" \
+        || { echo "ERROR: $f missing in deb"; exit 1; }
+done
+if grep -qE "\.git/|\.venv/|__pycache__/" <<<"$DEB_LISTING"; then
+    echo "ERROR: .git/.venv/__pycache__ leaked into deb"; exit 1
+fi
+# Never ship Alladin source in the binary package. (KiCadRoutingTools'
+# own rust_router/ sources are intended and allowed -- bundled unmodified.)
+if grep -E "crates/alladin|alladin-(core|geom|gerber|render|router|sexpr|kicad-io)" <<<"$DEB_LISTING" | grep -vq "KiCadRoutingTools"; then
+    echo "ERROR: Alladin source tree leaked into deb"; exit 1
+fi
+dpkg-deb --info "$DEB" | grep -q "python3-shapely" \
+    || { echo "ERROR: deb is missing the python3 module Depends"; exit 1; }
+DEB_SIZE=$(stat -c%s "$DEB")
+[[ "$DEB_SIZE" -lt 99000000 ]] \
+    || { echo "ERROR: deb exceeds GitHub's 100 MB release-asset comfort zone"; exit 1; }
+
 echo
-echo "OK: $ZIP  ($(du -h "$ZIP" | cut -f1)),  unpacked: $(du -sh "$STAGE" | cut -f1)"
-echo "Stage folder for direct git push: $STAGE"
+echo "OK: $DEB  ($(du -h "$DEB" | cut -f1))"

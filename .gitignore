@@ -12,7 +12,7 @@ probe-build/
 
 # Beta / binary package build outputs (templates stay in dist/beta-package/)
 dist/alladin-test/
-dist/alladin-pcb-test.zip
+dist/*.deb
 *.zip
 
 # Private / local-only (not for the public AGPL tree)

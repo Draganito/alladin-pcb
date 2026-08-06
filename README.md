@@ -15,11 +15,20 @@ Deutsche Einstiegsanleitung: [ANLEITUNG_FUER_ANFAENGER.md](ANLEITUNG_FUER_ANFAEN
 
 Grab the ready-to-run beta from the
 **[Releases page](https://github.com/Draganito/alladin-pcb/releases)**:
-`alladin-pcb-beta-linux-x86_64.zip` (under *Assets*) contains the Alladin
-binary **plus** a working copy of the external autorouter with its
-precompiled Rust core — unzip, run `./alladin-pcb`, done. Linux x86-64,
-glibc 2.39+. Everything below is only needed if you want to build from
-source.
+`alladin-pcb_<version>_amd64.deb` (under *Assets*) is the one release
+file — the Alladin binary **plus** a working copy of the external
+autorouter with its precompiled Rust core, packaged as a Debian package:
+
+```bash
+sudo apt install ./alladin-pcb_<version>_amd64.deb
+alladin-pcb
+```
+
+The autorouter's Python dependencies install automatically; in the
+**Autoroute (extern)** settings just point the tool folder at
+`/usr/share/alladin-pcb/KiCadRoutingTools` and set Python to `python3`.
+Debian/Ubuntu x86-64, glibc 2.39+. Everything below is only needed if
+you want to build from source.
 
 ## What you get
 

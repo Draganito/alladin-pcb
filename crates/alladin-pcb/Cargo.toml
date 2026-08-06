@@ -3,6 +3,7 @@ name = "alladin-pcb"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Interactive, correct-by-construction PCB editor with native JLCPCB manufacturing export and an MCP server for AI-driven board design"
 
 # `alladin-pcb`: the interactive, correct-by-construction PCB editor --
 # see the root README / docs/architecture.md and `src/main.rs`'s module
@@ -33,3 +34,38 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 alladin-sexpr = { path = "../alladin-sexpr" }
+
+# `cargo deb -p alladin-pcb --no-build` — run via dist/make_beta_package.sh,
+# which stages the cleaned KiCadRoutingTools copy this references first.
+# The bundled KiCadRoutingTools (MIT, drandyhaas) lands under
+# /usr/share/alladin-pcb/KiCadRoutingTools; its Python deps are declared
+# as package Depends so the system python3 works without a venv.
+[package.metadata.deb]
+maintainer = "Dragan Bojovic <dragan@localhost>"
+copyright = "2026 Dragan Bojovic (Alladin, AGPL-3.0-only); 2026 drandyhaas (KiCadRoutingTools, MIT)"
+extended-description = """\
+Interactive, correct-by-construction 2-layer PCB editor with native
+Gerber/Excellon manufacturing export (JLCPCB rules) and an MCP server
+for AI-driven board design. Bundles the external KiCadRoutingTools
+autorouter (MIT license, github.com/drandyhaas/KiCadRoutingTools)
+unmodified under /usr/share/alladin-pcb/KiCadRoutingTools — point the
+"Autoroute (extern)" settings' tool folder there. Alladin source:
+https://github.com/Draganito/alladin-pcb"""
+section = "electronics"
+priority = "optional"
+depends = "$auto, python3, python3-numpy, python3-scipy, python3-shapely"
+# eframe/winit loads these via dlopen at runtime, so `$auto`
+# (dpkg-shlibdeps) can't see them -- present on any desktop install,
+# hence Recommends rather than Depends.
+recommends = "libgl1, libxkbcommon0, libwayland-client0, libxcb1"
+assets = [
+    ["target/release/alladin-pcb", "usr/bin/", "755"],
+    ["../../dist/beta-package/README.md", "usr/share/doc/alladin-pcb/", "644"],
+    ["../../dist/beta-package/LIESMICH.txt", "usr/share/doc/alladin-pcb/", "644"],
+    ["../../dist/beta-package/LICENSE.txt", "usr/share/doc/alladin-pcb/", "644"],
+    ["../../dist/beta-package/docs/**/*", "usr/share/doc/alladin-pcb/docs/", "644"],
+    ["../../dist/beta-package/cursor-setup/.cursor/mcp.json", "usr/share/alladin-pcb/cursor-setup/.cursor/", "644"],
+    ["../../dist/beta-package/cursor-setup/.cursor/rules/alladin-mcp.mdc", "usr/share/alladin-pcb/cursor-setup/.cursor/rules/", "644"],
+    ["../../dist/beta-package/cursor-setup/.cursorignore", "usr/share/alladin-pcb/cursor-setup/", "644"],
+    ["../../dist/alladin-test/KiCadRoutingTools/**/*", "usr/share/alladin-pcb/KiCadRoutingTools/", "644"],
+]
