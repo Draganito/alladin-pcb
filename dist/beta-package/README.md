@@ -26,7 +26,7 @@ package dependencies and installed automatically — no venv, no
 | `/usr/bin/alladin-pcb` | The PCB editor (Linux x86-64) |
 | `/usr/share/alladin-pcb/KiCadRoutingTools/` | Optional external autorouter, bundled **unmodified** — [KiCadRoutingTools](https://github.com/drandyhaas/KiCadRoutingTools) (MIT, Andy Haas). Not part of the Alladin source repo. |
 | `/usr/share/alladin-pcb/cursor-setup/` | Ready-made Cursor setup: MCP config, AI working rules, `.cursorignore` |
-| `/usr/share/doc/alladin-pcb/` | This file, LIESMICH.txt, LICENSE.txt, docs |
+| `/usr/share/doc/alladin-pcb/` | This file, LIESMICH.txt, LICENSE.txt, docs — including the complete A-to-Z manual: `docs/MANUAL.md` (English) / `docs/HANDBUCH.md` (German) |
 
 ## Requirements
 

@@ -76,6 +76,8 @@ for f in ./usr/bin/alladin-pcb \
          ./usr/share/doc/alladin-pcb/LIESMICH.txt \
          ./usr/share/doc/alladin-pcb/LICENSE.txt \
          ./usr/share/doc/alladin-pcb/docs/screenshot.png \
+         ./usr/share/doc/alladin-pcb/docs/HANDBUCH.md \
+         ./usr/share/doc/alladin-pcb/docs/MANUAL.md \
          ./usr/share/doc/alladin-pcb/docs/hershey-USE_RESTRICTION.txt; do
     grep -q " $f\$" <<<"$DEB_LISTING" \
         || { echo "ERROR: $f missing in deb"; exit 1; }

@@ -31,8 +31,15 @@ auftauchen:
 
 ## 1. App starten
 
-Im Terminal, im Alladin-Projektordner (dort, wo `Cargo.toml` und diese
-Anleitung liegen):
+Wer das fertige Debian-Paket installiert hat (siehe README, Abschnitt
+„Download"), startet einfach:
+
+```bash
+alladin-pcb
+```
+
+Wer stattdessen mit dem Quellcode arbeitet, startet im Terminal im
+Alladin-Projektordner (dort, wo `Cargo.toml` und diese Anleitung liegen):
 
 ```bash
 cargo run -p alladin-pcb
@@ -224,28 +231,23 @@ Ansicht: mit gedrückter Maustaste über eine freie Fläche ziehen (nicht
 Der aktuelle Dateiname (oder „(unsaved)") steht direkt daneben im oberen
 Panel.
 
-## 12. Kontrolle vor der Fertigung: DRC
+## 12. Kontrolle vor der Fertigung
 
-Bevor eine Platine bestellt wird, unbedingt gegen echte Fertigungsregeln
-prüfen:
+Einen separaten DRC-Lauf braucht Alladin nicht: Das Programm arbeitet
+**correct-by-construction** — Aktionen, die die JLCPCB-Fertigungsregeln
+(Abstände, Mindestbreiten) verletzen würden, werden gar nicht erst
+zugelassen. Was auf dem Board liegt, ist damit per Konstruktion
+regelkonform. Vor der Bestellung trotzdem drei Dinge prüfen:
 
-1. **„Export to KiCad…"** klicken → als `.kicad_pcb`-Datei speichern.
-2. Im Terminal einen echten DRC-Report erzeugen lassen:
-
-   ```bash
-   kicad-cli pcb drc --severity-all --format report \
-     --output drc_report.txt dein_board.kicad_pcb
-   ```
-
-3. `drc_report.txt` durchsehen. Zwei Kategorien sind normal/unkritisch:
-   - **Silkscreen-Überlappungen** (Bauteilbezeichner überlappen Kupfer/
-     andere Bezeichner) — rein optisch, kein elektrisches Problem.
-   - **Clearance-Warnungen zwischen 0,1–0,2 mm** — KiCads Standard-
-     Netzklasse verlangt 0,2 mm, JLCPCB erlaubt aber 0,1 mm; Alladin
-     routet nach der JLCPCB-Regel, das ist also gewollt.
-4. Alles andere (v.a. **`shorting_items`**, also echte Kurzschlüsse)
-   muss vor der Fertigung behoben werden — betroffene Stelle in Alladin
-   erneut anfahren, Bahn löschen und neu routen.
+1. **Elektrisch vollständig?** Die Ratsnest-Anzeige (dünne Luftlinien)
+   muss leer sein — jede sichtbare Linie ist eine noch nicht geroutete
+   Verbindung.
+2. **Zonen aktuell?** Erscheint oben die Warnung „⚠ Zones may be
+   stale …", einmal **„Refill zones"** klicken.
+3. **Zweitmeinung vom Fertiger:** Nach dem Gerber-Upload zeigt JLCPCB
+   eine eigene DFM-Analyse und eine Bestückungsvorschau — dort die
+   Platinenkontur, die Lagen und die Ausrichtung gepolter Bauteile
+   (Pin-1-Marker) kontrollieren.
 
 ## 13. Fertigungsdaten erzeugen
 
@@ -284,10 +286,10 @@ ZIP bei JLCPCB hochladen; BOM und CPL dort für die Bestückung angeben.
   („Connect pins"), dann Zone zeichnen.
 - **Vergessen, „Refill zones" zu klicken** nach nachträglichen Änderungen
   am Board — die Zone bleibt sonst optisch auf dem alten Stand.
-- **Direkt bestellen ohne DRC-Export** — der visuelle Editor lässt
-  bewusst auch enge/überlappende Bahnen zu (das ist kein Fehler des
-  Programms, sondern Absicht, siehe Abschnitt 12); die verbindliche
-  Prüfung ist immer der echte KiCad-DRC-Lauf vor der Fertigung.
+- **Direkt bestellen ohne Endkontrolle** — vor dem Export einmal
+  Ratsnest prüfen (keine offenen Verbindungen), „Refill zones" klicken
+  und nach dem Upload JLCPCBs eigene DFM-/Bestückungsvorschau ansehen
+  (siehe Abschnitt 12).
 - **Bauteil verschieben, ohne vorher zu prüfen, ob Bahnen mitgezogen
   wurden** — Alladin hält Netzverbindungen beim Verschieben stabil,
   bereits geroutete Bahnen können nach einem großen Sprung aber wieder
@@ -311,6 +313,13 @@ funktioniert der Rest von Alladin ganz normal weiter; installiert man es,
 ändert sich an Alladin selbst nichts, es wird nur ein Knopf benutzbar.
 Die Einrichtung macht man **einmal pro Rechner**, danach merkt sich
 Alladin den Pfad dauerhaft.
+
+> **Abkürzung für Nutzer des Debian-Pakets:** Wer Alladin über das
+> `.deb` von der Releases-Seite installiert hat, kann die Abschnitte
+> 16.1–16.3 komplett überspringen — das Tool liegt fertig unter
+> `/usr/share/alladin-pcb/KiCadRoutingTools`, die Python-Pakete sind
+> mitinstalliert. In Abschnitt 16.4 als „Tool folder" diesen Pfad und
+> als „Python binary" einfach `python3` eintragen.
 
 ### 16.1 Repo klonen (neben den Alladin-Quellcode)
 

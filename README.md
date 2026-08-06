@@ -8,6 +8,8 @@ See [NOTICE](NOTICE) for third-party credits (Hershey font; optional
 external autorouter).
 
 Deutsche Einstiegsanleitung: [ANLEITUNG_FUER_ANFAENGER.md](ANLEITUNG_FUER_ANFAENGER.md).
+Complete A-to-Z manual: [docs/MANUAL.md](docs/MANUAL.md) (English) /
+[docs/HANDBUCH.md](docs/HANDBUCH.md) (German).
 
 ![Alladin PCB](docs/screenshot.png)
 

@@ -25,7 +25,11 @@ Was liegt wo
   /usr/share/alladin-pcb/cursor-setup/        Cursor-Setup: MCP-Konfig,
                                               KI-Regeln, .cursorignore
   /usr/share/doc/alladin-pcb/                 Diese Datei, README,
-                                              LICENSE.txt, docs
+                                              LICENSE.txt, docs — darin
+                                              das komplette Handbuch
+                                              (A-Z): docs/HANDBUCH.md
+                                              (deutsch) bzw.
+                                              docs/MANUAL.md (englisch)
 
 Voraussetzungen
 ---------------
