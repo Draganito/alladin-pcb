@@ -86,9 +86,13 @@ The German beginner guide covers the same steps in detail
 ./target/release/alladin-pcb --allow-ai-write
 ```
 
-Copy [`contrib/cursor-setup/.cursor`](contrib/cursor-setup/.cursor) into
-the folder you open in Cursor so `.cursor/mcp.json` points at
-`http://127.0.0.1:8642/mcp`.
+Copy the *contents* of [`contrib/cursor-setup/`](contrib/cursor-setup)
+(`.cursor/` **and** `.cursorignore`) into the folder you open in Cursor:
+`.cursor/mcp.json` points at `http://127.0.0.1:8642/mcp`,
+`.cursor/rules/alladin-mcp.mdc` makes the AI act tersely and tool-first,
+and `.cursorignore` hides board `.json` files from the AI so the MCP
+tools (where Alladin validates every change) are its only way to touch
+the board.
 
 ## Example board
 

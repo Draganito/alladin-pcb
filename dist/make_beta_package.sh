@@ -53,8 +53,10 @@ find "$STAGE/KiCadRoutingTools" -type d -name __pycache__ -prune -exec rm -rf {}
 
 cp "$TEMPLATE_DIR/README.md" "$TEMPLATE_DIR/LIESMICH.txt" "$TEMPLATE_DIR/LICENSE.txt" "$STAGE/"
 cp -a "$TEMPLATE_DIR/docs" "$STAGE/docs"
-mkdir -p "$STAGE/cursor-setup/.cursor"
+mkdir -p "$STAGE/cursor-setup/.cursor/rules"
 cp "$TEMPLATE_DIR/cursor-setup/.cursor/mcp.json" "$STAGE/cursor-setup/.cursor/"
+cp "$TEMPLATE_DIR/cursor-setup/.cursor/rules/alladin-mcp.mdc" "$STAGE/cursor-setup/.cursor/rules/"
+cp "$TEMPLATE_DIR/cursor-setup/.cursorignore" "$STAGE/cursor-setup/"
 
 # 3. Zip (contents rooted at alladin-test/)
 echo "==> zipping $ZIP"
@@ -64,7 +66,7 @@ rm -f "$ZIP"
 # 4. Sanity checks
 echo "==> checks"
 LISTING=$(unzip -l "$ZIP")
-for f in README.md LIESMICH.txt LICENSE.txt alladin-pcb KiCadRoutingTools/LICENSE cursor-setup/.cursor/mcp.json docs/screenshot.png docs/hershey-USE_RESTRICTION.txt; do
+for f in README.md LIESMICH.txt LICENSE.txt alladin-pcb KiCadRoutingTools/LICENSE cursor-setup/.cursor/mcp.json cursor-setup/.cursor/rules/alladin-mcp.mdc cursor-setup/.cursorignore docs/screenshot.png docs/hershey-USE_RESTRICTION.txt; do
     grep -q "alladin-test/$f" <<<"$LISTING" \
         || { echo "ERROR: $f missing in zip"; exit 1; }
 done

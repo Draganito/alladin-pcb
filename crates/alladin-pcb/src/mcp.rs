@@ -404,6 +404,21 @@ pub enum McpQuery {
     /// Physical copper-continuity check -- see
     /// `crate::app::net_continuity_json`.
     CheckNetContinuity { args: CheckNetContinuityArgs, reply: oneshot::Sender<String> },
+    /// One-call working picture (overview + DFM numbers + what's still
+    /// unfinished) -- see `crate::app::board_summary_json`. Runs the
+    /// same whole-board copper-components sweep `CheckNetContinuity`
+    /// does, so it's dispatched to a background job exactly like it
+    /// (and, like it, deliberately not in [`Self::is_write`]'s
+    /// read-only list).
+    BoardSummary { reply: oneshot::Sender<String> },
+    /// Whether an MCP background job is running right now, plus the
+    /// most recently finished job's full result -- answered directly by
+    /// `crate::app::PcbApp::ui`'s own drain loop (the only place the
+    /// job bookkeeping lives), never queued behind the job itself.
+    /// Read-only: this is exactly the query that must keep answering
+    /// while a job is in flight, otherwise a client whose original
+    /// call timed out could never learn how that job ended.
+    GetJobStatus { reply: oneshot::Sender<String> },
     /// Creates a brand-new board and switches the GUI over to it --
     /// only while [`crate::app::Screen::NewBoard`] is showing (never
     /// silently discards an already-open board).
@@ -503,6 +518,7 @@ impl McpQuery {
                 | McpQuery::Zones { .. }
                 | McpQuery::Footprints { .. }
                 | McpQuery::GetExternalAutorouteStatus { .. }
+                | McpQuery::GetJobStatus { .. }
         )
     }
 
@@ -520,6 +536,8 @@ impl McpQuery {
             | Zones { reply }
             | Footprints { reply }
             | CheckNetContinuity { reply, .. }
+            | BoardSummary { reply }
+            | GetJobStatus { reply }
             | CreateBoard { reply, .. }
             | PlaceFootprint { reply, .. }
             | DownloadLcscPart { reply, .. }
@@ -628,7 +646,10 @@ impl AlladinMcp {
         let text = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(json)) => json,
             Ok(Err(_)) => "error: the alladin-pcb GUI dropped the request without answering".to_string(),
-            Err(_) => format!("error: the alladin-pcb GUI didn't respond within {}s (maybe a modal dialog is open right now)", timeout.as_secs()),
+            Err(_) => format!(
+                "error: no reply within {}s. If this call started a background job (zone fill/refill, a routing search, a continuity/summary sweep, an export, run_batch), that job is STILL RUNNING and its result is not lost -- poll get_job_status until it reports the job finished and read the result there; do NOT re-issue the same operation, it would run a second time. (If no job is involved, a modal dialog may be blocking the GUI thread.)",
+                timeout.as_secs()
+            ),
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -682,7 +703,21 @@ impl AlladinMcp {
         description = "Checks whether each net's copper (pads + tracks + vias + zone/pour islands) is actually physically continuous, not just logically declared. get_nets only reports which pads a net's name was assigned to (e.g. via connect_pins/rename_net) -- it says nothing about whether copper actually reaches every one of them. A fragmented zone/pour fill (get_zones' filled_islands > 1) is the most common real cause of a gap: some pads end up sitting on an island the rest of the net's copper never actually touches, even though every pad still shows up under the same net name. Without net_name, reports a summary across every net with more than one pad plus full island/pad detail for any net that isn't fully connected; with net_name, always reports that one net's full breakdown, connected or not. Run this after any batch of connect_pins/add_zone/add_via/route_pins work on a net before trusting it's actually wired end to end."
     )]
     async fn check_net_continuity(&self, Parameters(args): Parameters<CheckNetContinuityArgs>) -> Result<CallToolResult, McpError> {
-        self.ask(|reply| McpQuery::CheckNetContinuity { args, reply }).await
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::CheckNetContinuity { args, reply }).await
+    }
+
+    #[tool(
+        description = "One-call working picture of the live board -- call this FIRST on any task, and again after each batch of changes, instead of stitching state together from memory or guessing. Returns the board overview (size/layers/copper weight/item counts), the key DFM numbers every action is validated against (min copper clearance, copper-to-board-edge margin, default trace width), and -- the part no other single read tool answers -- exactly what is still unfinished: pins not assigned to any net yet, and nets whose copper is not yet physically one piece (name, pad count, how many separate pieces). Every number is freshly computed from the live board, so treat it as fact. For per-pad detail on one broken net, follow up with check_net_continuity(net_name)."
+    )]
+    async fn board_summary(&self) -> Result<CallToolResult, McpError> {
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::BoardSummary { reply }).await
+    }
+
+    #[tool(
+        description = "Status of the single MCP background-job slot: whether a job (zone fill/refill, a route_pins search, a continuity/summary sweep, a manufacturing export, run_batch) is running right now (id, label, seconds so far), and the most recently finished job's id/label plus its FULL result -- exactly what the original call would have returned. Call this whenever a slow tool replied 'no reply within Ns' or a write was refused as busy: the job kept running regardless, and its outcome lands here when it finishes. Poll every few seconds until `running` is null, then read `last_finished.result` -- never re-issue the original operation just because its reply timed out (it would run a second time)."
+    )]
+    async fn get_job_status(&self) -> Result<CallToolResult, McpError> {
+        self.ask(|reply| McpQuery::GetJobStatus { reply }).await
     }
 
     // -- Write tools below: all gated by `--allow-ai-write` (see

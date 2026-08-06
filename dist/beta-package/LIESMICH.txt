@@ -11,7 +11,8 @@ Inhalt
   KiCadRoutingTools/   Optionaler Autorouter, unverändert mitgeliefert
                        (MIT, Andy Haas) — gehört NICHT zum Alladin-
                        Quell-Repository; nur Einstiegshilfe
-  cursor-setup/        Cursor-MCP-Konfiguration
+  cursor-setup/        Cursor-Setup: MCP-Konfiguration, KI-Regeln,
+                       .cursorignore
   docs/                Screenshot + Hershey-Hinweis
 
 Voraussetzungen
@@ -26,7 +27,10 @@ Start
   ./alladin-pcb
 
   Mit KI-Schreibzugriff: ./alladin-pcb --allow-ai-write
-  Dann cursor-setup/.cursor in den Cursor-Projektordner kopieren.
+  Dann den INHALT von cursor-setup/ (.cursor/ UND .cursorignore) in den
+  Cursor-Projektordner kopieren. Die Regeln lassen die KI knapp und
+  Tool-zuerst arbeiten; .cursorignore versteckt Board-.json-Dateien,
+  damit die MCP-Tools ihr einziger Weg zum Board sind.
 
 Produkt
 -------

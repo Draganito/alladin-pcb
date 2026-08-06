@@ -13,7 +13,7 @@ Deutsche Version: [LIESMICH.txt](LIESMICH.txt). License notes: [LICENSE.txt](LIC
 |---|---|
 | `alladin-pcb` | The PCB editor (Linux x86-64, precompiled) |
 | `KiCadRoutingTools/` | Optional external autorouter, bundled **unmodified** for easier setup — [KiCadRoutingTools](https://github.com/drandyhaas/KiCadRoutingTools) (MIT). Not part of the Alladin source repo. |
-| `cursor-setup/` | Ready-made Cursor MCP config |
+| `cursor-setup/` | Ready-made Cursor setup: MCP config, AI working rules, `.cursorignore` |
 | `docs/` | Screenshot + Hershey font use-restriction note |
 
 ## Requirements
@@ -29,8 +29,11 @@ chmod +x alladin-pcb
 ./alladin-pcb
 ```
 
-AI write access: `./alladin-pcb --allow-ai-write` — then copy
-`cursor-setup/.cursor` into your Cursor project folder.
+AI write access: `./alladin-pcb --allow-ai-write` — then copy the
+*contents* of `cursor-setup/` (`.cursor/` **and** `.cursorignore`) into
+your Cursor project folder. The included rules make the AI work
+tool-first and terse; `.cursorignore` hides board `.json` files so the
+MCP tools are its only way to touch the board.
 
 ## Product facts
 

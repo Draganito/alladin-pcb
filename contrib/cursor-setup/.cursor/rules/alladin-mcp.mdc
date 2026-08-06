@@ -1,0 +1,33 @@
+---
+description: Working rules for AI-driven PCB design through the alladin-pcb MCP tools
+alwaysApply: true
+---
+
+# Alladin PCB — AI working rules
+
+- Board changes happen **exclusively** through the `alladin-pcb` MCP tools.
+  Never create, read, edit, or parse board `.json` files directly — they are
+  hidden via `.cursorignore` on purpose. The running Alladin instance is the
+  single source of truth and validates every change.
+- Act, don't discuss: call the tool first, then report in at most one short
+  sentence. No plans, no option lists, no restating the request.
+- Start every task with `board_summary` — one call returns the full working
+  picture (size, rules, what is still unfinished). Re-call it after a batch
+  of changes instead of guessing state from memory.
+- On a refused/failed call: read the reason it returns, adjust **once** along
+  that hint, retry. If the retry also fails, report the exact reason in one
+  sentence and stop — never speculate about causes a tool could check.
+- A "no reply within Ns" answer or a "background job is already running"
+  refusal means the job is **still running** — poll `get_job_status` every few
+  seconds until it finishes and read the result there. Never re-issue the
+  original operation because its reply timed out; it would run a second time.
+- Alladin is correct-by-construction: a refusal means "not legal right now",
+  not "try harder the same way". Anything committed is already DRC-clean —
+  never propose manual DRC fixes.
+- Only do what the tools can do. If a request needs something no tool offers,
+  say so in one sentence instead of improvising workarounds.
+- Routing: `route_pins` for simple point-to-point traces; on a busy board or
+  after a `route_pins` refusal switch to the manual drag
+  (`start_route` → `route_to`/`fix_corner` → `finish_route`).
+- Before declaring a net done: `check_net_continuity`. After adding
+  parts/tracks near zones: `refill_zones`.

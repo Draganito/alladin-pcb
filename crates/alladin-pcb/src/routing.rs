@@ -3,12 +3,20 @@
 //! direction the cursor implies onto the nearest clean 45-degree-grid
 //! angle so every leg looks like a real PCB trace, never an arbitrary
 //! diagonal, and (b) refuses to let a leg touch anything it isn't
-//! supposed to -- never an automatic maze-solve. The one exception is
-//! docking onto a same-net target pad: hovering one switches the *final*
-//! leg over to the same `alladin_router::route_single_net` obstacle
-//! search this module used to run on every frame, so finishing a
-//! connection can still route around whatever's in the way without the
-//! human having to steer around it by hand.
+//! supposed to -- never an automatic maze-solve. (If the preferred
+//! diagonal-first elbow of the human's chosen direction is blocked, its
+//! mirror-image straight-first elbow to the *same* cursor position is
+//! tried before the leg goes red -- still steering, not searching.)
+//! The one exception is docking onto a same-net target pad: hovering
+//! one switches the *final* leg over to the same
+//! `alladin_router::route_single_net` obstacle search this module used
+//! to run on every frame, so finishing a connection can still route
+//! around whatever's in the way without the human having to steer
+//! around it by hand -- and when even that fails, the exact
+//! `try_shove_blockers` attempt a commit-click would make is trialled
+//! on a throwaway clone and shown as its own preview (see
+//! [`RoutingDrag::shove_preview`]), so "blocked" is only ever shown for
+//! a click that would really fail.
 //!
 //! Why manual-by-default: running a full walkaround/A* search on every
 //! mouse-move frame (the previous design) is both needless work -- the
@@ -18,7 +26,7 @@
 //! ever being felt.
 
 use alladin_core::{Item, ItemId, JlcpcbDfm, LayerId, NetClass, NetId};
-use alladin_geom::{segment_within_outline_with_clearance, Point, Polygon, Unit};
+use alladin_geom::{segment_within_outline_with_clearance, Point, Polygon, Segment, Unit};
 use alladin_router::{diagnose_failure, route_single_net, try_shove_blockers, Endpoint, FailureReason};
 
 use crate::board_doc::{BoardDoc, PlacementError, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL};
@@ -68,6 +76,37 @@ fn snapped_legs(from: Point, cursor: Point) -> Vec<Point> {
     }
     let m = dx.abs().min(dy.abs());
     let elbow = Point::new(from.x + dx.signum() * m, from.y + dy.signum() * m);
+    let mut legs = Vec::with_capacity(2);
+    if elbow != from {
+        legs.push(elbow);
+    }
+    if cursor != elbow {
+        legs.push(cursor);
+    }
+    legs
+}
+
+/// The mirror-image elbow of [`snapped_legs`]: straight along the
+/// dominant axis *first*, then a 45-degree diagonal into `cursor` --
+/// the other of the two canonical "45-then-straight" shapes every PCB
+/// CAD tool offers (KiCad flips between them with a keypress). Same
+/// contract as [`snapped_legs`]: the last point is always `cursor`
+/// itself, only the route there differs. Used purely as an automatic
+/// fallback when [`snapped_legs`]'s diagonal-first variant is blocked
+/// (see [`RoutingDrag::update`] / [`TraceDrag::update`]) -- the human
+/// still steers, this just stops the live leg going red when the
+/// mirrored elbow of the *same* human-chosen direction would be fine.
+/// For a pure horizontal/vertical/diagonal drag both variants collapse
+/// to the identical single leg, so callers skip the second clearance
+/// check whenever the outputs match.
+fn snapped_legs_axis_first(from: Point, cursor: Point) -> Vec<Point> {
+    let dx = cursor.x - from.x;
+    let dy = cursor.y - from.y;
+    if dx == 0 && dy == 0 {
+        return Vec::new();
+    }
+    let m = dx.abs().min(dy.abs());
+    let elbow = Point::new(cursor.x - dx.signum() * m, cursor.y - dy.signum() * m);
     let mut legs = Vec::with_capacity(2);
     if elbow != from {
         legs.push(elbow);
@@ -158,6 +197,30 @@ pub struct RoutingDrag {
     /// allows -- kept separate from the general "no route" case so
     /// [`Self::blocked_reason`] can report the real, actionable cause.
     pub edge_clearance_violation: bool,
+    /// The direct `last_fixed_point -> target` path that a [`Self::commit`]
+    /// would succeed with **by shoving blockers aside**, if [`Self::update`]'s
+    /// trial run (see [`Self::refresh_shove_preview`]) found one while no
+    /// ordinary [`Self::preview`] exists. Deliberately a separate field, not
+    /// folded into `preview`: `commit`'s `preview` branch adds tracks
+    /// *without* moving anything, so putting a shove-dependent path there
+    /// would commit colliding copper. [`Self::live_end`] likewise never
+    /// reports it (see [`Self::shove_preview`]'s doc comment for the
+    /// via-drop safety reason) -- the UI reads it through
+    /// [`Self::shove_preview`] and draws it in its own visual style.
+    shove_path: Option<Vec<Point>>,
+    /// The existing tracks [`Self::shove_path`]'s commit would re-route --
+    /// the same items `alladin_router::try_shove_blockers` will move --
+    /// so the UI can highlight what a click is about to displace.
+    shove_blocker_ids: Vec<ItemId>,
+    /// Which `(hover_target, last_fixed_point)` pair [`Self::shove_path`]/
+    /// [`Self::shove_blocker_ids`] were computed for. A shove trial is a
+    /// full `try_shove_blockers` run on a cloned `Node` -- far too heavy
+    /// for the once-per-frame `update` -- but its inputs only change when
+    /// the dock target or the drag's start point does (the board itself
+    /// can't change mid-drag; the one mutation, a mid-route via drop,
+    /// resets this cache explicitly), so caching on that pair makes the
+    /// trial effectively once-per-dock.
+    shove_trial_key: Option<(ItemId, Point)>,
 }
 
 impl RoutingDrag {
@@ -227,6 +290,9 @@ impl RoutingDrag {
             hover_target: None,
             preview: None,
             edge_clearance_violation: false,
+            shove_path: None,
+            shove_blocker_ids: Vec::new(),
+            shove_trial_key: None,
         })
     }
 
@@ -339,12 +405,105 @@ impl RoutingDrag {
                     self.edge_clearance_violation = false;
                 }
             }
+            if self.preview.is_some() {
+                self.clear_shove_preview();
+            } else {
+                // No ordinary route -- but `commit` would still try
+                // `try_shove_blockers` on a click. Run that exact trial
+                // now (cached, see `refresh_shove_preview`) so the
+                // preview never claims "blocked" for a click that would
+                // in fact succeed.
+                self.refresh_shove_preview(doc, target, last, target_point);
+            }
         } else {
             self.preview = None;
             self.edge_clearance_violation = false;
+            self.clear_shove_preview();
             self.live_legs = snapped_legs(last, cursor);
             self.live_legs_clear = self.legs_are_clear(doc, last, &self.live_legs);
+            if !self.live_legs_clear {
+                // The diagonal-first elbow is blocked -- before going
+                // red, try the mirror-image (straight-first) elbow of
+                // the exact same cursor position. Still fully manual:
+                // the destination never changes, only which of the two
+                // canonical 45-degree routes reaches it.
+                let alt = snapped_legs_axis_first(last, cursor);
+                if alt != self.live_legs && self.legs_are_clear(doc, last, &alt) {
+                    self.live_legs = alt;
+                    self.live_legs_clear = true;
+                }
+            }
         }
+    }
+
+    /// Drops any cached shove trial -- called whenever the drag leaves
+    /// the "docked with no ordinary preview" state it belongs to, so a
+    /// stale path can never be drawn or reported.
+    fn clear_shove_preview(&mut self) {
+        self.shove_path = None;
+        self.shove_blocker_ids.clear();
+        self.shove_trial_key = None;
+    }
+
+    /// Recomputes [`Self::shove_path`]/[`Self::shove_blocker_ids`] for
+    /// the `(target, last)` pair, skipping the (expensive) trial when
+    /// the cached result is already for exactly that pair -- see
+    /// [`Self::shove_trial_key`]'s doc comment for why that cache is
+    /// sound. Mirrors [`Self::commit`]'s own shove branch precisely:
+    /// same up-front direct-line edge-clearance gate, same
+    /// `try_shove_blockers` call -- just on a throwaway [`Node`] clone
+    /// (`try_shove_blockers` mutates its world on success), so what the
+    /// preview shows is exactly what a click will do.
+    ///
+    /// [`Node`]: alladin_core::Node
+    fn refresh_shove_preview(&mut self, doc: &BoardDoc, target: ItemId, last: Point, target_point: Point) {
+        let key = (target, last);
+        if self.shove_trial_key == Some(key) {
+            return;
+        }
+        self.shove_trial_key = Some(key);
+        self.shove_path = None;
+        self.shove_blocker_ids.clear();
+
+        if !path_keeps_edge_clearance(&[last, target_point], self.width, &doc.outline) {
+            return; // commit refuses this direct line before ever shoving -- so must the preview
+        }
+        let resolver = doc.resolver();
+        let mut trial = doc.node.clone();
+        if let Some(path) =
+            try_shove_blockers(&mut trial, last, target_point, self.width, self.net, self.layer, NetClass::C, resolver, &doc.outline)
+        {
+            // The blockers a real commit will move: the same "what
+            // currently collides with the direct line" query
+            // `try_shove_blockers` itself starts from, against the
+            // *unmodified* world.
+            let probe = Item::Track {
+                shape: Segment::new(last, target_point, self.width),
+                net: Some(self.net),
+                layer: self.layer,
+                class: NetClass::C,
+            };
+            self.shove_blocker_ids = doc.node.query_colliding(&probe, resolver);
+            self.shove_path = Some(path);
+        }
+    }
+
+    /// The path a click would commit **by shoving existing tracks
+    /// aside**, plus the tracks it would move -- `Some` only while
+    /// docked onto a pad with no ordinary [`Self::preview`] but a
+    /// successful cached shove trial (see [`Self::refresh_shove_preview`]).
+    /// Deliberately *not* surfaced through [`Self::live_end`]:
+    /// [`Self::drop_via_and_switch_layer`] commits whatever `live_end`
+    /// reports as plain tracks without running any shove, so reporting
+    /// this path there would let a `V` keypress commit copper straight
+    /// through the unmoved blockers. The UI draws this in its own
+    /// distinct style (dashed) instead, and only [`Self::commit`] --
+    /// which really does shove -- acts on it.
+    pub fn shove_preview(&self) -> Option<(&[Point], &[ItemId])> {
+        if self.hover_target.is_none() || self.preview.is_some() {
+            return None;
+        }
+        self.shove_path.as_deref().map(|path| (path, self.shove_blocker_ids.as_slice()))
     }
 
     /// Whether the straight leg(s) `last -> legs[0] -> legs[1] -> ...`
@@ -492,6 +651,9 @@ impl RoutingDrag {
         self.live_legs.clear();
         self.live_legs_clear = false;
         self.edge_clearance_violation = false;
+        // The via drop just mutated the world (tracks + via committed),
+        // so a cached shove trial no longer describes reality.
+        self.clear_shove_preview();
         Ok(())
     }
 
@@ -507,6 +669,12 @@ impl RoutingDrag {
     pub fn blocked_reason(&self, doc: &BoardDoc, cursor: Point) -> Option<String> {
         if let Some(target) = self.hover_target {
             if self.preview.is_some() {
+                return None;
+            }
+            if self.shove_path.is_some() {
+                // No ordinary route, but the cached shove trial proved a
+                // click will succeed by moving blockers aside -- that's
+                // not "blocked", so don't invent a failure to report.
                 return None;
             }
             if self.edge_clearance_violation {
@@ -680,22 +848,57 @@ impl TraceDrag {
     /// collisions against themselves or each other -- see
     /// `Node::is_colliding`'s own same-net fast path) and against the
     /// board-edge margin.
+    ///
+    /// When that default (diagonal-first on both halves) is blocked,
+    /// the three remaining combinations of diagonal-first /
+    /// straight-first elbows per half (see [`snapped_legs_axis_first`])
+    /// are tried in turn and the first clear one wins -- same
+    /// "mirror the elbow before going red" fallback
+    /// [`RoutingDrag::update`] applies to its single free-steered leg,
+    /// just per anchor half here. The cursor position itself is never
+    /// second-guessed; a blocked drag still shows the default path in
+    /// red.
     pub fn update(&mut self, doc: &BoardDoc, cursor: Point) {
-        let mut from_left = snapped_legs(self.left_anchor, cursor);
-        let mut from_right = snapped_legs(self.right_anchor, cursor);
-        from_right.pop(); // drop the duplicate `cursor` both halves end on
-
-        let mut path = vec![self.left_anchor];
-        path.append(&mut from_left);
-        path.extend(from_right.into_iter().rev());
-        path.push(self.right_anchor);
-        path.dedup();
-
+        let assemble = |left_anchor: Point, right_anchor: Point, mut from_left: Vec<Point>, mut from_right: Vec<Point>| -> Vec<Point> {
+            from_right.pop(); // drop the duplicate `cursor` both halves end on
+            let mut path = vec![left_anchor];
+            path.append(&mut from_left);
+            path.extend(from_right.into_iter().rev());
+            path.push(right_anchor);
+            path.dedup();
+            path
+        };
         let resolver = doc.resolver();
-        self.clear = path.len() >= 2
-            && path.windows(2).all(|leg| doc.node.path_is_clear(leg[0], leg[1], self.width, Some(self.net), self.layer, NetClass::C, resolver))
-            && path_keeps_edge_clearance(&path, self.width, &doc.outline);
-        self.path = path;
+        let is_clear = |path: &[Point]| -> bool {
+            path.len() >= 2
+                && path.windows(2).all(|leg| doc.node.path_is_clear(leg[0], leg[1], self.width, Some(self.net), self.layer, NetClass::C, resolver))
+                && path_keeps_edge_clearance(path, self.width, &doc.outline)
+        };
+
+        let half = |anchor: Point, axis_first: bool| -> Vec<Point> {
+            if axis_first {
+                snapped_legs_axis_first(anchor, cursor)
+            } else {
+                snapped_legs(anchor, cursor)
+            }
+        };
+
+        let default_path = assemble(self.left_anchor, self.right_anchor, half(self.left_anchor, false), half(self.right_anchor, false));
+        if is_clear(&default_path) {
+            self.clear = true;
+            self.path = default_path;
+            return;
+        }
+        for (left_axis_first, right_axis_first) in [(false, true), (true, false), (true, true)] {
+            let path = assemble(self.left_anchor, self.right_anchor, half(self.left_anchor, left_axis_first), half(self.right_anchor, right_axis_first));
+            if path != default_path && is_clear(&path) {
+                self.clear = true;
+                self.path = path;
+                return;
+            }
+        }
+        self.clear = false;
+        self.path = default_path;
     }
 
     /// Deletes every leg [`Self::start`] marked for removal and adds
@@ -715,8 +918,8 @@ mod tests {
     use super::*;
     use crate::board_doc::NewBoardParams;
     use crate::footprint::builtin_templates;
-    use alladin_core::Item;
-    use alladin_geom::{Segment, MM};
+    use alladin_core::{Item, PadShape};
+    use alladin_geom::{Circle, Segment, MM};
 
     /// Two 2-pin THT footprints, 20mm apart on open board, with pad 0 of
     /// each already joined onto the same net -- the baseline every
@@ -784,6 +987,29 @@ mod tests {
     }
 
     #[test]
+    fn snapped_legs_axis_first_builds_a_straight_then_45_elbow() {
+        // Mirror of the diagonal-first case above: a 3mm horizontal leg
+        // first, then the 2mm diagonal into the same cursor position.
+        let from = Point::new(0, 0);
+        let cursor = Point::new(5 * MM, 2 * MM);
+        let legs = snapped_legs_axis_first(from, cursor);
+        assert_eq!(legs, vec![Point::new(3 * MM, 0), cursor]);
+        assert_eq!(legs[0].y, from.y, "the first leg must run straight along the dominant axis");
+        assert_eq!((cursor.x - legs[0].x).abs(), (cursor.y - legs[0].y).abs(), "the second leg must be a clean 45 degrees");
+    }
+
+    #[test]
+    fn snapped_legs_axis_first_collapses_to_the_same_legs_for_clean_angles() {
+        // Pure horizontal, pure diagonal, and a not-moved cursor have no
+        // second elbow variant -- both functions must agree exactly, so
+        // the fallback in `update` can skip the redundant re-check.
+        let from = Point::new(0, 0);
+        for cursor in [Point::new(5 * MM, 0), Point::new(3 * MM, 3 * MM), from] {
+            assert_eq!(snapped_legs_axis_first(from, cursor), snapped_legs(from, cursor));
+        }
+    }
+
+    #[test]
     fn update_produces_a_clear_snapped_live_leg_over_open_board() {
         let (doc, pad_a, _pad_b) = two_footprints_connected();
         let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
@@ -793,6 +1019,35 @@ mod tests {
         assert!(!live.is_empty());
         assert!(clear, "an unobstructed leg over open board must be clear");
         assert!(drag.can_fix_corner());
+    }
+
+    #[test]
+    fn update_falls_back_to_the_straight_first_elbow_when_the_diagonal_first_one_is_blocked() {
+        let (mut doc, pad_a, _pad_b) = two_footprints_connected();
+        let a = doc.pad_center(pad_a).unwrap();
+        // Cursor 2mm right, 8mm up from the start pin. The default
+        // diagonal-first elbow bends at a+(2,2) and its vertical leg
+        // (x = a.x+2) then runs straight through a foreign-net pad
+        // planted at a+(2,5). The straight-first mirror (vertical to
+        // a+(0,6), then diagonal) stays >2mm clear of that pad.
+        doc.node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(a.x + 2 * MM, a.y + 5 * MM), 500_000)),
+            net: Some(NetId(7777)),
+            layer: LayerId::FCu,
+        });
+
+        let cursor = Point::new(a.x + 2 * MM, a.y + 8 * MM);
+        let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
+        drag.update(&doc, cursor);
+
+        let (live, clear) = drag.live_end();
+        assert!(clear, "the mirrored elbow must rescue this leg instead of going red");
+        assert_eq!(
+            live,
+            vec![Point::new(a.x, a.y + 6 * MM), cursor],
+            "expected the straight-first elbow onto the exact same cursor position"
+        );
+        assert!(drag.can_fix_corner(), "the rescued leg must be fixable like any other clear leg");
     }
 
     #[test]
@@ -1180,6 +1435,110 @@ mod tests {
         assert!(wall_unmoved, "the wall must still be exactly where it started");
     }
 
+    /// [`two_tiny_pads_connected_at_y`]`(0.0)` plus a near-full-height,
+    /// shovable class-C wall of another net between the two pads. The
+    /// wall's ends stop 0.2mm short of the board edge -- close enough
+    /// that any walkaround arc over an end (which needs roughly
+    /// `wall_width/2 + clearance + trace_width/2` ≈ 0.38mm of room)
+    /// leaves the outline, so `route_single_net` finds nothing at all,
+    /// while the wall's own endpoints stay safely on-board for the
+    /// re-route a shove performs. The only way to connect is commit's
+    /// `try_shove_blockers` on the direct line -- exactly the scene
+    /// [`RoutingDrag::shove_preview`] exists to make visible.
+    fn pads_split_by_a_shovable_wall() -> (BoardDoc, ItemId, ItemId, NetId, Unit) {
+        let (mut doc, pad_a, pad_b) = two_tiny_pads_connected_at_y(0.0);
+        let wall_net = NetId(9999);
+        let top = (19.8 * MM as f64).round() as Unit;
+        doc.node.add(Item::Track {
+            shape: Segment::new(Point::new(0, -top), Point::new(0, top), 250_000),
+            net: Some(wall_net),
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        });
+        (doc, pad_a, pad_b, wall_net, top)
+    }
+
+    #[test]
+    fn update_offers_a_shove_preview_when_only_shoving_can_connect() {
+        let (doc, pad_a, pad_b, _, _) = pads_split_by_a_shovable_wall();
+        let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
+        let a = doc.pad_center(pad_a).unwrap();
+        let b = doc.pad_center(pad_b).unwrap();
+        drag.update(&doc, b);
+
+        assert_eq!(drag.hover_target, Some(pad_b));
+        assert!(drag.preview.is_none(), "test setup: the wall must leave no ordinary route");
+        assert!(!drag.edge_clearance_violation, "test setup: this `None` must come from the wall, not the edge check");
+        let (path, blockers) = drag.shove_preview().expect("the shove trial must find the wall shovable");
+        assert_eq!(path, [a, b], "a successful shove always yields the direct line");
+        assert_eq!(blockers.len(), 1, "exactly the wall blocks the direct line");
+        assert!(
+            drag.blocked_reason(&doc, b).is_none(),
+            "a click will succeed by shoving -- reporting a blockage would be lying"
+        );
+    }
+
+    #[test]
+    fn commit_delivers_exactly_what_the_shove_preview_promised() {
+        let (mut doc, pad_a, pad_b, wall_net, top) = pads_split_by_a_shovable_wall();
+        let net = doc.pad_net(pad_a).unwrap().unwrap();
+        let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
+        let b = doc.pad_center(pad_b).unwrap();
+        drag.update(&doc, b);
+        let promised: Vec<Point> = drag.shove_preview().expect("test setup: shove preview must exist").0.to_vec();
+
+        assert!(drag.commit(&mut doc), "commit must succeed by shoving the wall aside");
+
+        let direct_committed = doc.node.iter().any(|item| matches!(
+            item,
+            Item::Track { shape, net: Some(n), .. }
+                if *n == net
+                    && ((shape.a == promised[0] && shape.b == promised[1])
+                        || (shape.a == promised[1] && shape.b == promised[0]))
+        ));
+        assert!(direct_committed, "the committed track must be the exact direct line the preview promised");
+
+        let original_wall_leg_gone = !doc.node.iter().any(|item| matches!(
+            item,
+            Item::Track { shape, net: Some(n), .. }
+                if *n == wall_net
+                    && ((shape.a == Point::new(0, -top) && shape.b == Point::new(0, top))
+                        || (shape.a == Point::new(0, top) && shape.b == Point::new(0, -top)))
+        ));
+        assert!(original_wall_leg_gone, "the wall's original straight leg must have been re-routed out of the way");
+    }
+
+    #[test]
+    fn drop_via_is_refused_while_only_a_shove_preview_exists() {
+        // `live_end` deliberately never reports the shove path (a via
+        // drop commits plain tracks without running any shove, which
+        // would land copper straight through the unmoved wall) -- so a
+        // `V` keypress in this state must be refused untouched.
+        let (mut doc, pad_a, pad_b, _, _) = pads_split_by_a_shovable_wall();
+        let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
+        let b = doc.pad_center(pad_b).unwrap();
+        drag.update(&doc, b);
+        assert!(drag.shove_preview().is_some(), "test setup: shove preview must exist");
+        let (live, clear) = drag.live_end();
+        assert!(live.is_empty() && !clear, "the shove path must never masquerade as a plain committable live end");
+
+        let before = doc.node.len();
+        assert_eq!(drag.drop_via_and_switch_layer(&mut doc), Err(DropViaError::NoLiveRoute));
+        assert_eq!(doc.node.len(), before, "a refused via drop must leave the world untouched");
+    }
+
+    #[test]
+    fn shove_preview_clears_when_the_hover_leaves_the_pad() {
+        let (doc, pad_a, pad_b, _, _) = pads_split_by_a_shovable_wall();
+        let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
+        let b = doc.pad_center(pad_b).unwrap();
+        drag.update(&doc, b);
+        assert!(drag.shove_preview().is_some(), "test setup: shove preview must exist");
+
+        drag.update(&doc, Point::new(-5 * MM, 5 * MM)); // open space, undocked
+        assert!(drag.shove_preview().is_none(), "a stale shove path must never survive leaving the dock");
+    }
+
     /// A three-leg wire (four points, `a_center -> p1 -> p2 -> b_center`)
     /// between the same two footprints [`two_footprints_connected`]
     /// places -- the baseline every [`TraceDrag`] test bends or drags
@@ -1278,6 +1637,41 @@ mod tests {
         drag.update(&doc, Point::new(0, 5 * MM));
         let (_, clear) = drag.live();
         assert!(!clear, "dragging straight through an unrelated net's wall must be refused");
+    }
+
+    #[test]
+    fn trace_drag_update_falls_back_to_a_mirrored_elbow_half_when_the_default_is_blocked() {
+        let (mut doc, _leg_a_p1, leg_p1_p2, _leg_p2_b, a_center, b_center) = three_leg_wire();
+        // Cursor 6mm below the wire. The default (diagonal-first on
+        // both halves) bends the right half at b_center + (-6, -6) --
+        // plant a foreign-net pad exactly on that corner. The first
+        // fallback combination (right half straight-first, bending at
+        // b_center + (-2.73mm, 0) towards the cursor) stays ~2mm clear.
+        let cursor = Point::new(0, -6 * MM);
+        let blocked_corner = Point::new(b_center.x - 6 * MM, b_center.y - 6 * MM);
+        doc.node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(blocked_corner, 400_000)),
+            net: Some(NetId(7777)),
+            layer: LayerId::FCu,
+        });
+
+        let mut drag = TraceDrag::start(&doc, leg_p1_p2).unwrap();
+        drag.update(&doc, cursor);
+        let (path, clear) = drag.live();
+        assert!(clear, "the mirrored right-half elbow must rescue this drag instead of going red");
+
+        // Left half unchanged (diagonal-first), right half mirrored
+        // (straight along x from b, then diagonal down into the cursor).
+        let left_m = (cursor.x - a_center.x).abs().min((cursor.y - a_center.y).abs());
+        let right_m = (cursor.x - b_center.x).abs().min((cursor.y - b_center.y).abs());
+        let expected = vec![
+            a_center,
+            Point::new(a_center.x + left_m, cursor.y),
+            cursor,
+            Point::new(cursor.x + right_m, cursor.y + right_m),
+            b_center,
+        ];
+        assert_eq!(path, expected, "expected the diagonal-first left half joined to the straight-first right half");
     }
 
     #[test]

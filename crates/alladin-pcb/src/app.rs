@@ -1759,7 +1759,18 @@ pub struct PcbApp {
     /// own snapshot was taken and when its result gets merged back into
     /// the live one. Read-only queries are entirely unaffected and
     /// always answer immediately regardless.
-    pending_job: Option<PendingJob>,
+    pending_job: Option<TrackedJob>,
+    /// Monotonically increasing id handed to each MCP background job as
+    /// it starts -- lets `get_job_status` (and [`busy_json`]'s refusal
+    /// message) name *which* job unambiguously across a client's own
+    /// timeouts and retries.
+    next_job_id: u64,
+    /// The most recently finished MCP background job's outcome, kept so
+    /// a client whose original call timed out client-side (see
+    /// `crate::mcp::AlladinMcp::ask_with_timeout`) can still fetch the
+    /// real result via `get_job_status` instead of blindly re-running
+    /// the whole operation.
+    last_finished_job: Option<FinishedJob>,
     /// A board file being read from disk (and, for any of its own
     /// saved zones, re-filled -- see [`PendingBoardLoad::start`]'s doc
     /// comment) off the UI thread, if one is in flight: the launch-time
@@ -1848,14 +1859,55 @@ impl PendingJob {
     }
 }
 
+/// [`PcbApp::pending_job`]'s bookkeeping wrapper: the job itself plus
+/// the identity/timing facts `get_job_status` reports about it while it
+/// runs. Assigned only by [`PcbApp::ui`]'s drain loop (the `spawn_*_job`
+/// functions stay id-agnostic and keep constructing bare [`PendingJob`]s).
+struct TrackedJob {
+    id: u64,
+    started: std::time::Instant,
+    inner: PendingJob,
+}
+
+/// [`PcbApp::last_finished_job`]: one finished MCP background job's
+/// outcome, exactly as its (possibly no-longer-listening, see
+/// `crate::mcp::AlladinMcp::ask_with_timeout`'s client-side timeout)
+/// original caller would have received it.
+struct FinishedJob {
+    id: u64,
+    label: &'static str,
+    result: String,
+}
+
+/// `get_job_status`'s answer (see [`crate::mcp::McpQuery::GetJobStatus`]):
+/// the running job if any, and the last finished job's result -- the
+/// result re-embedded as JSON (not a quoted string) so a client reads
+/// the exact same object the original call would have returned. A pure
+/// function of the two bookkeeping fields so tests exercise it without
+/// a whole [`PcbApp`] (whose construction binds the MCP port).
+fn job_status_json(running: Option<&TrackedJob>, finished: Option<&FinishedJob>) -> serde_json::Value {
+    let running = running.map(|job| {
+        serde_json::json!({
+            "id": job.id,
+            "label": job.inner.label,
+            "running_for_s": job.started.elapsed().as_secs_f64(),
+        })
+    });
+    let last_finished = finished.map(|job| {
+        let result = serde_json::from_str::<serde_json::Value>(&job.result).unwrap_or_else(|_| serde_json::Value::String(job.result.clone()));
+        serde_json::json!({ "id": job.id, "label": job.label, "result": result })
+    });
+    serde_json::json!({ "running": running, "last_finished": last_finished })
+}
+
 /// The JSON [`PcbApp::ui`]'s dispatch loop answers a *write*
 /// [`crate::mcp::McpQuery`] with immediately, instead of queueing or
 /// running it, while [`PcbApp::pending_job`] (`running`) is already
 /// busy -- the caller's own retry (every MCP write tool's description
 /// already tells an AI client to expect and handle this) picks up right
 /// where the finished job leaves the board.
-fn busy_json(running: &str) -> String {
-    error_json(format!("a background job is already running ({running}) -- wait for it to finish, then retry")).to_string()
+fn busy_json(running: &str, job_id: u64) -> String {
+    error_json(format!("a background job is already running (#{job_id}: {running}) -- poll get_job_status until it reports job #{job_id} as finished, then retry")).to_string()
 }
 
 /// Opens the user's persistent parts library at its default per-user
@@ -1897,7 +1949,7 @@ impl PcbApp {
         let screen = Screen::NewBoard(NewBoardParams::default());
         let (mcp_tx, mcp_rx) = mpsc::channel();
         crate::mcp::spawn_server(mcp_tx, crate::mcp::PORT, allow_ai_write);
-        Self { screen, parts_db, mcp_rx, allow_ai_write, pending_job: None, board_load }
+        Self { screen, parts_db, mcp_rx, allow_ai_write, pending_job: None, next_job_id: 0, last_finished_job: None, board_load }
     }
 }
 
@@ -2634,6 +2686,14 @@ fn draw_pending_pin(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, 
 /// free-steered, snapped-angle leg(s) otherwise, drawn the same solid
 /// colour while clear or dashed red while blocked so it's obvious at a
 /// glance whether Space/click would actually do anything right now.
+///
+/// One more state on top: while docked with no ordinary route but a
+/// successful shove trial (see [`crate::routing::RoutingDrag::shove_preview`]),
+/// the direct line a click would commit is drawn *dashed* in the net's
+/// colour -- it isn't plain committable copper yet, the shove happens on
+/// click -- and every track that click would push aside is overlaid
+/// dashed orange, so the human sees exactly what the commit is about to
+/// displace instead of a lying "blocked" red.
 fn draw_routing_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, doc: &BoardDoc, routing: &crate::routing::RoutingDrag) {
     draw_pending_pin(painter, rect, camera, &doc.node, routing.from_pad);
     if let Some(target) = routing.hover_target {
@@ -2646,6 +2706,18 @@ fn draw_routing_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Came
         let from = camera.board_to_screen(rect, leg[0]);
         let to = camera.board_to_screen(rect, leg[1]);
         painter.line_segment([from, to], Stroke::new(3.0, net_color));
+    }
+
+    if let Some((shove_path, blocker_ids)) = routing.shove_preview() {
+        let points: Vec<egui::Pos2> = shove_path.iter().map(|&p| camera.board_to_screen(rect, p)).collect();
+        painter.extend(egui::Shape::dashed_line(&points, Stroke::new(3.0, net_color), 10.0, 6.0));
+        for &id in blocker_ids {
+            if let Some(Item::Track { shape, .. }) = doc.node.get(id) {
+                let a = camera.board_to_screen(rect, shape.a);
+                let b = camera.board_to_screen(rect, shape.b);
+                painter.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(2.5, Color32::from_rgb(255, 170, 40)), 7.0, 5.0));
+            }
+        }
     }
 
     let (live_legs, live_clear) = routing.live_end();
@@ -3054,14 +3126,25 @@ impl eframe::App for PcbApp {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
 
         while let Ok(query) = self.mcp_rx.try_recv() {
+            // Answered right here rather than in `handle_mcp_query`:
+            // the job bookkeeping (`pending_job`/`last_finished_job`)
+            // lives on `PcbApp` itself, and this must keep answering
+            // *while* a job runs -- that's its whole purpose.
+            if let crate::mcp::McpQuery::GetJobStatus { reply } = query {
+                let _ = reply.send(job_status_json(self.pending_job.as_ref(), self.last_finished_job.as_ref()).to_string());
+                continue;
+            }
             if let Some(pending) = &self.pending_job {
                 if query.is_write() {
-                    query.reply_now(busy_json(pending.label));
+                    query.reply_now(busy_json(pending.inner.label, pending.id));
                     continue;
                 }
             }
             match try_start_background_job(query, &mut self.screen, &self.parts_db) {
-                Ok(pending) => self.pending_job = Some(pending),
+                Ok(pending) => {
+                    self.next_job_id += 1;
+                    self.pending_job = Some(TrackedJob { id: self.next_job_id, started: std::time::Instant::now(), inner: pending });
+                }
                 Err(query) => handle_mcp_query(query, &mut self.screen, &mut self.parts_db),
             }
         }
@@ -3074,7 +3157,7 @@ impl eframe::App for PcbApp {
         // match's own (much longer-lived) borrow would otherwise be
         // holding for its whole body.
         let just_finished = match &mut self.pending_job {
-            Some(pending) => match pending.job.poll() {
+            Some(pending) => match pending.inner.job.poll() {
                 JobPoll::Pending => None,
                 JobPoll::Ready(apply) => Some(Ok(apply)),
                 JobPoll::Lost => Some(Err(())),
@@ -3087,7 +3170,11 @@ impl eframe::App for PcbApp {
                 Ok(apply) => apply(&mut self.screen),
                 Err(()) => error_json("the background job ended unexpectedly (it may have panicked) -- please retry").to_string(),
             };
-            if let Some(reply) = pending.reply {
+            // Kept regardless of whether the original caller is still
+            // listening -- a client whose `ask` timed out retrieves
+            // this via `get_job_status` instead of re-running the job.
+            self.last_finished_job = Some(FinishedJob { id: pending.id, label: pending.inner.label, result: text.clone() });
+            if let Some(reply) = pending.inner.reply {
                 let _ = reply.send(text);
             }
         }
@@ -3422,7 +3509,7 @@ impl eframe::App for PcbApp {
                         // shows.
                         if let Some(pending) = &self.pending_job {
                             ui.separator();
-                            ui.colored_label(Color32::from_rgb(120, 170, 255), format!("\u{23F3} {} (MCP)\u{2026}", pending.label));
+                            ui.colored_label(Color32::from_rgb(120, 170, 255), format!("\u{23F3} {} (MCP)\u{2026}", pending.inner.label));
                         }
                         // A different board being opened on top of this
                         // one -- see the "Open board..." handler below
@@ -4731,6 +4818,7 @@ fn try_start_background_job(query: crate::mcp::McpQuery, screen: &mut Screen, pa
         McpQuery::RefillZones { reply } => Ok(spawn_refill_zones_job(screen, reply)),
         McpQuery::RoutePins { args, reply } => Ok(spawn_route_pins_job(screen, args, reply)),
         McpQuery::CheckNetContinuity { args, reply } => Ok(spawn_check_net_continuity_job(screen, args, reply)),
+        McpQuery::BoardSummary { reply } => Ok(spawn_board_summary_job(screen, reply)),
         McpQuery::ExportManufacturingFiles { args, reply } => Ok(spawn_export_manufacturing_files_job(screen, parts_db, args, reply)),
         McpQuery::RunBatch { args, reply } => Ok(spawn_run_batch_job(screen, parts_db, args, reply)),
         other => Err(other),
@@ -4889,6 +4977,20 @@ fn spawn_check_net_continuity_job(screen: &Screen, args: crate::mcp::CheckNetCon
     PendingJob { label: "net continuity check", job, reply: Some(reply) }
 }
 
+/// [`crate::mcp::McpQuery::BoardSummary`]'s background dispatch --
+/// identical shape to [`spawn_check_net_continuity_job`] (and for the
+/// same reason: [`board_summary_json`] runs the same whole-board
+/// copper-components sweep), purely read-only against a
+/// [`snapshot_screen_for_background`] clone.
+fn spawn_board_summary_job(screen: &Screen, reply: oneshot::Sender<String>) -> PendingJob {
+    let scratch = snapshot_screen_for_background(screen);
+    let job = BackgroundJob::spawn(move || -> JobResult {
+        let text = board_summary_json(&scratch).to_string();
+        Box::new(move |_screen: &mut Screen| text)
+    });
+    PendingJob { label: "board summary", job, reply: Some(reply) }
+}
+
 /// [`crate::mcp::McpQuery::ExportManufacturingFiles`]'s background
 /// dispatch -- same "run the unmodified function against a clone,
 /// there's nothing to merge back" shape as
@@ -4973,6 +5075,15 @@ fn handle_mcp_query(query: crate::mcp::McpQuery, screen: &mut Screen, parts_db: 
         }
         McpQuery::CheckNetContinuity { args, reply } => {
             let _ = reply.send(net_continuity_json(screen, args).to_string());
+        }
+        McpQuery::BoardSummary { reply } => {
+            let _ = reply.send(board_summary_json(screen).to_string());
+        }
+        McpQuery::GetJobStatus { reply } => {
+            // Normally intercepted by `PcbApp::ui`'s drain loop before
+            // ever reaching here (the job bookkeeping lives on `PcbApp`);
+            // a caller without that loop (tests, CLI) has no jobs.
+            let _ = reply.send(job_status_json(None, None).to_string());
         }
         McpQuery::CreateBoard { args, reply } => {
             let _ = reply.send(create_board_write(screen, parts_db, args).to_string());
@@ -5133,6 +5244,11 @@ fn routing_json(doc: &BoardDoc, templates: &[FootprintTemplate], routing: &Routi
         "live_end_clear": live_clear,
         "hover_target_pad": routing.hover_target.and_then(|id| describe_pad(doc, templates, id)),
         "edge_clearance_violation": routing.edge_clearance_violation,
+        // While docked with no ordinary preview: whether a finish/commit
+        // would still succeed by shoving existing tracks aside, and how
+        // many it would move -- so an AI caller doesn't misread the
+        // empty live end as "unroutable" (see RoutingDrag::shove_preview).
+        "commit_would_shove": routing.shove_preview().map(|(_, blockers)| blockers.len()),
     })
 }
 
@@ -5196,6 +5312,71 @@ fn board_overview_json(screen: &Screen) -> serde_json::Value {
         "via_count": doc.node.iter().filter(|i| matches!(i, Item::Via { .. })).count(),
         "zone_count": doc.zones.len(),
         "zones_stale": doc.zones_are_stale(),
+    })
+}
+
+/// [`crate::mcp::AlladinMcp::board_summary`]'s report builder: the
+/// one-call working picture an AI needs before (and after) touching the
+/// board. `overview` is [`board_overview_json`] verbatim; `rules` are
+/// the DFM numbers every action gets validated against, surfaced so a
+/// caller plans with facts instead of guessing them; `todo` is the part
+/// no other single read tool answers -- pads not assigned to any net
+/// yet, plus every multi-pad net whose copper isn't physically one
+/// piece (the same [`alladin_core::Node::net_copper_components`] check
+/// [`net_continuity_json`] runs, boiled down to name + counts; use
+/// `check_net_continuity` with a `net_name` for per-pad detail).
+/// `pins_without_net` is capped at 40 entries (`pins_without_net_count`
+/// always holds the real total) so a barely-started 200-pin board still
+/// gets a readable answer.
+fn board_summary_json(screen: &Screen) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json();
+    };
+    let doc = &state.doc;
+
+    let mut pins_without_net = Vec::new();
+    for fp in &doc.footprints {
+        for &pad_id in &fp.pad_item_ids {
+            if doc.pad_net(pad_id).ok().flatten().is_none() {
+                if let Some(pad) = describe_pad(doc, &state.templates, pad_id) {
+                    pins_without_net.push(format!("{}.{}", pad["footprint"].as_str().unwrap_or("?"), pad["pin"].as_str().unwrap_or("?")));
+                }
+            }
+        }
+    }
+    let pins_without_net_count = pins_without_net.len();
+    pins_without_net.truncate(40);
+
+    let open_nets: Vec<_> = doc
+        .nets
+        .iter()
+        .filter(|net| doc.pads_on_net(net.id).len() >= 2)
+        .filter_map(|net| {
+            let pieces = doc.node.net_copper_components(net.id).len();
+            (pieces > 1).then(|| {
+                serde_json::json!({
+                    "name": net.name,
+                    "pad_count": doc.pads_on_net(net.id).len(),
+                    "copper_pieces": pieces,
+                })
+            })
+        })
+        .collect();
+    let nothing_left_to_route = pins_without_net_count == 0 && open_nets.is_empty();
+
+    serde_json::json!({
+        "overview": board_overview_json(screen),
+        "rules": {
+            "min_copper_clearance_mm": doc.pad_to_pad_clearance() as f64 / MM as f64,
+            "copper_to_board_edge_mm": JlcpcbDfm::COPPER_TO_ROUTED_EDGE as f64 / MM as f64,
+            "default_trace_width_mm": crate::routing::DEFAULT_TRACE_WIDTH as f64 / MM as f64,
+        },
+        "todo": {
+            "pins_without_net_count": pins_without_net_count,
+            "pins_without_net": pins_without_net,
+            "open_nets": open_nets,
+            "nothing_left_to_route": nothing_left_to_route,
+        },
     })
 }
 
@@ -6466,6 +6647,77 @@ mod tests {
         let screen = two_connected_pins_20mm_apart();
         let json = net_continuity_json(&screen, crate::mcp::CheckNetContinuityArgs { net_name: Some("NoSuchNet".to_string()) });
         assert!(json["error"].as_str().unwrap().contains("NoSuchNet"), "unexpected response: {json}");
+    }
+
+    #[test]
+    fn job_status_json_reports_idle_when_nothing_ran_yet() {
+        let json = job_status_json(None, None);
+        assert!(json["running"].is_null());
+        assert!(json["last_finished"].is_null());
+    }
+
+    #[test]
+    fn job_status_json_reports_the_running_job_and_embeds_the_last_result_as_json() {
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let running = TrackedJob { id: 7, started: std::time::Instant::now(), inner: PendingJob::immediate("zone fill", "{}".to_string(), tx) };
+        let finished = FinishedJob { id: 6, label: "routing search", result: r#"{"ok":true,"segments":3}"#.to_string() };
+
+        let json = job_status_json(Some(&running), Some(&finished));
+        assert_eq!(json["running"]["id"], 7);
+        assert_eq!(json["running"]["label"], "zone fill");
+        assert!(json["running"]["running_for_s"].as_f64().unwrap() >= 0.0);
+        assert_eq!(json["last_finished"]["id"], 6);
+        assert_eq!(json["last_finished"]["label"], "routing search");
+        assert_eq!(json["last_finished"]["result"]["ok"], true, "the result must be re-embedded as JSON, not a quoted string");
+        assert_eq!(json["last_finished"]["result"]["segments"], 3);
+    }
+
+    #[test]
+    fn board_summary_json_on_the_new_board_screen_reports_no_board_open() {
+        let screen = Screen::NewBoard(NewBoardParams::default());
+        let json = board_summary_json(&screen);
+        assert!(json["note"].as_str().unwrap().contains("no board is open"));
+    }
+
+    #[test]
+    fn board_summary_json_reports_unwired_pins_and_unrouted_nets_as_todo() {
+        // Two 2-pin parts, pin 1s declared one net but never routed:
+        // the summary must surface BOTH kinds of unfinished work --
+        // the copper-less net as an open net, and the untouched pin 2s
+        // as pins without any net at all.
+        let screen = two_connected_pins_20mm_apart();
+        let json = board_summary_json(&screen);
+
+        assert_eq!(json["overview"]["footprint_count"], 2, "the overview must be embedded verbatim");
+        assert!(json["rules"]["min_copper_clearance_mm"].as_f64().unwrap() > 0.0);
+        assert!(json["rules"]["default_trace_width_mm"].as_f64().unwrap() > 0.0);
+
+        let todo = &json["todo"];
+        assert_eq!(todo["pins_without_net_count"], 2);
+        let pins: Vec<_> = todo["pins_without_net"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().to_string()).collect();
+        assert!(pins.contains(&"P1.2".to_string()) && pins.contains(&"P2.2".to_string()), "unexpected pins: {pins:?}");
+        let open_nets = todo["open_nets"].as_array().unwrap();
+        assert_eq!(open_nets.len(), 1);
+        assert_eq!(open_nets[0]["name"], "Net1");
+        assert_eq!(open_nets[0]["pad_count"], 2);
+        assert_eq!(open_nets[0]["copper_pieces"], 2);
+        assert_eq!(todo["nothing_left_to_route"], false);
+    }
+
+    #[test]
+    fn board_summary_json_reports_nothing_left_once_everything_is_wired_and_routed() {
+        let mut screen = two_connected_pins_20mm_apart();
+        connect_pins_write(&mut screen, crate::mcp::ConnectPinsArgs { ref1: "P1".to_string(), pin1: "2".to_string(), ref2: "P2".to_string(), pin2: "2".to_string() });
+        for pin in ["1", "2"] {
+            let json = route_pins_write(&mut screen, crate::mcp::RoutePinsArgs { ref1: "P1".to_string(), pin1: pin.to_string(), ref2: "P2".to_string(), pin2: pin.to_string(), width_mm: 0.25 });
+            assert_eq!(json["ok"], true, "unexpected response: {json}");
+        }
+
+        let json = board_summary_json(&screen);
+        let todo = &json["todo"];
+        assert_eq!(todo["pins_without_net_count"], 0);
+        assert_eq!(todo["open_nets"].as_array().unwrap().len(), 0);
+        assert_eq!(todo["nothing_left_to_route"], true);
     }
 
     #[test]
