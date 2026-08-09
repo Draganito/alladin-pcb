@@ -1,0 +1,47 @@
+Alladin PCB — Debian-Paket
+==========================
+
+Vorkompilierter Linux-Build von Alladin PCB (AGPL-3.0) als .deb-Paket.
+Quellcode: https://github.com/Draganito/alladin-pcb
+Lizenzhinweise: LICENSE.txt
+
+Installation
+------------
+  sudo apt install ./alladin-pcb_<version>_amd64.deb
+
+Was liegt wo
+------------
+  /usr/bin/alladin-pcb                        PCB-Editor (Linux x86-64)
+  /usr/share/alladin-pcb/cursor-setup/        Cursor-Setup: MCP-Konfig,
+                                              KI-Regeln, .cursorignore
+  /usr/share/doc/alladin-pcb/                 Diese Datei, README,
+                                              LICENSE.txt, docs — darin
+                                              das komplette Handbuch
+                                              (A-Z): docs/HANDBUCH.md
+                                              (deutsch) bzw.
+                                              docs/MANUAL.md (englisch)
+
+Voraussetzungen
+---------------
+- Debian/Ubuntu x86-64, X11/Wayland, glibc 2.39+ (ldd --version)
+- Kein KiCad nötig. Fertigung nativ; Boards = Alladin-.json
+
+Start
+-----
+  alladin-pcb
+
+  Mit KI-Schreibzugriff: alladin-pcb --allow-ai-write
+  Dann den INHALT von /usr/share/alladin-pcb/cursor-setup/
+  (.cursor/ UND .cursorignore) in den Cursor-Projektordner kopieren.
+
+Produkt
+-------
+- Eigenes .json-Format; kein KiCad-Import/Export in der UI
+- New board: optionale Platinenkontur per DXF (LibreCAD/FreeCAD:
+  geschlossene LWPOLYLINE oder ein LINE/ARC-Ring)
+- "Export manufacturing files..." → Gerber-Zip + CPL + BOM (nativ)
+- Manuelles 45°-Routing + Segment-Drag (kein externer Autorouter)
+- Mini-MCP: Parts-Download + Netzliste + Lesen + Speichern
+- Genutzte Parts stecken beim Speichern in der Board-.json (Desktop↔Web)
+- Optional: Parts-Bibliothek als JSON exportieren/importieren
+- Hershey-Futural-Silkscreen (Vorschau = Gerber)

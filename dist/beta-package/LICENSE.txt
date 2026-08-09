@@ -1,0 +1,35 @@
+Alladin PCB — binary convenience package
+========================================
+
+Copyright (C) 2026 Dragan Bojovic
+
+This package contains a precompiled build of Alladin PCB.
+
+Alladin PCB is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3 of the License only.
+
+The corresponding source is available at:
+  https://github.com/Draganito/alladin-pcb
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program (see the source repository's LICENSE file). If
+not, see <https://www.gnu.org/licenses/>.
+
+Third-party components
+----------------------
+  - Silkscreen stroke font: Hershey Futural (Simplex Roman). Originally
+    created by Dr. A. V. Hershey (U.S. NBS); distribution format by
+    James Hurt (Cognition, Inc.). See docs/hershey-USE_RESTRICTION.txt.
+
+--------------------------------------------------------------------
+
+Deutsch (Kurzfassung): Alladin PCB steht unter der GNU Affero GPL v3
+(AGPL-3.0-only). Quellcode: https://github.com/Draganito/alladin-pcb
+Keine Gewährleistung. Hershey-Font: siehe
+docs/hershey-USE_RESTRICTION.txt.

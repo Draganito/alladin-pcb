@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Alladin PCB (web)</title>
+<link data-trunk rel="rust" href="../crates/alladin-pcb/Cargo.toml" data-bin="alladin-pcb" data-wasm-opt="0" />
+<style>
+  html, body { margin: 0; height: 100%; background: #1a1a1a; color: #ddd; font-family: system-ui, sans-serif; }
+  #alladin_pcb_canvas { width: 100vw; height: 100vh; display: block; }
+  #hint {
+    position: fixed; left: 12px; bottom: 12px; z-index: 10;
+    font-size: 12px; opacity: 0.75; pointer-events: none;
+  }
+</style>
+<body>
+  <canvas id="alladin_pcb_canvas"></canvas>
+  <div id="hint">Web: open/save board JSON in the toolbar. Parts: export from desktop, import here. No LCSC/MCP in the browser.</div>
+</body>
+</html>

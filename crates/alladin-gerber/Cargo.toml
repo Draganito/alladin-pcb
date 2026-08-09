@@ -1,0 +1,9 @@
+[package]
+name = "alladin-gerber"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native RS-274X Gerber + Excellon writers for Alladin PCB (API inspired by Karel Tavernier's gerber_writer)"
+
+[dependencies]
+alladin-geom = { path = "../alladin-geom" }

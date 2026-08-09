@@ -1,0 +1,29 @@
+---
+description: Working rules for AI-driven PCB design through the alladin-pcb MCP tools
+alwaysApply: true
+---
+
+# Alladin PCB — AI working rules (MCP)
+
+- Only these MCP tools exist — read-only: `board_summary`, `get_footprints`,
+  `get_nets`, `list_parts`, `check_board`; write: `new_board`,
+  `download_lcsc_part`, `place_footprint`, `move_footprint`,
+  `remove_footprint`, `connect_pins`, `disconnect_pin`, `rename_net`,
+  `save_board`.
+- Never create, edit, or parse board `.json` by hand — use MCP / the GUI.
+- Start with `board_summary`. After each batch of changes, verify your own
+  work with `check_board` before reporting done.
+- Write tools need the GUI launched with `--allow-ai-write`.
+- Placement coordinates are mm with the origin at the board center
+  (+x right, +y down). `list_parts` gives the exact template names
+  `place_footprint` wants.
+- A placement/move refusal names the violated JLCPCB DFM rule — pick a
+  different spot and retry; never try to bypass the gate.
+- `new_board` refuses to discard an open board unless `replace_current=true`
+  — ask the human before passing that.
+- Track routing and zone fill have **no MCP tools** — that is the human's
+  job in the GUI. `connect_pins` wires the netlist; it does not lay copper.
+  If a request needs something outside this surface, say so in one sentence
+  — do not invent CLI/JSON workarounds.
+- Every write lands in the GUI's Ctrl+Z undo history, so the human can take
+  back anything you do.

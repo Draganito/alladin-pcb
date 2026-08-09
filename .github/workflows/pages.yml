@@ -1,0 +1,49 @@
+# Build the experimental WASM shell and publish it to GitHub Pages.
+# Repo Settings → Pages → Source: GitHub Actions (once).
+# Live URL: https://draganito.github.io/alladin-pcb/
+
+name: Pages (web demo)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install trunk
+        run: cargo install trunk --locked
+      - name: Trunk release build
+        # Project-site base path so JS/WASM assets resolve under /alladin-pcb/.
+        run: |
+          env -u NO_COLOR -u FORCE_COLOR \
+            trunk build --release --config web/Trunk.toml --public-url /alladin-pcb/
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

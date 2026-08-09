@@ -1,0 +1,34 @@
+# Build
+/target/
+router/target/
+web/dist/
+
+# External autorouter — never vendor here. Ignore a leftover local clone
+# if present; Alladin does not ship or depend on it.
+KiCadRoutingTools/
+
+# Old KiCad vendor / probe trees (not part of Alladin)
+kicad-source/
+probe-build/
+
+# Beta / binary package build outputs (templates stay in dist/beta-package/)
+dist/alladin-test/
+dist/*.deb
+*.zip
+
+# Private / local-only (not for the public AGPL tree)
+/RESEARCH.md
+/docs/DEVLOG-router.md
+/PUBLISH_CHECKLIST.md
+/.cursor/
+**/*.bak
+**/*~
+
+# Example boards: everything under examples/ is playground/test
+# material by default and must never be committed or pushed -- only
+# finished, curated boards are whitelisted explicitly, one line each.
+# (This also covers regenerable fab exports: gerbers/BOM/CPL live
+# next to the boards and are rebuilt from the .json anyway.)
+examples/*
+!examples/darkroom_led_panel_4x5_slim.json
+Test/

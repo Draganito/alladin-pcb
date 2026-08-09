@@ -1,0 +1,62 @@
+[package]
+name = "alladin-pcb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Interactive, correct-by-construction PCB editor with native JLCPCB manufacturing export and an MCP server for AI-driven board design"
+
+[features]
+default = ["desktop"]
+desktop = []
+
+[dependencies]
+alladin-core = { path = "../alladin-core" }
+alladin-geom = { path = "../alladin-geom" }
+alladin-gerber = { path = "../alladin-gerber" }
+alladin-render = { path = "../alladin-render" }
+clap = { workspace = true }
+eframe = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rfd = "0.15"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+# Desktop-only: SQLite parts DB, MCP, LCSC HTTP, OS paths.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
+ureq = { version = "2", features = ["json", "tls"] }
+rmcp = { version = "3.1.0", features = ["server", "macros", "transport-streamable-http-server"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "sync", "time"] }
+axum = "0.8.9"
+
+# WASM glue for eframe web.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement"] }
+console_error_panic_hook = "0.1"
+
+# `cargo deb -p alladin-pcb --no-build` — run via dist/make_beta_package.sh.
+[package.metadata.deb]
+maintainer = "Dragan Bojovic <draganito@users.noreply.github.com>"
+copyright = "2026 Dragan Bojovic (Alladin, AGPL-3.0-only)"
+extended-description = """\
+Interactive, correct-by-construction 2-layer PCB editor with native
+Gerber/Excellon manufacturing export (JLCPCB rules) and a mini MCP
+server for parts download + netlist. Alladin source:
+https://github.com/Draganito/alladin-pcb"""
+section = "electronics"
+priority = "optional"
+depends = "$auto"
+recommends = "libgl1, libxkbcommon0, libwayland-client0, libxcb1"
+assets = [
+    ["target/release/alladin-pcb", "usr/bin/", "755"],
+    ["../../dist/beta-package/README.md", "usr/share/doc/alladin-pcb/", "644"],
+    ["../../dist/beta-package/LIESMICH.txt", "usr/share/doc/alladin-pcb/", "644"],
+    ["../../dist/beta-package/LICENSE.txt", "usr/share/doc/alladin-pcb/", "644"],
+    ["../../dist/beta-package/docs/**/*", "usr/share/doc/alladin-pcb/docs/", "644"],
+    ["../../dist/beta-package/cursor-setup/.cursor/mcp.json", "usr/share/alladin-pcb/cursor-setup/.cursor/", "644"],
+    ["../../dist/beta-package/cursor-setup/.cursor/rules/alladin-mcp.mdc", "usr/share/alladin-pcb/cursor-setup/.cursor/rules/", "644"],
+    ["../../dist/beta-package/cursor-setup/.cursorignore", "usr/share/alladin-pcb/cursor-setup/", "644"],
+]

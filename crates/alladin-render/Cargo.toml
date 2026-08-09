@@ -1,0 +1,13 @@
+[package]
+name = "alladin-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Shared egui/eframe rendering primitives (board <-> screen camera transform,
+# the actual `Painter` draw calls), used by the `alladin-pcb` editor.
+# See `src/lib.rs`'s module doc comment.
+[dependencies]
+alladin-core = { path = "../alladin-core" }
+alladin-geom = { path = "../alladin-geom" }
+eframe = { workspace = true }

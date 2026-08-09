@@ -1,0 +1,12 @@
+# Alladin board files are edited EXCLUSIVELY through the alladin-pcb MCP
+# tools -- the running Alladin instance validates every change (real JLCPCB
+# rules, correct-by-construction). Hiding the .json board files from the AI
+# agent closes the bypass: it can neither read nor edit them directly, so
+# the MCP tools are the only path that exists.
+#
+# If your project folder also contains non-board .json files the AI should
+# see (e.g. package.json), add a negation line for them below, like the
+# .cursor/ one.
+*.json
+!.cursor/
+!.cursor/**

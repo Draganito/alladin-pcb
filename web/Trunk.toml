@@ -1,0 +1,7 @@
+# From repo root:
+#   trunk serve --config web/Trunk.toml
+# Paths below are relative to this config file (web/).
+[build]
+target = "index.html"
+dist = "dist"
+# Workspace member; avoid requiring wasm-opt/binaryen for first runs.
