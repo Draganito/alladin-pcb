@@ -27,5 +27,10 @@ alwaysApply: true
   polylines → `probe_route` (batch) → `commit_route` → `check_board`.
   On blockage, try corners / other layer + via, or `ripup_wire` and retry.
   Zone fill stays in the GUI.
+- Routes keep a 1.0mm comfort margin from the board edge by default;
+  pass `edge_margin_mm` (min 0.2, the fab limit) only when space truly
+  forces the route closer. Mounting holes carry an automatic
+  screw-head keep-out (radius = full drill diameter) that all copper
+  respects.
 - Every write lands in the GUI's Ctrl+Z undo history, so the human can take
   back anything you do.

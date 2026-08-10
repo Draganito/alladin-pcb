@@ -3724,9 +3724,12 @@ mod tests {
 
     #[test]
     fn try_place_footprint_rejects_smd_pad_too_close_to_a_foreign_pth_drill() {
-        // NPTH mounting hole (no copper annulus): Node pad-vs-hole uses
-        // only 0.15mm, while lead-to-hole wants 0.3mm -- place in that
-        // window so copper clears and assembly lead-to-hole is the gate.
+        // NPTH mounting hole: since the screw-head keep-out (radius =
+        // full drill diameter, see `alladin_core::hole_keepout_circle`)
+        // copper collision is the strictest gate here -- it fires
+        // before the 0.3mm assembly lead-to-hole rule ever could. The
+        // refusal at 0.92mm and the clean placement past the keep-out
+        // are both asserted.
         let mut board = test_board();
         let th = crate::footprint::FootprintTemplate {
             name: "npth".into(),
@@ -3757,10 +3760,15 @@ mod tests {
             explicit_courtyard: None,
         };
         board.try_place_footprint(&th, Point::new(0, 0), 0.0).unwrap();
-        // Lead/body need: 0.5+0.2+0.3 = 1.0mm. Pad-vs-hole copper: +0.15 → 0.85.
-        // At 0.92mm copper passes; lead-to-hole (checked before body) rejects.
+        // Keep-out needs: 1.0 (keep-out radius) + 0.15 (clearance) +
+        // 0.2 (pad radius) = 1.35mm. At 0.92mm the pad sits inside the
+        // screw-head circle -- refused as a copper collision.
         let err = board.try_place_footprint(&smd, Point::new(mm_to_unit(0.92), 0), 0.0).unwrap_err();
-        assert_eq!(err, PlacementError::LeadToHole, "got {err}");
+        assert!(matches!(err, PlacementError::Collision(_)), "got {err}");
+        // Just past the keep-out + clearance it places cleanly.
+        board
+            .try_place_footprint(&smd, Point::new(mm_to_unit(1.36), 0), 0.0)
+            .expect("a pad clear of the screw-head keep-out must place");
     }
 
     #[test]
@@ -4692,9 +4700,14 @@ mod tests {
         let err = board.try_place_footprint(&mounting, Point::new(via_center.x + distance, via_center.y), 0.0).unwrap_err();
         assert_eq!(err, PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
 
-        // The same hole a full 0.5mm away must place cleanly.
-        let distance = drill / 2 + 150_000 + 500_000;
-        board.try_place_footprint(&mounting, Point::new(via_center.x + distance, via_center.y), 0.0).expect("a hole at exactly the 0.5mm wall gap must be legal");
+        // Clean placement must clear BOTH remaining gates: the 0.5mm
+        // wall-to-wall drill rule AND the screw-head keep-out circle
+        // (radius = full drill diameter) against the via's copper
+        // (0.3mm radius) at the pad-to-pad clearance.
+        let distance = drill + 150_000 + 300_000;
+        board
+            .try_place_footprint(&mounting, Point::new(via_center.x + distance, via_center.y), 0.0)
+            .expect("a hole clear of both the drill rule and the screw-head keep-out must be legal");
     }
 
     #[test]

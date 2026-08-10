@@ -254,7 +254,10 @@ impl Item {
             Item::Via { shape, .. } => Aabb::from_circle(shape),
             Item::Track { shape, .. } => Aabb::from_segment(shape),
             Item::Zone { outline, .. } => Aabb::from_polygon(outline),
-            Item::Hole { position, drill } => Aabb::from_circle(&Circle::new(*position, drill / 2)),
+            // The screw-head keep-out (see `hole_keepout_circle`) is
+            // what the spatial prefilter has to cover, or exact checks
+            // against the enlarged circle would never even be reached.
+            Item::Hole { position, drill } => Aabb::from_circle(&hole_keepout_circle(*position, *drill)),
         }
     }
 }
@@ -1332,6 +1335,22 @@ fn hole_circle(position: Point, drill: Unit) -> Circle {
     Circle::new(position, drill / 2)
 }
 
+/// The copper keep-out circle around a mounting hole: radius = the full
+/// drill diameter, i.e. a copper-free annulus of `drill / 2` beyond the
+/// drilled wall. That is sized for the screw *head* that will sit on
+/// the board, not just the drill bit: a metric cap/pan head is ~1.7-1.9x
+/// its thread diameter, and the drill is the thread plus ~0.2mm, so
+/// head radius always fits inside this circle (an M3 head, 5.5mm wide,
+/// inside the 6.4mm keep-out of its 3.2mm hole). A washer-sized flange
+/// can still poke past it -- that stays the designer's own call. Used
+/// for every hole-vs-copper check (pads, vias, tracks, pours); the
+/// mechanical drill-to-drill rules ([`hole_circle`],
+/// `BoardDoc::violates_hole_to_hole`, edge distance) stay on the real
+/// drill, where a screw head is irrelevant.
+fn hole_keepout_circle(position: Point, drill: Unit) -> Circle {
+    Circle::new(position, drill)
+}
+
 fn items_collide(a: &Item, b: &Item, clearance: Unit) -> bool {
     match (a, b) {
         (Item::Pad { shape: s1, .. }, Item::Pad { shape: s2, .. }) => s1.collides_with(s2, clearance),
@@ -1351,12 +1370,18 @@ fn items_collide(a: &Item, b: &Item, clearance: Unit) -> bool {
         // the same round obstacle a via already is) -- reuses exactly
         // the same primitives as the `Via` arms above, just built from
         // `position`/`drill` instead of `Via`'s own `shape`/`net`.
+        // Copper items keep clear of the screw-head-sized keep-out
+        // (see `hole_keepout_circle`), not just the bare drill --
+        // otherwise the mounting screw's head would sit right on top
+        // of live copper.
         (Item::Pad { shape: s, .. }, Item::Hole { position, drill })
-        | (Item::Hole { position, drill }, Item::Pad { shape: s, .. }) => s.collides_with_circle(&hole_circle(*position, *drill), clearance),
+        | (Item::Hole { position, drill }, Item::Pad { shape: s, .. }) => s.collides_with_circle(&hole_keepout_circle(*position, *drill), clearance),
         (Item::Via { shape: c, .. }, Item::Hole { position, drill })
-        | (Item::Hole { position, drill }, Item::Via { shape: c, .. }) => circle_circle_collides(c, &hole_circle(*position, *drill), clearance),
+        | (Item::Hole { position, drill }, Item::Via { shape: c, .. }) => circle_circle_collides(c, &hole_keepout_circle(*position, *drill), clearance),
         (Item::Track { shape: s, .. }, Item::Hole { position, drill })
-        | (Item::Hole { position, drill }, Item::Track { shape: s, .. }) => circle_segment_collides(&hole_circle(*position, *drill), s, clearance),
+        | (Item::Hole { position, drill }, Item::Track { shape: s, .. }) => circle_segment_collides(&hole_keepout_circle(*position, *drill), s, clearance),
+        // Hole vs hole is a drill-bit rule, not a screw-head rule --
+        // measured wall to wall on the real drills.
         (Item::Hole { position: p1, drill: d1 }, Item::Hole { position: p2, drill: d2 }) => {
             circle_circle_collides(&hole_circle(*p1, *d1), &hole_circle(*p2, *d2), clearance)
         }
@@ -2272,21 +2297,28 @@ mod tests {
     fn a_mounting_hole_collides_with_a_pad_via_and_another_hole_at_the_expected_clearance() {
         let resolver = JlcpcbClearance;
         let mut world = Node::new();
-        world.add(Item::Hole { position: Point::new(0, 0), drill: 2 * MM }); // radius 1mm
+        world.add(Item::Hole { position: Point::new(0, 0), drill: 2 * MM }); // drill radius 1mm, screw-head keep-out radius 2mm
 
+        // Copper (pads/vias) clears against the screw-head keep-out
+        // circle (radius = full drill diameter, see
+        // `hole_keepout_circle`), not the bare drill wall.
         let clearance = JlcpcbClearance::PAD_TO_PAD;
-        let x_exactly_clear = MM + clearance + 500_000; // hole radius + clearance + pad radius
+        let x_exactly_clear = 2 * MM + clearance + 500_000; // keep-out radius + clearance + pad radius
         let pad_at = |x: Unit| Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(x, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu };
-        assert!(!world.is_colliding(&pad_at(x_exactly_clear), &resolver), "exactly at PAD_TO_PAD clearance: must not collide");
+        assert!(!world.is_colliding(&pad_at(x_exactly_clear), &resolver), "exactly at PAD_TO_PAD clearance past the keep-out: must not collide");
         assert!(world.is_colliding(&pad_at(x_exactly_clear - 1), &resolver), "one internal unit closer: must collide");
 
         let via_at = |x: Unit| Item::Via { shape: Circle::new(Point::new(x, 0), 500_000), drill: 250_000, net: Some(NetId(2)) };
         assert!(!world.is_colliding(&via_at(x_exactly_clear), &resolver));
         assert!(world.is_colliding(&via_at(x_exactly_clear - 1), &resolver));
 
+        // Hole vs hole stays a drill-bit rule on the real drill walls
+        // (radius 1mm + clearance + radius 0.5mm) -- a screw head can't
+        // short two platingless holes.
+        let hole_exactly_clear = MM + clearance + 500_000;
         let hole_at = |x: Unit| Item::Hole { position: Point::new(x, 0), drill: MM };
-        assert!(!world.is_colliding(&hole_at(x_exactly_clear), &resolver), "two holes exactly at PAD_TO_PAD clearance: must not collide");
-        assert!(world.is_colliding(&hole_at(x_exactly_clear - 1), &resolver), "two holes one internal unit closer: must collide");
+        assert!(!world.is_colliding(&hole_at(hole_exactly_clear), &resolver), "two holes exactly at PAD_TO_PAD clearance wall-to-wall: must not collide");
+        assert!(world.is_colliding(&hole_at(hole_exactly_clear - 1), &resolver), "two holes one internal unit closer: must collide");
     }
 
     #[test]
@@ -2304,11 +2336,15 @@ mod tests {
     }
 
     #[test]
-    fn a_mounting_holes_aabb_matches_its_drill_radius() {
+    fn a_mounting_holes_aabb_covers_its_screw_head_keepout() {
+        // The AABB must span the keep-out circle (radius = drill
+        // diameter, 2mm here), not just the 1mm drill radius --
+        // otherwise the spatial prefilter would skip exact checks
+        // against the enlarged circle entirely.
         let hole = Item::Hole { position: Point::new(5 * MM, -3 * MM), drill: 2 * MM };
         let bb = hole.aabb();
-        assert_eq!(bb.min, Point::new(4 * MM, -4 * MM));
-        assert_eq!(bb.max, Point::new(6 * MM, -2 * MM));
+        assert_eq!(bb.min, Point::new(3 * MM, -5 * MM));
+        assert_eq!(bb.max, Point::new(7 * MM, -1 * MM));
     }
 
     #[test]

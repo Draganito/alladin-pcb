@@ -215,6 +215,14 @@ Unter „Place part" stehen immer bereit: „2-pin THT (2.54mm pitch)",
 (solder, 2mm)", „Mounting hole (M2, NPTH)", „Mounting hole (M2.5,
 NPTH)", „Mounting hole (M3, NPTH)".
 
+Jedes Montageloch erzwingt automatisch einen **Schraubenkopf-Freiraum**:
+Kupfer (Bahnen, Vias, Pads, Zonen-Füllungen) bleibt aus einem Kreis vom
+vollen Bohrdurchmesser um den Lochmittelpunkt heraus — ein kupferfreier
+Ring von einer halben Bohrweite über die Wand hinaus, dimensioniert so,
+dass ein normaler Zylinder-/Linsenkopf nie auf Kupfer aufliegt (M3-Kopf
+5,5 mm im 6,4-mm-Freikreis seines 3,2-mm-Lochs). Große Unterlegscheiben
+können darüber hinausreichen — dann selbst mehr Abstand halten.
+
 ### 6.2 LCSC-Download
 
 Der wichtigste Weg zu echten Bauteilen: unter „Download part (LCSC)"
@@ -548,7 +556,7 @@ Schreibend (brauchen `--allow-ai-write`):
 
 1. `get_routing_scene` — `open_bridges` (kürzeste Pad-Paare zwischen Kupferinseln).
 2. Polylinien vorschlagen (`segments` mit `layer` + `points_mm`; Mehrlagen mit `vias_mm` an den Übergängen).
-3. `probe_route` — Kandidaten im Batch prüfen (grün/rot = GUI-Preview). Bei Blockade nennt das Ergebnis das genaue Teilstück und die Items im Weg (Art, Netz, Footprint, Lage, Position) — die KI kann gezielt drumherum routen.
+3. `probe_route` — Kandidaten im Batch prüfen (grün/rot = GUI-Preview). Bei Blockade nennt das Ergebnis das genaue Teilstück und die Items im Weg (Art, Netz, Footprint, Lage, Position) — die KI kann gezielt drumherum routen. Zum Platinenrand gilt standardmäßig ein **Komfort-Abstand von 1,0 mm** (Routen am 0,2-mm-Fab-Limit provoziert DFM-Warnungen der Fab); per `edge_margin_mm` kann ein Kandidat bewusst näher heran, bis zum harten 0,2-mm-Minimum.
 4. `commit_route` — ersten freien Kandidaten schreiben (Ctrl+Z macht rückgängig). Der Commit prüft zusätzlich die Konnektivität: Eine Bahn, die die Kupferinseln des Netzes nicht wirklich verbindet (falsche Lage, endet im Leeren), wird zurückgerollt und abgelehnt — die Antwort meldet `bridge_closed` und die Inselzahl vorher/nachher.
 5. `check_board`, bis `open_nets` leer ist. Bei Blockade: Ecken, andere Lage + Via, oder `ripup_wire`.
 

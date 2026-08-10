@@ -21,9 +21,16 @@ pub const DEFAULT_TRACE_WIDTH: Unit = 250_000;
 /// Whether every leg of `path` keeps JLCPCB's real `copper_to_routed_edge`
 /// margin from the board outline, at trace width `width`.
 pub(crate) fn path_keeps_edge_clearance(path: &[Point], width: Unit, outline: &[Polygon]) -> bool {
-    path.windows(2).all(|leg| {
-        segment_within_outline_with_clearance(leg[0], leg[1], width, JlcpcbDfm::COPPER_TO_ROUTED_EDGE, outline)
-    })
+    path_keeps_edge_margin(path, width, outline, JlcpcbDfm::COPPER_TO_ROUTED_EDGE)
+}
+
+/// [`path_keeps_edge_clearance`] with a caller-chosen margin instead of
+/// the hard [`JlcpcbDfm::COPPER_TO_ROUTED_EDGE`] fab minimum -- what the
+/// MCP route gates use to enforce a comfort distance from the cut line
+/// (see `mcp_routing::EDGE_COMFORT_MARGIN`) that a candidate can relax
+/// per-call, but never below the fab minimum.
+pub(crate) fn path_keeps_edge_margin(path: &[Point], width: Unit, outline: &[Polygon], margin: Unit) -> bool {
+    path.windows(2).all(|leg| segment_within_outline_with_clearance(leg[0], leg[1], width, margin, outline))
 }
 
 /// Snaps the direction from `from` to `cursor` onto the nearest clean

@@ -389,14 +389,14 @@ impl AlladinMcp {
     }
 
     #[tool(
-        description = "Batched clearance probe for proposed copper routes — same gates as the GUI's green/red live preview (path clearance + board-edge margin + via DFM). Pass candidates: [{net, width_mm?, segments:[{layer:FCu|BCu, points_mm:[[x,y],...]}], vias_mm?:[[x,y],...]}]. Multi-layer routes need one via per junction (via point = last point of segment i and first of segment i+1). Returns results[] per candidate: ok, or blocked with the exact leg (segment_index, leg_index, leg_mm) and colliding[] — kind/net/footprint/layer/position of up to 3 items in the way, so you can route around them. Does not mutate the board."
+        description = "Batched clearance probe for proposed copper routes — same gates as the GUI's green/red live preview (path clearance + board-edge margin + via DFM). Pass candidates: [{net, width_mm?, edge_margin_mm?, segments:[{layer:FCu|BCu, points_mm:[[x,y],...]}], vias_mm?:[[x,y],...]}]. Board-edge distance defaults to a 1.0mm comfort margin (routing at the fab limit invites fab-side DFM warnings); pass edge_margin_mm to deliberately go closer, down to the hard 0.2mm minimum. Multi-layer routes need one via per junction (via point = last point of segment i and first of segment i+1). Returns results[] per candidate: ok, or blocked with the exact leg (segment_index, leg_index, leg_mm) and colliding[] — kind/net/footprint/layer/position of up to 3 items in the way, so you can route around them. Does not mutate the board."
     )]
     async fn probe_route(&self, Parameters(args): Parameters<ProbeRouteArgs>) -> Result<CallToolResult, McpError> {
         self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::ProbeRoute { args, reply }).await
     }
 
     #[tool(
-        description = "Commits one copper route (same candidate shape as probe_route) onto the live board after re-running the same clearance/via gates, then verifies connectivity: the route must actually join the net's copper islands (bridge_closed=true, copper_pieces_before/after in the reply). A clean-looking route that lands in free space or on the wrong layer is rolled back and refused — no false positives. On refusal nothing is written and the error names the gate. Use after a successful probe_route. Ctrl+Z undoes. Zone fill stays in the GUI."
+        description = "Commits one copper route (same candidate shape as probe_route, including edge_margin_mm with the same 1.0mm comfort default) onto the live board after re-running the same clearance/via gates, then verifies connectivity: the route must actually join the net's copper islands (bridge_closed=true, copper_pieces_before/after in the reply). A clean-looking route that lands in free space or on the wrong layer is rolled back and refused — no false positives. On refusal nothing is written and the error names the gate. Use after a successful probe_route. Ctrl+Z undoes. Zone fill stays in the GUI."
     )]
     async fn commit_route(&self, Parameters(args): Parameters<CommitRouteArgs>) -> Result<CallToolResult, McpError> {
         if let Some(refusal) = self.require_write_access() {

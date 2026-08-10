@@ -207,6 +207,14 @@ Always available under "Place part": "2-pin THT (2.54mm pitch)",
 (solder, 2mm)", "Mounting hole (M2, NPTH)", "Mounting hole (M2.5,
 NPTH)", "Mounting hole (M3, NPTH)".
 
+Every mounting hole automatically enforces a **screw-head keep-out**:
+copper (tracks, vias, pads, zone fills) stays out of a circle of the
+full drill diameter around the hole center — a copper-free annulus of
+half a drill width beyond the wall, sized so a standard cap/pan screw
+head never sits on live copper (an M3 head, 5.5mm, inside the 6.4mm
+keep-out of its 3.2mm hole). Large washers can still reach past it —
+keep extra distance yourself in that case.
+
 ### 6.2 LCSC download
 
 The main way to real parts: under "Download part (LCSC)" enter an LCSC
@@ -526,7 +534,7 @@ Write (need `--allow-ai-write`):
 
 1. `get_routing_scene` — see `open_bridges` (shortest pad pairs between copper islands).
 2. Propose one or more polylines (`segments` with `layer` + `points_mm`; multi-layer needs `vias_mm` at junctions).
-3. `probe_route` — batch-test candidates (green/red = same gates as live preview). A blocked result names the exact leg and the items in the way (kind, net, footprint, layer, position), so the AI can route around them.
+3. `probe_route` — batch-test candidates (green/red = same gates as live preview). A blocked result names the exact leg and the items in the way (kind, net, footprint, layer, position), so the AI can route around them. Board-edge distance defaults to a **1.0mm comfort margin** (routing at the 0.2mm fab limit invites fab-side DFM warnings); a candidate can pass `edge_margin_mm` to deliberately go closer, down to the hard 0.2mm minimum.
 4. `commit_route` — write the first clear candidate (Ctrl+Z undoes). The commit also verifies connectivity: a route that doesn't actually join the net's copper islands (wrong layer, ends in free space) is rolled back and refused — the reply reports `bridge_closed` and the island count before/after.
 5. `check_board` until `open_nets` is empty. On blockage: corners, other layer + via, or `ripup_wire`.
 

@@ -89,10 +89,12 @@ fn obstacle_polygon(item: &Item, clearance: Unit) -> Option<Polygon> {
         Item::Pad { shape: PadShape::Polygon { outline, .. }, .. } => fill::buffer(outline, clearance).into_iter().next(),
         Item::Via { shape, .. } => Some(circle_polygon(shape.center, shape.radius + clearance)),
         Item::Track { shape, .. } => Some(capsule_polygon(shape.a, shape.b, shape.width / 2 + clearance)),
-        // A mounting hole gets a pour keep-out too, same as a via --
-        // copper must never overlap the drilled-out board material
-        // around it (see `Item::Hole`'s own doc comment).
-        Item::Hole { position, drill } => Some(circle_polygon(*position, drill / 2 + clearance)),
+        // A mounting hole keeps the pour out of the full screw-head
+        // circle (radius = drill diameter, matching
+        // `alladin_core::hole_keepout_circle`), not just the drilled
+        // barrel -- the screw head that will sit here must never land
+        // on live zone copper.
+        Item::Hole { position, drill } => Some(circle_polygon(*position, *drill + clearance)),
         Item::Zone { .. } => None,
     }
 }
@@ -274,6 +276,10 @@ mod tests {
         assert_eq!(islands.len(), 1);
         let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
         assert!(!filled.contains_point(Point::new(0, 0)), "the mounting hole's own footprint must read as excluded, same as a pad/via");
+        assert!(
+            !filled.contains_point(Point::new(0, 3 * MM / 2)),
+            "1.5mm from center is past the 1mm drill wall but inside the 2mm screw-head keep-out -- the head must never sit on zone copper"
+        );
         assert!(filled.contains_point(Point::new(0, 5 * MM)), "well away from the hole must still be filled");
     }
 

@@ -10,7 +10,17 @@ use std::collections::HashSet;
 
 use crate::board_doc::{BoardDoc, PlacementError, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL};
 use crate::footprint::FootprintTemplate;
-use crate::routing::{path_keeps_edge_clearance, DEFAULT_TRACE_WIDTH};
+use crate::routing::{path_keeps_edge_margin, DEFAULT_TRACE_WIDTH};
+
+/// How far MCP-committed copper stays from the board edge by default --
+/// deliberately wider than [`JlcpcbDfm::COPPER_TO_ROUTED_EDGE`]'s hard
+/// 0.2mm fab minimum. Routing exactly at the fab limit is legal but
+/// leaves zero reserve (JLCDFM's own measurement of a gerber can come
+/// out a few hundredths shorter and flag a warning); a human keeps
+/// comfortable distance from the cut line unless space forces the
+/// issue, so the AI router does too. A candidate can lower it per-call
+/// via `edge_margin_mm`, but never below the fab minimum.
+pub const EDGE_COMFORT_MARGIN: Unit = MM;
 
 fn mm(v: f64) -> Unit {
     (v * MM as f64).round() as Unit
@@ -114,6 +124,7 @@ pub fn routing_scene_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Va
         "rules": {
             "min_copper_clearance_mm": unit_mm(doc.pad_to_pad_clearance()),
             "copper_to_board_edge_mm": unit_mm(JlcpcbDfm::COPPER_TO_ROUTED_EDGE),
+            "edge_comfort_margin_mm": unit_mm(EDGE_COMFORT_MARGIN),
             "default_trace_width_mm": unit_mm(DEFAULT_TRACE_WIDTH),
             "default_via_diameter_mm": unit_mm(DEFAULT_VIA_DIAMETER),
             "default_via_drill_mm": unit_mm(DEFAULT_VIA_DRILL),
@@ -194,6 +205,7 @@ pub struct ParsedRoute {
     pub via_drill: Unit,
     pub segments: Vec<(LayerId, Vec<Point>)>,
     pub vias: Vec<Point>,
+    pub edge_margin: Unit,
 }
 
 pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<ParsedRoute, String> {
@@ -205,6 +217,19 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
     let width = candidate.get("width_mm").and_then(|v| v.as_f64()).map(mm).unwrap_or(DEFAULT_TRACE_WIDTH);
     let via_diameter = candidate.get("via_diameter_mm").and_then(|v| v.as_f64()).map(mm).unwrap_or(DEFAULT_VIA_DIAMETER);
     let via_drill = candidate.get("via_drill_mm").and_then(|v| v.as_f64()).map(mm).unwrap_or(DEFAULT_VIA_DRILL);
+    let edge_margin = match candidate.get("edge_margin_mm").and_then(|v| v.as_f64()) {
+        Some(v) => {
+            let margin = mm(v);
+            if margin < JlcpcbDfm::COPPER_TO_ROUTED_EDGE {
+                return Err(format!(
+                    "edge_margin_mm {v} is below JLCPCB's hard copper-to-edge minimum of {}mm",
+                    unit_mm(JlcpcbDfm::COPPER_TO_ROUTED_EDGE)
+                ));
+            }
+            margin
+        }
+        None => EDGE_COMFORT_MARGIN,
+    };
 
     let segments_val = candidate
         .get("segments")
@@ -287,6 +312,7 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
         via_drill,
         segments,
         vias,
+        edge_margin,
     })
 }
 
@@ -340,7 +366,7 @@ fn leg_mm(from: Point, to: Point) -> Value {
 /// Per-leg clearance + edge gates for one segment path; on blockage
 /// returns `{blocked, leg_index, leg_mm, colliding?}` naming the exact
 /// leg and the first items in the way.
-fn path_block_json(doc: &BoardDoc, path: &[Point], width: Unit, net: NetId, layer: LayerId) -> Option<Value> {
+fn path_block_json(doc: &BoardDoc, path: &[Point], width: Unit, net: NetId, layer: LayerId, edge_margin: Unit) -> Option<Value> {
     if path.len() < 2 {
         return Some(json!({ "blocked": "path needs at least 2 points" }));
     }
@@ -356,11 +382,17 @@ fn path_block_json(doc: &BoardDoc, path: &[Point], width: Unit, net: NetId, laye
         }
     }
     for (i, leg) in path.windows(2).enumerate() {
-        if !path_keeps_edge_clearance(leg, width, &doc.outline) {
+        if !path_keeps_edge_margin(leg, width, &doc.outline, edge_margin) {
             return Some(json!({
                 "blocked": "edge",
                 "leg_index": i,
                 "leg_mm": leg_mm(leg[0], leg[1]),
+                "edge_margin_mm": unit_mm(edge_margin),
+                "hint": format!(
+                    "comfort margin is {}mm by default; pass edge_margin_mm (min {}mm, the fab limit) to route closer to the edge on purpose",
+                    unit_mm(EDGE_COMFORT_MARGIN),
+                    unit_mm(JlcpcbDfm::COPPER_TO_ROUTED_EDGE)
+                ),
             }));
         }
     }
@@ -369,13 +401,13 @@ fn path_block_json(doc: &BoardDoc, path: &[Point], width: Unit, net: NetId, laye
 
 /// Read-only via gates matching [`BoardDoc::try_add_via`] (no mutation).
 /// On blockage names the reason and, for collisions, the items in the way.
-fn via_block_json(doc: &BoardDoc, center: Point, net: NetId, diameter: Unit, drill: Unit) -> Option<Value> {
+fn via_block_json(doc: &BoardDoc, center: Point, net: NetId, diameter: Unit, drill: Unit, edge_margin: Unit) -> Option<Value> {
     if let Err(v) = JlcpcbDfm::check_via(diameter, drill) {
         return Some(json!({ "blocked": format!("via: {v}") }));
     }
     let radius = diameter / 2;
-    if !alladin_geom::circle_within_outline(center, radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &doc.outline) {
-        return Some(json!({ "blocked": "via: too close to board edge" }));
+    if !alladin_geom::circle_within_outline(center, radius + edge_margin, &doc.outline) {
+        return Some(json!({ "blocked": "via: too close to board edge", "edge_margin_mm": unit_mm(edge_margin) }));
     }
     if doc.violates_hole_to_hole(center, drill, Some(net)) {
         return Some(json!({ "blocked": "via: hole-to-hole spacing" }));
@@ -402,7 +434,7 @@ fn via_block_json(doc: &BoardDoc, center: Point, net: NetId, diameter: Unit, dri
 /// Probe one parsed candidate against the live board (no mutation).
 pub fn probe_one(doc: &BoardDoc, route: &ParsedRoute) -> Value {
     for (i, (layer, path)) in route.segments.iter().enumerate() {
-        if let Some(mut detail) = path_block_json(doc, path, route.width, route.net, *layer) {
+        if let Some(mut detail) = path_block_json(doc, path, route.width, route.net, *layer, route.edge_margin) {
             let obj = detail.as_object_mut().unwrap();
             obj.insert("ok".into(), json!(false));
             obj.insert("segment_index".into(), json!(i));
@@ -412,7 +444,7 @@ pub fn probe_one(doc: &BoardDoc, route: &ParsedRoute) -> Value {
         }
     }
     for (i, via) in route.vias.iter().enumerate() {
-        if let Some(mut detail) = via_block_json(doc, *via, route.net, route.via_diameter, route.via_drill) {
+        if let Some(mut detail) = via_block_json(doc, *via, route.net, route.via_diameter, route.via_drill, route.edge_margin) {
             let obj = detail.as_object_mut().unwrap();
             obj.insert("ok".into(), json!(false));
             obj.insert("via_index".into(), json!(i));
@@ -700,6 +732,44 @@ mod tests {
             "rollback must remove the useless track again"
         );
         assert_eq!(doc.node.net_copper_components(net).len(), 2);
+    }
+
+    #[test]
+    fn edge_comfort_margin_blocks_an_edge_hugging_route_unless_relaxed_per_call() {
+        let (doc, _, _, _, net, ca, cb) = board_with_two_pads();
+        let net_name = doc.nets.iter().find(|n| n.id == net).unwrap().name.clone();
+        // 40mm board -> bottom edge at y = 20mm. A detour along
+        // y = 19.5mm leaves ~0.375mm of copper-to-edge: legal for the
+        // fab (0.2mm hard minimum) but under the 1.0mm comfort margin.
+        let cand = json!({
+            "net": net_name,
+            "segments": [{
+                "layer": "FCu",
+                "points_mm": [
+                    [unit_mm(ca.x), unit_mm(ca.y)],
+                    [-10.0, 19.5],
+                    [10.0, 19.5],
+                    [unit_mm(cb.x), unit_mm(cb.y)]
+                ]
+            }]
+        });
+        let route = parse_route_candidate(&doc, &cand).unwrap();
+        let result = probe_one(&doc, &route);
+        assert_eq!(result["ok"], false, "{result}");
+        assert_eq!(result["blocked"], "edge", "{result}");
+        assert!(result["hint"].as_str().unwrap().contains("edge_margin_mm"), "{result}");
+
+        // The same route with an explicit, deliberate 0.3mm margin passes.
+        let mut relaxed = cand.clone();
+        relaxed["edge_margin_mm"] = json!(0.3);
+        let route = parse_route_candidate(&doc, &relaxed).unwrap();
+        assert_eq!(probe_one(&doc, &route)["ok"], true);
+
+        // Below the fab minimum is refused outright, at parse time.
+        let mut illegal = cand;
+        illegal["edge_margin_mm"] = json!(0.1);
+        let err = parse_route_candidate(&doc, &illegal).unwrap_err();
+        assert!(err.contains("minimum"), "{err}");
     }
 
     #[test]
