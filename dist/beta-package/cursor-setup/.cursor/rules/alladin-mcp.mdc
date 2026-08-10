@@ -42,6 +42,9 @@ alwaysApply: true
   solder pad, same-net included (reflow hazard): crowded pins (e.g. an
   EP pad grid) are skipped rather than compromised — connect them with
   short traces to a freer spot and stitch there.
+- Vias never land on (or within via-to-track clearance of) any track,
+  same-net included — a drill through a trace severs that copper. Place
+  the via beside the track, or end the track at the via (via first).
 - Routes keep a 1.0mm comfort margin from the board edge by default;
   pass `edge_margin_mm` (min 0.2, the fab limit) only when space truly
   forces the route closer. Mounting holes carry an automatic

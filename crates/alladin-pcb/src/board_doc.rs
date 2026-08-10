@@ -721,6 +721,15 @@ pub enum PlacementError {
     /// the item would *sit* relative to the board or other items. See
     /// [`DfmViolation`].
     Dfm(DfmViolation),
+    /// A via's copper would land on (or within normal via-to-track
+    /// clearance of) an existing [`Item::Track`] -- *including
+    /// same-net tracks*, which the plain collision gate deliberately
+    /// exempts. A drilled hole through a trace severs that copper; the
+    /// annular ring may or may not rejoin the stubs, so the policy is
+    /// never to place a via on a track. Route the via beside the
+    /// trace, or end the track *at* the via (place the via first, then
+    /// the stub).
+    OnTrack,
 }
 
 impl std::fmt::Display for PlacementError {
@@ -750,6 +759,10 @@ impl std::fmt::Display for PlacementError {
                 )
             }
             PlacementError::Dfm(v) => write!(f, "{v}"),
+            PlacementError::OnTrack => write!(
+                f,
+                "would put the via on or too close to a track (a drill through a trace severs that copper, same-net included) -- place the via beside the track, or end the track at the via"
+            ),
         }
     }
 }
@@ -2151,11 +2164,14 @@ impl BoardDoc {
     /// branch: the via's own scalar DFM (diameter / drill / annular
     /// ring -- see [`JlcpcbDfm::check_via`]) must clear JLCPCB's floors,
     /// its full outer copper diameter must clear the board edge by
-    /// JLCPCB's real `copper_to_routed_edge` minimum, and it must not
+    /// JLCPCB's real `copper_to_routed_edge` minimum, it must not
     /// collide with any existing item under the active
-    /// [`RuleResolver`](alladin_core::RuleResolver). Touches nothing on
-    /// `Err`, same "trial first, commit only on success" contract as
-    /// every other placement primitive in this module.
+    /// [`RuleResolver`](alladin_core::RuleResolver), and it must not
+    /// land on (or within via-to-track clearance of) any existing
+    /// track -- same-net tracks included (see
+    /// [`PlacementError::OnTrack`]). Touches nothing on `Err`, same
+    /// "trial first, commit only on success" contract as every other
+    /// placement primitive in this module.
     pub fn try_add_via(&mut self, center: Point, net: NetId, diameter: Unit, drill: Unit) -> Result<ItemId, PlacementError> {
         if let Err(v) = JlcpcbDfm::check_via(diameter, drill) {
             return Err(PlacementError::Dfm(v));
@@ -2166,6 +2182,9 @@ impl BoardDoc {
         }
         if self.violates_hole_to_hole(center, drill, Some(net)) {
             return Err(PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
+        }
+        if self.via_too_close_to_any_track(center, diameter) {
+            return Err(PlacementError::OnTrack);
         }
 
         let resolver = self.resolver();
@@ -2219,16 +2238,20 @@ impl BoardDoc {
         })
     }
 
-    /// Read-only equivalent of [`Self::try_add_via`]'s own two gates
-    /// (board edge, collision) -- never mutates `self.node`. Purely for
-    /// a *live* per-frame ghost preview (the GUI's pin-via drag-fallback,
-    /// see `app::EditorState::update_pending_pin_via`) to colour itself
+    /// Read-only equivalent of [`Self::try_add_via`]'s placement gates
+    /// (board edge, no-via-on-track, collision) -- never mutates
+    /// `self.node`. Purely for a *live* per-frame ghost preview (the
+    /// GUI's pin-via drag-fallback, see
+    /// `app::EditorState::update_pending_pin_via`) to colour itself
     /// red/green without actually placing (and immediately having to
     /// roll back) a real via on every single frame just to ask "would
     /// this work right now".
     pub(crate) fn via_would_fit(&self, center: Point, net: NetId, diameter: Unit) -> bool {
         let radius = diameter / 2;
         if !circle_within_outline(center, radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &self.outline) {
+            return false;
+        }
+        if self.via_too_close_to_any_track(center, diameter) {
             return false;
         }
         let resolver = self.resolver();
@@ -2364,6 +2387,19 @@ impl BoardDoc {
             .query_colliding(&candidate, self.resolver())
             .into_iter()
             .any(|id| matches!(self.node.get(id), Some(Item::Pad { .. })))
+    }
+
+    /// Whether a via of `diameter` centered at `center` would overlap,
+    /// or come within normal via-to-track clearance of, ANY track --
+    /// same-net tracks included. Hard gate for
+    /// [`Self::try_add_via`] / [`PlacementError::OnTrack`]: a drill
+    /// through a trace severs that copper.
+    pub(crate) fn via_too_close_to_any_track(&self, center: Point, diameter: Unit) -> bool {
+        let candidate = Item::Via { shape: Circle::new(center, diameter / 2), drill: 0, net: None };
+        self.node
+            .query_colliding(&candidate, self.resolver())
+            .into_iter()
+            .any(|id| matches!(self.node.get(id), Some(Item::Track { .. })))
     }
 
     /// Places a stitching via a hair outside `pad_id`'s own copper,
@@ -4816,8 +4852,8 @@ mod tests {
         let b_center = board.pad_center(b).unwrap();
         let net = board.connect_pads(a, b).unwrap();
         let via_point = Point::new(0, 0);
-        board.add_track_path(&[a_center, via_point], net, LayerId::FCu, 250_000, NetClass::C);
         board.try_add_via(via_point, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap();
+        board.add_track_path(&[a_center, via_point], net, LayerId::FCu, 250_000, NetClass::C);
         board.add_track_path(&[via_point, b_center], net, LayerId::BCu, 250_000, NetClass::C);
 
         let leg_on_fcu = board.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Track { layer: LayerId::FCu, .. })).unwrap().0;
@@ -5227,6 +5263,23 @@ mod tests {
             }
             other => panic!("expected a via, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn try_add_via_rejects_landing_on_a_same_net_track() {
+        // Same-net copper is normally collision-exempt, but a drill
+        // through a trace severs it -- so OnTrack must fire even when
+        // the track and via share a net.
+        let mut board = test_board();
+        let net = net_for_a_connected_pair(&mut board);
+        let mid = Point::new(0, 5 * MM);
+        board.add_track_path(&[Point::new(-5 * MM, 5 * MM), Point::new(5 * MM, 5 * MM)], net, LayerId::FCu, 250_000, NetClass::C);
+        let before = board.node.iter().count();
+
+        let err = board.try_add_via(mid, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap_err();
+        assert_eq!(err, PlacementError::OnTrack);
+        assert_eq!(board.node.iter().count(), before, "a rejected via must not be added");
+        assert!(!board.via_would_fit(mid, net, DEFAULT_VIA_DIAMETER), "ghost preview must match the hard gate");
     }
 
     #[test]

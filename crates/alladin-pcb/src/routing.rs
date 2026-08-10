@@ -1181,8 +1181,10 @@ mod tests {
         let b_center = doc.pad_center(pad_b).unwrap();
         let net = doc.pad_net(pad_a).unwrap().unwrap();
         let via_point = Point::new(0, 5 * MM);
-        doc.add_track_path(&[a_center, via_point], net, LayerId::FCu, 250_000, NetClass::C);
+        // Via first, then stubs -- `try_add_via` refuses landing on a
+        // track that is already there (same-net included).
         doc.try_add_via(via_point, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap();
+        doc.add_track_path(&[a_center, via_point], net, LayerId::FCu, 250_000, NetClass::C);
         doc.add_track_path(&[via_point, b_center], net, LayerId::BCu, 250_000, NetClass::C);
         let leg_on_fcu = doc.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Track { layer: LayerId::FCu, .. })).unwrap().0;
         let via_id = doc.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Via { .. })).unwrap().0;

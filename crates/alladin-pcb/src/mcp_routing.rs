@@ -428,6 +428,12 @@ fn via_block_json(doc: &BoardDoc, center: Point, net: NetId, diameter: Unit, dri
     if doc.violates_hole_to_hole(center, drill, Some(net)) {
         return Some(json!({ "blocked": "via: hole-to-hole spacing" }));
     }
+    if doc.via_too_close_to_any_track(center, diameter) {
+        return Some(json!({
+            "blocked": "via: on or too close to a track",
+            "hint": "a drill through a trace severs that copper (same-net included); place the via beside the track, or end the track at the via",
+        }));
+    }
     let resolver = doc.resolver();
     let candidate = Item::Via {
         shape: alladin_geom::Circle { center, radius },
@@ -528,8 +534,11 @@ pub fn commit_route(doc: &mut BoardDoc, route: &ParsedRoute) -> Result<Value, St
         }
     };
 
+    // Via before the track that ends at it -- same order as the GUI's
+    // mid-route via drop. `try_add_via` refuses landing on any existing
+    // track (same-net included), so laying the stub first would always
+    // self-block at the junction.
     for (i, (layer, path)) in route.segments.iter().enumerate() {
-        doc.add_track_path(path, route.net, *layer, route.width, NetClass::C);
         if i < route.vias.len() {
             if let Err(e) = doc.try_add_via(route.vias[i], route.net, route.via_diameter, route.via_drill) {
                 rollback(doc, &ids_before);
@@ -537,6 +546,7 @@ pub fn commit_route(doc: &mut BoardDoc, route: &ParsedRoute) -> Result<Value, St
                 return Err(format!("via after segment {i}: {e} — rolled back"));
             }
         }
+        doc.add_track_path(path, route.net, *layer, route.width, NetClass::C);
     }
 
     let pieces_after = doc.node.net_copper_components(route.net).len();

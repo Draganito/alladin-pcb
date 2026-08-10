@@ -528,7 +528,7 @@ Write (need `--allow-ai-write`):
 | `remove_footprint` | Remove a placed part |
 | `connect_pins` | Netlist (join two pins) |
 | `disconnect_pin` | Take one pin off its net |
-| `add_pin_stitching_via` | Stitching via + stub next to a pin (or every pad on a net), auto-placed like the GUI's "Add via near pin"; never lands on or within clearance of any solder pad (same-net included) — crowded pins are refused rather than compromised |
+| `add_pin_stitching_via` | Stitching via + stub next to a pin (or every pad on a net), auto-placed like the GUI's "Add via near pin"; never lands on or within clearance of any solder pad (same-net included) — crowded pins are refused rather than compromised. Every via placement (GUI / MCP / mid-route) also refuses landing on any track, same-net included — a drill through a trace severs that copper |
 | `rename_net` | Give a net a real name (`5V`, `GND`, …) |
 | `save_board` | Save the board |
 | `commit_route` | Lay a cleared copper route (same gates as the GUI preview) |
