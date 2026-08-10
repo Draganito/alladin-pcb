@@ -390,7 +390,7 @@ impl AlladinMcp {
     }
 
     #[tool(
-        description = "Places a stitching via with a short connecting stub right next to a pin, automatically at the same spot the GUI's right-click \"Add via near pin\" picks (radially away from the part, sweeping to nearby angles if the natural spot is blocked) -- no coordinates needed. Single pin: reference+pin. Batch: net=\"GND\" stitches every pad on that net that doesn't already have a same-net via next to it, and reports placed/skipped/failed per pad. Same DFM gates and Ctrl+Z undo as the GUI."
+        description = "Places a stitching via with a short connecting stub right next to a pin, automatically at the same spot the GUI's right-click \"Add via near pin\" picks (radially away from the part, sweeping to nearby angles if the natural spot is blocked) -- no coordinates needed. Never puts the via on or within clearance of ANY solder pad, same-net included (a drilled hole in a paste pad wicks solder during reflow): if every candidate spot would touch a pad, that pin is refused/skipped rather than compromised -- connect it with a trace to a freer spot instead. Single pin: reference+pin. Batch: net=\"GND\" stitches every pad on that net that doesn't already have a same-net via next to it, and reports placed/skipped/failed per pad. Same DFM gates and Ctrl+Z undo as the GUI."
     )]
     async fn add_pin_stitching_via(&self, Parameters(args): Parameters<AddPinStitchingViaArgs>) -> Result<CallToolResult, McpError> {
         if let Some(refusal) = self.require_write_access() {

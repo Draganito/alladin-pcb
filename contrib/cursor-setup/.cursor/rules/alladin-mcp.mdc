@@ -34,6 +34,10 @@ alwaysApply: true
 - `connect_pins`/`disconnect_pin` treat a multi-pad pin (e.g. a thermal
   pad split into several same-numbered paste pads) as one electrical
   pin: every sibling pad joins/leaves the net together.
+- `add_pin_stitching_via` never puts a via on or within clearance of any
+  solder pad, same-net included (reflow hazard): crowded pins (e.g. an
+  EP pad grid) are skipped rather than compromised — connect them with
+  short traces to a freer spot and stitch there.
 - Routes keep a 1.0mm comfort margin from the board edge by default;
   pass `edge_margin_mm` (min 0.2, the fab limit) only when space truly
   forces the route closer. Mounting holes carry an automatic

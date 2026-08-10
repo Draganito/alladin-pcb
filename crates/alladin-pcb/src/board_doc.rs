@@ -818,6 +818,14 @@ pub enum PinStitchingViaError {
     /// net) even though the via's own footprint had room a fraction of
     /// a millimetre further out.
     NoRoomForStub,
+    /// Every candidate spot would put the via's copper on top of (or
+    /// within normal clearance of) a solder pad -- *including same-net
+    /// pads*, which the plain collision gate deliberately exempts. A
+    /// drilled hole in a paste pad wicks solder away during reflow, so
+    /// the policy is: no via at all rather than a via over a pad; the
+    /// caller has to solve that pin differently (a trace to a freer
+    /// spot, a via further out placed by hand).
+    OverlapsPad,
 }
 
 impl std::fmt::Display for PinStitchingViaError {
@@ -828,6 +836,12 @@ impl std::fmt::Display for PinStitchingViaError {
             PinStitchingViaError::Via(e) => write!(f, "{e}"),
             PinStitchingViaError::NoRoomForStub => {
                 write!(f, "a via would fit there, but not the short track needed to connect it back to the pin -- move the part and try again")
+            }
+            PinStitchingViaError::OverlapsPad => {
+                write!(
+                    f,
+                    "every candidate spot would put the via on or too close to a solder pad (a drilled hole in a paste pad wicks solder away) -- no via placed; connect this pin with a trace to a freer spot instead"
+                )
             }
         }
     }
@@ -2038,6 +2052,24 @@ impl BoardDoc {
         Ok(id)
     }
 
+    /// Whether a via of `diameter` centered at `center` would overlap,
+    /// or come within normal copper clearance of, ANY solder pad --
+    /// same-net pads included. Support for
+    /// [`Self::try_add_pin_stitching_via`]'s no-via-over-pad rule; see
+    /// [`PinStitchingViaError::OverlapsPad`] for why same-net pads,
+    /// normally exempt from every collision gate, count here.
+    fn via_too_close_to_any_pad(&self, center: Point, diameter: Unit) -> bool {
+        // A net-less probe via is same-net with nothing, so the normal
+        // collision query reports EVERY item within clearance -- then
+        // only the pad hits count (touching own-net tracks, vias, and
+        // zone fill is what a stitching via is for).
+        let candidate = Item::Via { shape: Circle::new(center, diameter / 2), drill: 0, net: None };
+        self.node
+            .query_colliding(&candidate, self.resolver())
+            .into_iter()
+            .any(|id| matches!(self.node.get(id), Some(Item::Pad { .. })))
+    }
+
     /// Places a stitching via a hair outside `pad_id`'s own copper,
     /// along the radial line from the owning footprint's own
     /// body/courtyard center through the pin -- the "just outside this
@@ -2103,6 +2135,16 @@ impl BoardDoc {
         let resolver = self.resolver();
         let mut first_err = None;
         for via_center in candidates {
+            // Hard no-via-over-pad rule: the plain collision gate in
+            // `try_add_via` exempts same-net copper (it must -- copper
+            // of one net is supposed to merge), but a drilled hole in a
+            // paste pad wicks solder away during reflow, so a stitching
+            // via keeps normal clearance from EVERY pad, its own net's
+            // included. No fallback: better no via than one over a pad.
+            if self.via_too_close_to_any_pad(via_center, diameter) {
+                first_err.get_or_insert(PinStitchingViaError::OverlapsPad);
+                continue;
+            }
             let via_id = match self.try_add_via(via_center, net, diameter, drill) {
                 Ok(id) => id,
                 Err(e) => {
@@ -4936,6 +4978,32 @@ mod tests {
 
     fn wire_pad_template() -> crate::footprint::FootprintTemplate {
         crate::footprint::builtin_templates().into_iter().find(|t| t.name == "Wire pad (solder, 2mm)").unwrap()
+    }
+
+    #[test]
+    fn try_add_pin_stitching_via_keeps_clear_of_same_net_neighbour_pads() {
+        // Two same-net wire pads close together, the second sitting
+        // exactly on the first one's natural +X exit line. The plain
+        // collision gate would happily let the via overlap that
+        // neighbour (same net is exempt), but a drilled hole in a
+        // paste pad is a reflow hazard, so the no-via-over-pad rule
+        // must make the sweep step around it -- and wherever the via
+        // ends up, it must keep normal clearance from EVERY pad.
+        let mut board = test_board();
+        let template = wire_pad_template();
+        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board.try_place_footprint(&template, Point::new((3.0 * MM as f64) as Unit, 0), 0.0).unwrap();
+        let pad_a = pad_ids_of(&board, 0)[0];
+        board.connect_pads(pad_a, pad_ids_of(&board, 1)[0]).unwrap();
+
+        let result = board
+            .try_add_pin_stitching_via(pad_a, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH)
+            .expect("the angular sweep must find a spot that overlaps no pad");
+        assert!(
+            !board.via_too_close_to_any_pad(result.center, DEFAULT_VIA_DIAMETER),
+            "the placed via must keep pad clearance from every pad, same-net included: {:?}",
+            result.center
+        );
     }
 
     #[test]

@@ -547,7 +547,7 @@ Schreibend (brauchen `--allow-ai-write`):
 | `remove_footprint` | Platziertes Teil entfernen |
 | `connect_pins` | Netzliste (zwei Pins verbinden) |
 | `disconnect_pin` | Einen Pin vom Netz nehmen |
-| `add_pin_stitching_via` | Stitching-Via + Stub neben einem Pin (oder allen Pads eines Netzes), automatisch platziert wie das GUI-„Via neben Pin" |
+| `add_pin_stitching_via` | Stitching-Via + Stub neben einem Pin (oder allen Pads eines Netzes), automatisch platziert wie das GUI-„Via neben Pin"; landet nie auf oder zu nah an einem Lötpad (auch nicht same-net) — enge Pins werden abgelehnt statt kompromittiert |
 | `rename_net` | Netz sauber benennen (`5V`, `GND`, …) |
 | `save_board` | Board speichern |
 | `commit_route` | Geprüfte Kupferbahn legen (gleiche Gates wie GUI-Preview) |
