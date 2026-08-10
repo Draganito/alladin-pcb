@@ -4565,6 +4565,9 @@ fn handle_mcp_query(query: crate::mcp::McpQuery, screen: &mut Screen, parts_db: 
         McpQuery::RipupWire { args, reply } => {
             let _ = reply.send(ripup_wire_write(screen, args).to_string());
         }
+        McpQuery::SuggestRoute { args, reply } => {
+            let _ = reply.send(suggest_route_handle(screen, args).to_string());
+        }
     }
 }
 
@@ -4869,18 +4872,55 @@ fn connect_pins_write(screen: &mut Screen, args: crate::mcp::ConnectPinsArgs) ->
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let Some(a) = state.doc.find_pad(&state.templates, &args.ref1, &args.pin1) else {
+    let pads_a = state.doc.find_pads(&state.templates, &args.ref1, &args.pin1);
+    if pads_a.is_empty() {
         return error_json(format!("no such pin: {} pin {}", args.ref1, args.pin1));
-    };
-    let Some(b) = state.doc.find_pad(&state.templates, &args.ref2, &args.pin2) else {
+    }
+    let pads_b = state.doc.find_pads(&state.templates, &args.ref2, &args.pin2);
+    if pads_b.is_empty() {
         return error_json(format!("no such pin: {} pin {}", args.ref2, args.pin2));
-    };
-    match state.try_mutate_doc_ok(|doc| doc.connect_pads(a, b)) {
+    }
+    // A multi-pad pin (e.g. a thermal pad split into a grid of same-numbered
+    // paste pads) is one electrical pin: every sibling pad joins the net,
+    // not just the first. Pre-check all of them so the mutation below is
+    // all-or-nothing -- `try_mutate_doc_ok` records undo but doesn't roll
+    // back a half-applied closure on error.
+    let mut existing: Option<crate::board_doc::NetRecord> = None;
+    for &pad in pads_a.iter().chain(&pads_b) {
+        let Ok(net) = state.doc.pad_net(pad) else {
+            return error_json("internal error: pin resolved to a non-pad item");
+        };
+        if let Some(net) = net {
+            let record = state.doc.nets.iter().find(|n| n.id == net).cloned();
+            match (&existing, record) {
+                (None, Some(r)) => existing = Some(r),
+                (Some(e), Some(r)) if e.id != r.id => {
+                    return error_json(format!(
+                        "couldn't connect {}.{} to {}.{}: pads already sit on two different nets ({} and {})",
+                        args.ref1, args.pin1, args.ref2, args.pin2, e.name, r.name
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    let anchor = pads_a[0];
+    let result = state.try_mutate_doc_ok(|doc| {
+        let net = doc.connect_pads(anchor, pads_b[0])?;
+        for &extra in pads_a[1..].iter().chain(&pads_b[1..]) {
+            doc.connect_pads(extra, anchor)?;
+        }
+        Ok(net)
+    });
+    match result {
         Ok(net) => {
             let name = net_name(&state.doc, net).to_string();
-            serde_json::json!({ "ok": true, "net": name })
+            serde_json::json!({ "ok": true, "net": name, "pads_joined": pads_a.len() + pads_b.len() })
         }
-        Err(e) => error_json(format!("couldn't connect {}.{} to {}.{}: {e}", args.ref1, args.pin1, args.ref2, args.pin2)),
+        Err(e) => {
+            let e: crate::board_doc::NetError = e;
+            error_json(format!("couldn't connect {}.{} to {}.{}: {e}", args.ref1, args.pin1, args.ref2, args.pin2))
+        }
     }
 }
 
@@ -5097,11 +5137,14 @@ fn disconnect_pin_write(screen: &mut Screen, args: crate::mcp::DisconnectPinArgs
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let Some(pad) = state.doc.find_pad(&state.templates, &args.reference, &args.pin) else {
+    let pads = state.doc.find_pads(&state.templates, &args.reference, &args.pin);
+    if pads.is_empty() {
         return error_json(format!("no such pin: {} pin {}", args.reference, args.pin));
-    };
-    match state.try_mutate_doc(|doc| doc.disconnect_pad(pad)) {
-        Ok(()) => serde_json::json!({ "ok": true, "disconnected": format!("{}.{}", args.reference, args.pin) }),
+    }
+    // Multi-pad pins come off the net as one electrical pin, mirroring
+    // connect_pins.
+    match state.try_mutate_doc(|doc| pads.iter().try_for_each(|&pad| doc.disconnect_pad(pad))) {
+        Ok(()) => serde_json::json!({ "ok": true, "disconnected": format!("{}.{}", args.reference, args.pin), "pads": pads.len() }),
         Err(e) => error_json(format!("couldn't disconnect {}.{}: {e}", args.reference, args.pin)),
     }
 }
@@ -5301,6 +5344,123 @@ fn ripup_wire_write(screen: &mut Screen, args: crate::mcp::RipupWireArgs) -> ser
         Ok(v) => v,
         Err(e) => error_json(e),
     }
+}
+
+/// [`crate::mcp::McpQuery::SuggestRoute`]'s handler -- server-side
+/// octilinear A* (see [`crate::mcp_routing::suggest_route`]). Read-only
+/// unless `commit=true`, in which case the found path goes through the
+/// exact same [`crate::mcp_routing::commit_route`] gates as the
+/// commit_route tool (undo-recorded, connectivity-verified).
+#[cfg(not(target_arch = "wasm32"))]
+fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs) -> serde_json::Value {
+    use crate::mcp_routing::{self, SuggestOptions};
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    let Some(net_record) = state.doc.nets.iter().find(|n| n.name == args.net).cloned() else {
+        return error_json(format!("no net named \"{}\" -- get_nets lists current names", args.net));
+    };
+    let net = net_record.id;
+
+    let resolve = |pin: &Option<String>, point: &Option<Vec<f64>>, which: &str| -> Result<Point, String> {
+        if let Some(spec) = pin {
+            let (reference, number) =
+                spec.split_once('.').ok_or_else(|| format!("{which}_pin must look like \"U1.14\" (footprint reference, dot, pad number)"))?;
+            let pad = state
+                .doc
+                .find_pad(&state.templates, reference, number)
+                .ok_or_else(|| format!("no such pin: {reference} pin {number}"))?;
+            let (center, _, pad_net) = state.doc.pad_endpoint(pad).ok_or_else(|| format!("{spec} is not a live pad"))?;
+            if pad_net != Some(net) {
+                return Err(format!("{spec} is not on net {} -- connect_pins first, or route from the right pin", args.net));
+            }
+            Ok(center)
+        } else if let Some(p) = point {
+            if p.len() != 2 {
+                return Err(format!("{which}_mm must be [x_mm, y_mm]"));
+            }
+            Ok(Point::new((p[0] * MM as f64).round() as Unit, (p[1] * MM as f64).round() as Unit))
+        } else {
+            Err(format!("give {which}_pin (\"REF.PIN\") or {which}_mm ([x, y])"))
+        }
+    };
+    let start = match resolve(&args.start_pin, &args.start_mm, "start") {
+        Ok(p) => p,
+        Err(e) => return error_json(e),
+    };
+    let goal = match resolve(&args.end_pin, &args.end_mm, "end") {
+        Ok(p) => p,
+        Err(e) => return error_json(e),
+    };
+
+    let layer = match mcp_routing::parse_layer(args.layer.as_deref().unwrap_or("FCu")) {
+        Ok(l) => l,
+        Err(e) => return error_json(e),
+    };
+    let width = args.width_mm.map(|v| (v * MM as f64).round() as Unit).unwrap_or(crate::routing::DEFAULT_TRACE_WIDTH);
+    let edge_margin = match args.edge_margin_mm {
+        Some(v) => {
+            let margin = (v * MM as f64).round() as Unit;
+            if margin < JlcpcbDfm::COPPER_TO_ROUTED_EDGE {
+                return error_json(format!("edge_margin_mm {v} is below JLCPCB's hard copper-to-edge minimum of 0.2mm"));
+            }
+            margin
+        }
+        None => mcp_routing::EDGE_COMFORT_MARGIN,
+    };
+    let opts = SuggestOptions {
+        layer,
+        width,
+        edge_margin,
+        step: (args.step_mm.unwrap_or(0.5).clamp(0.1, 2.0) * MM as f64).round() as Unit,
+        bend_penalty: (args.bend_penalty_mm.unwrap_or(0.4).max(0.0) * MM as f64).round() as Unit,
+        max_expansions: args.max_expansions.unwrap_or(80_000).min(400_000) as usize,
+    };
+
+    let found = match mcp_routing::suggest_route(&state.doc, net, start, goal, &opts) {
+        Ok(s) => s,
+        Err(e) => return error_json(e),
+    };
+
+    let points_mm: Vec<serde_json::Value> =
+        found.points.iter().map(|p| serde_json::json!([p.x as f64 / MM as f64, p.y as f64 / MM as f64])).collect();
+    let layer_str = match layer {
+        LayerId::FCu => "FCu",
+        LayerId::BCu => "BCu",
+    };
+    let candidate = serde_json::json!({
+        "net": net_record.name,
+        "width_mm": width as f64 / MM as f64,
+        "edge_margin_mm": edge_margin as f64 / MM as f64,
+        "segments": [{ "layer": layer_str, "points_mm": points_mm }],
+    });
+    let length_mm: f64 = found.points.windows(2).map(|leg| leg[0].distance(leg[1]) / MM as f64).sum();
+    let mut result = serde_json::json!({
+        "ok": true,
+        "net": net_record.name,
+        "layer": layer_str,
+        "points_mm": candidate["segments"][0]["points_mm"].clone(),
+        "length_mm": length_mm,
+        "bends": found.points.len().saturating_sub(2),
+        "expansions": found.expansions,
+        "route_candidate": candidate,
+        "committed": false,
+    });
+    if args.commit == Some(true) {
+        let route = match mcp_routing::parse_route_candidate(&state.doc, &candidate) {
+            Ok(r) => r,
+            Err(e) => return error_json(format!("internal: the suggested route failed to re-parse: {e}")),
+        };
+        state.cancel_transient_gestures();
+        match state.try_mutate_doc_ok(|doc| mcp_routing::commit_route(doc, &route)) {
+            Ok(v) => {
+                result["committed"] = serde_json::json!(true);
+                result["commit"] = v;
+            }
+            Err(e) => return error_json(format!("found a path but couldn't commit it on {}: {e}", net_record.name)),
+        }
+    }
+    result
 }
 
 /// [`crate::mcp::McpQuery::NewBoard`]'s handler -- the same

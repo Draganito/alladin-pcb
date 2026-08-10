@@ -1764,10 +1764,31 @@ impl BoardDoc {
     /// `BoardDoc` itself deliberately holds no template registry (see
     /// [`PlacedFootprint`]'s doc comment).
     pub fn find_pad(&self, templates: &[FootprintTemplate], reference: &str, pad_number: &str) -> Option<ItemId> {
-        let footprint = self.footprints.iter().find(|f| f.reference == reference)?;
-        let template = templates.iter().find(|t| t.name == footprint.template_name)?;
-        let index = template.pads.iter().position(|p| p.number == pad_number)?;
-        footprint.pad_item_ids.get(index).copied()
+        self.find_pads(templates, reference, pad_number).first().copied()
+    }
+
+    /// Every pad item of `reference` whose template pad number equals
+    /// `pad_number` -- one entry for ordinary pins, several for
+    /// multi-pad pins like a thermal pad split into a grid of paste
+    /// openings that all carry the same number. Netlist operations must
+    /// treat those as one electrical pin: connecting only the first pad
+    /// (what [`Self::find_pad`] alone would give) leaves the siblings
+    /// net-less, which both breaks continuity and blocks same-net
+    /// routing right next to them.
+    pub fn find_pads(&self, templates: &[FootprintTemplate], reference: &str, pad_number: &str) -> Vec<ItemId> {
+        let Some(footprint) = self.footprints.iter().find(|f| f.reference == reference) else {
+            return Vec::new();
+        };
+        let Some(template) = templates.iter().find(|t| t.name == footprint.template_name) else {
+            return Vec::new();
+        };
+        template
+            .pads
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.number == pad_number)
+            .filter_map(|(i, _)| footprint.pad_item_ids.get(i).copied())
+            .collect()
     }
 
     /// `pub(crate)`, not `pub`: outside callers (the UI) only ever need
@@ -2981,6 +3002,24 @@ mod tests {
 
     fn two_pin_template() -> crate::footprint::FootprintTemplate {
         crate::footprint::builtin_templates().remove(0)
+    }
+
+    #[test]
+    fn find_pads_returns_every_pad_of_a_multi_pad_pin() {
+        let mut board = test_board();
+        // A thermal-pad-style pin: both pads carry the same number.
+        let mut template = two_pin_template();
+        template.name = "MultiPadEP".into();
+        for pad in &mut template.pads {
+            pad.number = "41".into();
+        }
+        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let reference = board.footprints[0].reference.clone();
+        let templates = vec![template];
+        let pads = board.find_pads(&templates, &reference, "41");
+        assert_eq!(pads.len(), 2, "both same-numbered pads must resolve");
+        assert_eq!(board.find_pad(&templates, &reference, "41"), Some(pads[0]), "find_pad stays the first of them");
+        assert!(board.find_pads(&templates, &reference, "1").is_empty(), "renumbered pads must not answer to their old numbers");
     }
 
     #[test]

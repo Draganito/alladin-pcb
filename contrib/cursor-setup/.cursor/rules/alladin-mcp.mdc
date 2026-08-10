@@ -6,7 +6,8 @@ alwaysApply: true
 # Alladin PCB — AI working rules (MCP)
 
 - Only these MCP tools exist — read-only: `board_summary`, `get_footprints`,
-  `get_nets`, `list_parts`, `check_board`, `get_routing_scene`, `probe_route`;
+  `get_nets`, `list_parts`, `check_board`, `get_routing_scene`, `probe_route`,
+  `suggest_route` (needs write access only with `commit=true`);
   write: `new_board`, `download_lcsc_part`, `place_footprint`, `move_footprint`,
   `remove_footprint`, `connect_pins`, `disconnect_pin`,
   `add_pin_stitching_via`, `rename_net`, `save_board`, `commit_route`,
@@ -23,10 +24,16 @@ alwaysApply: true
 - `new_board` refuses to discard an open board unless `replace_current=true`
   — ask the human before passing that.
 - Copper routing uses the same clearance gates as the GUI's manual 45°
-  router — not an autorouter. Workflow: `get_routing_scene` → propose
+  router. Preferred: `suggest_route` — a server-side octilinear A*
+  (H/V/45° legs only, no 90° corners, no vias, single layer) whose
+  result is commit-ready; pass `commit=true` to lay it in one call.
+  Fallback for hand-tuned aesthetics: `get_routing_scene` → propose
   polylines → `probe_route` (batch) → `commit_route` → `check_board`.
-  On blockage, try corners / other layer + via, or `ripup_wire` and retry.
-  Zone fill stays in the GUI.
+  On blockage, rip up blocking copper, try the other layer, adjust
+  `step_mm`, or route manually. Zone fill stays in the GUI.
+- `connect_pins`/`disconnect_pin` treat a multi-pad pin (e.g. a thermal
+  pad split into several same-numbered paste pads) as one electrical
+  pin: every sibling pad joins/leaves the net together.
 - Routes keep a 1.0mm comfort margin from the board edge by default;
   pass `edge_margin_mm` (min 0.2, the fab limit) only when space truly
   forces the route closer. Mounting holes carry an automatic

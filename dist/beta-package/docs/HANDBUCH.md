@@ -521,7 +521,7 @@ GUI. Es gibt keinen klassischen Autorouter.
    kopieren (`.cursor/` und `.cursorignore`).
 3. MCP-URL: `http://127.0.0.1:8642/mcp`.
 
-### 17.2 Tool-Referenz (18 Tools)
+### 17.2 Tool-Referenz (19 Tools)
 
 Read-only (immer verfügbar):
 
@@ -534,6 +534,7 @@ Read-only (immer verfügbar):
 | `check_board` | Prüfbericht (Netzliste komplett? Kupfer verbunden? Zonen aktuell? DFM-Befunde) |
 | `get_routing_scene` | Pads, Tracks/Vias, offene Kupfer-Brücken, Routing-Regeln |
 | `probe_route` | Batch-Clearance-Check für vorgeschlagene Polylinien (+ Vias) |
+| `suggest_route` | Serverseitiger octilinearer A*-Pfadfinder (45°-Stil, keine 90°-Ecken); Schreibrecht nur mit `commit=true` nötig |
 
 Schreibend (brauchen `--allow-ai-write`):
 
@@ -553,6 +554,10 @@ Schreibend (brauchen `--allow-ai-write`):
 | `ripup_wire` | Bahn nahe einem Punkt oder alles Kupfer eines Netzes entfernen |
 
 ### 17.3 Kupfer-Routing-Ablauf
+
+Schnellster Weg: `suggest_route` — ein serverseitiger octilinearer A*-Pfadfinder. Netz plus zwei Pins (`"REF.PIN"`) oder Punkte angeben, und er sucht einen legalen 45°-Stil-Pfad auf einer Lage (jedes Teilstück horizontal/vertikal/45°, keine 90°-Ecken, keine Vias) mit exakt denselben Clearance- und Rand-Gates wie unten — das Ergebnis ist direkt commit-fähig. Mit `commit=true` wird es im selben Aufruf gelegt, sonst das zurückgegebene `route_candidate` an `commit_route` geben. Stellschrauben: `step_mm` (Gitterweite, Standard 0,5), `bend_penalty_mm` (höher = gerader), `max_expansions` (Suchbudget).
+
+Manueller Ablauf (volle ästhetische Kontrolle, Mehrlagen-Routen mit Vias):
 
 1. `get_routing_scene` — `open_bridges` (kürzeste Pad-Paare zwischen Kupferinseln).
 2. Polylinien vorschlagen (`segments` mit `layer` + `points_mm`; Mehrlagen mit `vias_mm` an den Übergängen).

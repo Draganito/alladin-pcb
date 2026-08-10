@@ -37,7 +37,7 @@ fn layer_name(layer: LayerId) -> &'static str {
     }
 }
 
-fn parse_layer(s: &str) -> Result<LayerId, String> {
+pub(crate) fn parse_layer(s: &str) -> Result<LayerId, String> {
     match s.trim() {
         "FCu" | "F.Cu" | "fcu" | "F" | "top" => Ok(LayerId::FCu),
         "BCu" | "B.Cu" | "bcu" | "B" | "bottom" => Ok(LayerId::BCu),
@@ -544,6 +544,237 @@ pub fn commit_route(doc: &mut BoardDoc, route: &ParsedRoute) -> Result<Value, St
     }))
 }
 
+// ---------------------------------------------------------------------------
+// suggest_route: server-side octilinear A* pathfinder
+// ---------------------------------------------------------------------------
+
+/// Knobs for [`suggest_route`]. Defaults live in the MCP handler so the
+/// tool schema documents them; this struct always carries resolved values.
+pub struct SuggestOptions {
+    pub layer: LayerId,
+    pub width: Unit,
+    pub edge_margin: Unit,
+    /// Lattice pitch of the search. Smaller squeezes through tighter
+    /// gaps but costs quadratically more probes.
+    pub step: Unit,
+    /// Extra cost per 45° direction change -- higher means straighter,
+    /// calmer traces with fewer kinks.
+    pub bend_penalty: Unit,
+    /// Search budget; exceeded means "no path found" rather than a hang.
+    pub max_expansions: usize,
+}
+
+/// A found path plus search diagnostics.
+#[derive(Debug)]
+pub struct Suggestion {
+    /// Merged waypoints from start to goal; every leg is horizontal,
+    /// vertical, or 45°, and consecutive legs never meet at 90°.
+    pub points: Vec<Point>,
+    pub expansions: usize,
+}
+
+/// The eight octilinear directions, indexed so that neighbours in the
+/// array are 45° apart (the no-90°-corner rule becomes "index differs
+/// by at most 1 mod 8").
+const OCT_DIRS: [(i64, i64); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
+
+/// Sentinel "no incoming direction yet" for the start state.
+const NO_DIR: usize = 8;
+
+/// Which of [`OCT_DIRS`] a delta points along, if it is exactly
+/// octilinear (axis-aligned or a perfect 45° diagonal).
+fn octant_of(dx: i64, dy: i64) -> Option<usize> {
+    if dx == 0 && dy == 0 {
+        return None;
+    }
+    if dx != 0 && dy != 0 && dx.abs() != dy.abs() {
+        return None;
+    }
+    let key = (dx.signum(), dy.signum());
+    OCT_DIRS.iter().position(|&d| d == key)
+}
+
+/// A turn is legal when the direction stays or changes by one octant
+/// (45°). This forbids both 90° corners and 135° hairpins.
+fn turn_ok(from: usize, to: usize) -> bool {
+    if from == NO_DIR {
+        return true;
+    }
+    let d = (8 + to - from) % 8;
+    d == 0 || d == 1 || d == 7
+}
+
+/// The same two gates every probed candidate leg passes: copper
+/// clearance on `layer` and the (comfort) edge margin.
+fn leg_is_legal(doc: &BoardDoc, from: Point, to: Point, width: Unit, net: NetId, layer: LayerId, edge_margin: Unit) -> bool {
+    doc.node.path_is_clear(from, to, width, Some(net), layer, NetClass::C, doc.resolver())
+        && path_keeps_edge_margin(&[from, to], width, &doc.outline, edge_margin)
+}
+
+/// Candidate octilinear joins from an on-lattice point to the off-lattice
+/// goal: one straight leg when the delta already is octilinear, otherwise
+/// diagonal-then-axis and axis-then-diagonal (both meet at 135°, legal).
+fn oct_joins(from: Point, to: Point) -> Vec<Vec<Point>> {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    if dx == 0 && dy == 0 {
+        return vec![Vec::new()];
+    }
+    if dx == 0 || dy == 0 || dx.abs() == dy.abs() {
+        return vec![vec![to]];
+    }
+    let d = dx.abs().min(dy.abs());
+    let (sx, sy) = (dx.signum(), dy.signum());
+    let diag_first = Point::new(from.x + sx * d, from.y + sy * d);
+    let axis_first = if dx.abs() > dy.abs() { Point::new(to.x - sx * d, from.y) } else { Point::new(from.x, to.y - sy * d) };
+    vec![vec![diag_first, to], vec![axis_first, to]]
+}
+
+/// Drop interior waypoints where the direction doesn't change, so the
+/// returned polyline has one point per actual bend.
+fn merge_collinear(points: Vec<Point>) -> Vec<Point> {
+    let mut merged: Vec<Point> = Vec::with_capacity(points.len());
+    for p in points {
+        if merged.last() == Some(&p) {
+            continue;
+        }
+        while merged.len() >= 2 {
+            let a = merged[merged.len() - 2];
+            let b = merged[merged.len() - 1];
+            let d1 = octant_of(b.x - a.x, b.y - a.y);
+            let d2 = octant_of(p.x - b.x, p.y - b.y);
+            if d1.is_some() && d1 == d2 {
+                merged.pop();
+            } else {
+                break;
+            }
+        }
+        merged.push(p);
+    }
+    merged
+}
+
+/// Octilinear A* over a lattice anchored at `start`: finds a legal
+/// 45°-style path from `start` to `goal` on one layer, using exactly the
+/// clearance and edge gates `probe_route` applies -- so the result is
+/// commit-ready by construction. No 90° corners, no vias. States are
+/// (lattice point, incoming direction); the goal, generally off-lattice,
+/// is joined by a final one- or two-leg octilinear decomposition.
+pub fn suggest_route(doc: &BoardDoc, net: NetId, start: Point, goal: Point, opts: &SuggestOptions) -> Result<Suggestion, String> {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap};
+
+    let step = opts.step.max(MM / 20);
+    let join_radius = (step * 8) as f64;
+    let bend_penalty = opts.bend_penalty.max(0) as f64;
+    let sqrt2 = std::f64::consts::SQRT_2;
+
+    let pos_of = |ix: i64, iy: i64| Point::new(start.x + ix * step, start.y + iy * step);
+    let heuristic = |p: Point| {
+        let dx = ((goal.x - p.x) as f64).abs();
+        let dy = ((goal.y - p.y) as f64).abs();
+        dx.max(dy) + (sqrt2 - 1.0) * dx.min(dy)
+    };
+    let legal = |from: Point, to: Point| leg_is_legal(doc, from, to, opts.width, net, opts.layer, opts.edge_margin);
+
+    // Try to finish from `state`; on success returns the join waypoints.
+    let try_join = |pos: Point, dir: usize| -> Option<Vec<Point>> {
+        if pos.distance(goal) > join_radius {
+            return None;
+        }
+        'variant: for join in oct_joins(pos, goal) {
+            let mut prev = pos;
+            let mut prev_dir = dir;
+            for &p in &join {
+                let Some(d) = octant_of(p.x - prev.x, p.y - prev.y) else { continue 'variant };
+                if !turn_ok(prev_dir, d) || !legal(prev, p) {
+                    continue 'variant;
+                }
+                prev = p;
+                prev_dir = d;
+            }
+            return Some(join);
+        }
+        None
+    };
+
+    type State = (i64, i64, usize);
+    let mut g: HashMap<State, f64> = HashMap::new();
+    let mut parent: HashMap<State, State> = HashMap::new();
+    let mut open: BinaryHeap<(Reverse<i64>, i64, i64, usize)> = BinaryHeap::new();
+
+    let start_state: State = (0, 0, NO_DIR);
+    g.insert(start_state, 0.0);
+    open.push((Reverse(heuristic(start) as i64), 0, 0, NO_DIR));
+
+    let mut expansions = 0usize;
+    while let Some((Reverse(f_key), ix, iy, dir)) = open.pop() {
+        let state = (ix, iy, dir);
+        let g_here = match g.get(&state) {
+            Some(&v) => v,
+            None => continue,
+        };
+        // Stale heap entry (a cheaper path to this state was found later).
+        if ((g_here + heuristic(pos_of(ix, iy))) as i64) < f_key {
+            continue;
+        }
+        let pos = pos_of(ix, iy);
+
+        if let Some(join) = try_join(pos, dir) {
+            let mut points = vec![pos];
+            let mut cur = state;
+            while let Some(&prev) = parent.get(&cur) {
+                points.push(pos_of(prev.0, prev.1));
+                cur = prev;
+            }
+            points.reverse();
+            points.extend(join);
+            return Ok(Suggestion { points: merge_collinear(points), expansions });
+        }
+
+        expansions += 1;
+        if expansions > opts.max_expansions {
+            return Err(format!(
+                "no path found within the search budget ({} expansions) -- the corridor may be \
+                 blocked; try a larger max_expansions, a smaller step_mm, another layer, or rip \
+                 up blocking copper",
+                opts.max_expansions
+            ));
+        }
+
+        let dirs: &[usize] = if dir == NO_DIR { &[0, 1, 2, 3, 4, 5, 6, 7] } else { &[dir, (dir + 1) % 8, (dir + 7) % 8] };
+        for &nd in dirs {
+            let (dx, dy) = OCT_DIRS[nd];
+            let (nix, niy) = (ix + dx, iy + dy);
+            let npos = pos_of(nix, niy);
+            let leg_len = if dx != 0 && dy != 0 { step as f64 * sqrt2 } else { step as f64 };
+            let cost = g_here + leg_len + if dir != NO_DIR && nd != dir { bend_penalty } else { 0.0 };
+            let nstate: State = (nix, niy, nd);
+            if g.get(&nstate).map(|&old| cost >= old).unwrap_or(false) {
+                continue;
+            }
+            if !legal(pos, npos) {
+                continue;
+            }
+            g.insert(nstate, cost);
+            parent.insert(nstate, state);
+            open.push((Reverse((cost + heuristic(npos)) as i64), nix, niy, nd));
+        }
+    }
+
+    Err(format!(
+        "no legal octilinear path from ({:.2}, {:.2}) to ({:.2}, {:.2}) on {} (searched {} states) \
+         -- the corridor is blocked; rip up blocking copper, try the other layer, or route manually \
+         with probe_route",
+        unit_mm(start.x),
+        unit_mm(start.y),
+        unit_mm(goal.x),
+        unit_mm(goal.y),
+        layer_name(opts.layer),
+        expansions
+    ))
+}
+
 fn nearest_routed_item(doc: &BoardDoc, point: Point) -> Option<ItemId> {
     let mut best: Option<(f64, ItemId)> = None;
     for (id, item) in doc.node.iter_with_ids() {
@@ -792,6 +1023,81 @@ mod tests {
         assert_eq!(result["ok"], false);
         let blocked = result["blocked"].as_str().unwrap();
         assert!(blocked.contains("edge") || blocked.contains("clearance"), "{blocked}");
+    }
+
+    fn assert_octilinear_no_90(points: &[Point]) {
+        assert!(points.len() >= 2, "path needs at least 2 points: {points:?}");
+        let mut prev_dir = NO_DIR;
+        for leg in points.windows(2) {
+            let dir = octant_of(leg[1].x - leg[0].x, leg[1].y - leg[0].y)
+                .unwrap_or_else(|| panic!("leg {:?} -> {:?} is not octilinear", leg[0], leg[1]));
+            assert!(turn_ok(prev_dir, dir), "90°/135° corner before leg {:?} -> {:?} in {points:?}", leg[0], leg[1]);
+            prev_dir = dir;
+        }
+    }
+
+    fn default_opts() -> SuggestOptions {
+        SuggestOptions {
+            layer: LayerId::FCu,
+            width: DEFAULT_TRACE_WIDTH,
+            edge_margin: EDGE_COMFORT_MARGIN,
+            step: MM / 2,
+            bend_penalty: 2 * MM / 5,
+            max_expansions: 200_000,
+        }
+    }
+
+    #[test]
+    fn suggest_route_finds_a_straight_run_that_commits_cleanly() {
+        let (mut doc, _, _, _, net, ca, cb) = board_with_two_pads();
+        let found = suggest_route(&doc, net, ca, cb, &default_opts()).unwrap();
+        assert_octilinear_no_90(&found.points);
+        assert_eq!(*found.points.first().unwrap(), ca);
+        assert_eq!(*found.points.last().unwrap(), cb);
+        let net_name = doc.nets.iter().find(|n| n.id == net).unwrap().name.clone();
+        let cand = json!({
+            "net": net_name,
+            "segments": [{
+                "layer": "FCu",
+                "points_mm": found.points.iter().map(|p| json!([unit_mm(p.x), unit_mm(p.y)])).collect::<Vec<_>>()
+            }]
+        });
+        let route = parse_route_candidate(&doc, &cand).unwrap();
+        let committed = commit_route(&mut doc, &route).unwrap();
+        assert_eq!(committed["bridge_closed"], true, "{committed}");
+    }
+
+    #[test]
+    fn suggest_route_detours_around_a_blocker_with_only_45_degree_bends() {
+        let (mut doc, _, _, _, net, ca, cb) = board_with_two_pads();
+        let templates = footprint::builtin_templates();
+        let template = templates.iter().find(|t| t.pads.len() == 1 && t.holes.is_empty()).unwrap().clone();
+        doc.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let found = suggest_route(&doc, net, ca, cb, &default_opts()).unwrap();
+        assert_octilinear_no_90(&found.points);
+        assert!(found.points.len() > 2, "a detour needs bends: {:?}", found.points);
+        let net_name = doc.nets.iter().find(|n| n.id == net).unwrap().name.clone();
+        let cand = json!({
+            "net": net_name,
+            "segments": [{
+                "layer": "FCu",
+                "points_mm": found.points.iter().map(|p| json!([unit_mm(p.x), unit_mm(p.y)])).collect::<Vec<_>>()
+            }]
+        });
+        let route = parse_route_candidate(&doc, &cand).unwrap();
+        assert_eq!(probe_one(&doc, &route)["ok"], true, "suggested path must probe clean");
+        commit_route(&mut doc, &route).unwrap();
+        assert_eq!(doc.node.net_copper_components(net).len(), 1);
+    }
+
+    #[test]
+    fn suggest_route_reports_a_blocked_corridor_instead_of_hanging() {
+        let (doc, _, _, _, net, ca, cb) = board_with_two_pads();
+        // A tiny budget can't reach the far pad: must fail with a clear message.
+        let mut opts = default_opts();
+        opts.max_expansions = 5;
+        let err = suggest_route(&doc, net, ca, cb, &opts).unwrap_err();
+        assert!(err.contains("search budget"), "{err}");
     }
 
     #[test]

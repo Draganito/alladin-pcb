@@ -499,7 +499,7 @@ Zone fill stays in the GUI. There is no classical autorouter.
    (`.cursor/` and `.cursorignore`).
 3. MCP URL: `http://127.0.0.1:8642/mcp`.
 
-### 17.2 Tool reference (18 tools)
+### 17.2 Tool reference (19 tools)
 
 Read-only (always available):
 
@@ -512,6 +512,7 @@ Read-only (always available):
 | `check_board` | Verification report (netlist complete? copper connected? zones fresh? DFM findings) |
 | `get_routing_scene` | Pads, tracks/vias, open copper bridges, routing rules |
 | `probe_route` | Batched clearance check for proposed polylines (+ vias) |
+| `suggest_route` | Server-side octilinear A* pathfinder (45°-style, no 90° corners); needs write access only with `commit=true` |
 
 Write (need `--allow-ai-write`):
 
@@ -531,6 +532,10 @@ Write (need `--allow-ai-write`):
 | `ripup_wire` | Remove a wire near a point, or all tracks/vias on a net |
 
 ### 17.3 Copper routing workflow
+
+Fastest path: `suggest_route` — a server-side octilinear A* pathfinder. Give it a net plus two pins (`"REF.PIN"`) or points, and it searches a legal 45°-style path on one layer (every leg horizontal/vertical/45°, no 90° corners, no vias) using the exact clearance and edge gates below, so the result is commit-ready. Pass `commit=true` to lay it in the same call, or feed the returned `route_candidate` to `commit_route`. Knobs: `step_mm` (lattice pitch, default 0.5), `bend_penalty_mm` (higher = straighter), `max_expansions` (search budget).
+
+Manual workflow (full aesthetic control, multi-layer routes with vias):
 
 1. `get_routing_scene` — see `open_bridges` (shortest pad pairs between copper islands).
 2. Propose one or more polylines (`segments` with `layer` + `points_mm`; multi-layer needs `vias_mm` at junctions).

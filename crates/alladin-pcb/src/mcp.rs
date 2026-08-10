@@ -161,6 +161,39 @@ pub struct RipupWireArgs {
     pub net: Option<String>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SuggestRouteArgs {
+    /// Net to route, exactly as `get_nets` reports it, e.g. `"USB_DP"`.
+    pub net: String,
+    /// Start pin as `"REF.PIN"`, e.g. `"U1.14"` -- or give `start_mm`.
+    pub start_pin: Option<String>,
+    /// End pin as `"REF.PIN"` -- or give `end_mm`.
+    pub end_pin: Option<String>,
+    /// Start point `[x_mm, y_mm]` (board-center origin) when not
+    /// starting at a pin; it must land on existing copper of the net.
+    pub start_mm: Option<Vec<f64>>,
+    /// End point `[x_mm, y_mm]` when not ending at a pin.
+    pub end_mm: Option<Vec<f64>>,
+    /// Copper layer to search on; omit for FCu. Single-layer, no vias.
+    pub layer: Option<String>,
+    /// Trace width in mm; omit for the default.
+    pub width_mm: Option<f64>,
+    /// Board-edge margin in mm; omit for the 1.0mm comfort default,
+    /// minimum is the 0.2mm fab limit.
+    pub edge_margin_mm: Option<f64>,
+    /// Search lattice pitch in mm (default 0.5, min 0.1). Smaller fits
+    /// through tighter gaps but searches longer.
+    pub step_mm: Option<f64>,
+    /// Extra cost per 45° bend in mm (default 0.4) -- raise it for
+    /// straighter, calmer traces.
+    pub bend_penalty_mm: Option<f64>,
+    /// Search budget in expanded states (default 80000, max 400000).
+    pub max_expansions: Option<u32>,
+    /// When true, commit the found path immediately (write access
+    /// required); otherwise just return it for commit_route.
+    pub commit: Option<bool>,
+}
+
 /// One pending request from an MCP tool call, waiting for
 /// [`crate::app::PcbApp::ui`] to drain it and answer via `reply`.
 pub enum McpQuery {
@@ -207,6 +240,9 @@ pub enum McpQuery {
     CommitRoute { args: CommitRouteArgs, reply: oneshot::Sender<String> },
     /// Remove a wire near a point, or all copper on a named net.
     RipupWire { args: RipupWireArgs, reply: oneshot::Sender<String> },
+    /// Server-side octilinear A*: find (and optionally commit) a legal
+    /// 45°-style path between two points/pins of a net.
+    SuggestRoute { args: SuggestRouteArgs, reply: oneshot::Sender<String> },
 }
 
 /// How long a `#[tool]` waits for the UI thread before reporting timeout.
@@ -414,6 +450,18 @@ impl AlladinMcp {
         }
         self.ask(|reply| McpQuery::RipupWire { args, reply }).await
     }
+
+    #[tool(
+        description = "Server-side octilinear A* pathfinder: finds a legal 45°-style path for one net between two pins (\"REF.PIN\") or points on a single layer -- every leg horizontal/vertical/45°, no 90° corners, no vias, and every leg passes the exact same clearance + board-edge gates as probe_route, so the result is commit-ready. Returns points_mm plus a ready-to-use route_candidate for commit_route, or commits immediately with commit=true (write access required). On failure it reports the search budget or the blocked corridor -- then rip up blocking copper, try the other layer, adjust step_mm, or fall back to manual probe_route. Prefer this over hand-crafting polylines for anything non-trivial."
+    )]
+    async fn suggest_route(&self, Parameters(args): Parameters<SuggestRouteArgs>) -> Result<CallToolResult, McpError> {
+        if args.commit == Some(true) {
+            if let Some(refusal) = self.require_write_access() {
+                return refusal;
+            }
+        }
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::SuggestRoute { args, reply }).await
+    }
 }
 
 #[tool_handler]
@@ -422,12 +470,13 @@ impl ServerHandler for AlladinMcp {
         let write_note = if self.allow_ai_write {
             "Write tools are ENABLED for this process (launched with --allow-ai-write): \
              new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
-             disconnect_pin, add_pin_stitching_via, rename_net, save_board, commit_route, and \
-             ripup_wire act directly on the live board/parts DB."
+             disconnect_pin, add_pin_stitching_via, rename_net, save_board, commit_route, \
+             ripup_wire, and suggest_route with commit=true act directly on the live \
+             board/parts DB."
         } else {
             "Write tools (new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
              disconnect_pin, add_pin_stitching_via, rename_net, save_board, commit_route, \
-             ripup_wire) are DISABLED for \
+             ripup_wire, suggest_route with commit=true) are DISABLED for \
              this process -- every one of them will refuse with an explanation. Relaunch \
              alladin-pcb with --allow-ai-write to enable them."
         };
