@@ -4544,6 +4544,9 @@ fn handle_mcp_query(query: crate::mcp::McpQuery, screen: &mut Screen, parts_db: 
         McpQuery::DisconnectPin { args, reply } => {
             let _ = reply.send(disconnect_pin_write(screen, args).to_string());
         }
+        McpQuery::AddPinStitchingVia { args, reply } => {
+            let _ = reply.send(add_pin_stitching_via_write(screen, args).to_string());
+        }
         McpQuery::RenameNet { args, reply } => {
             let _ = reply.send(rename_net_write(screen, args).to_string());
         }
@@ -5104,6 +5107,113 @@ fn disconnect_pin_write(screen: &mut Screen, args: crate::mcp::DisconnectPinArgs
 }
 
 
+/// [`crate::mcp::McpQuery::AddPinStitchingVia`]'s handler -- the MCP
+/// face of the GUI's right-click "Add via near pin"
+/// ([`EditorState::add_pin_stitching_via_at`] /
+/// [`BoardDoc::try_add_pin_stitching_via`]): the spot next to the pin
+/// is picked automatically, no coordinates involved. Two modes:
+/// reference+pin stitches that one pad; net stitches every pad on the
+/// net in a single undo step, skipping pads that already have a
+/// same-net via right next to them so re-running after a partial
+/// failure doesn't double-stitch the pads that already worked.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_pin_stitching_via_write(screen: &mut Screen, args: crate::mcp::AddPinStitchingViaArgs) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    let diameter = args.via_diameter_mm.map(mm_arg).unwrap_or(state.via_diameter);
+    let drill = args.via_drill_mm.map(mm_arg).unwrap_or(state.via_drill);
+    let stub_width = state.trace_width;
+
+    match (&args.reference, &args.pin, &args.net) {
+        (Some(reference), Some(pin), None) => {
+            let Some(pad) = state.doc.find_pad(&state.templates, reference, pin) else {
+                return error_json(format!("no such pin: {reference} pin {pin}"));
+            };
+            match state.try_mutate_doc_ok(|doc| doc.try_add_pin_stitching_via(pad, diameter, drill, stub_width)) {
+                Ok(via) => serde_json::json!({
+                    "ok": true,
+                    "pad": format!("{reference}.{pin}"),
+                    "via_x_mm": via.center.x as f64 / MM as f64,
+                    "via_y_mm": via.center.y as f64 / MM as f64,
+                }),
+                Err(e) => error_json(format!("couldn't stitch {reference}.{pin}: {e}")),
+            }
+        }
+        (None, None, Some(net_name)) => {
+            let Some(net) = state.doc.nets.iter().find(|n| n.name == *net_name).map(|n| n.id) else {
+                return error_json(format!("no net named \"{net_name}\" -- get_nets lists the current names"));
+            };
+            // A pad counts as already stitched when a same-net via sits
+            // within stitching reach of it -- snapshotted BEFORE any of
+            // this batch's own vias exist, so a via placed for pad N
+            // can't make close-by pad N+1 look "already done".
+            let near = mm_arg(1.5) + diameter;
+            let existing_vias: Vec<Point> = state
+                .doc
+                .node
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Via { shape, net: n, .. } if *n == Some(net) => Some(shape.center),
+                    _ => None,
+                })
+                .collect();
+            let jobs: Vec<(ItemId, String, Point)> = state
+                .doc
+                .pads_on_net(net)
+                .into_iter()
+                .filter_map(|id| {
+                    let center = state.doc.pad_center(id)?;
+                    let (fp, pin) = crate::mcp_routing::pad_label(&state.doc, &state.templates, id)
+                        .unwrap_or_else(|| ("?".into(), "?".into()));
+                    Some((id, format!("{fp}.{pin}"), center))
+                })
+                .collect();
+            let already_stitched = |center: Point| {
+                existing_vias.iter().any(|v| {
+                    let (dx, dy) = ((v.x - center.x) as f64, (v.y - center.y) as f64);
+                    dx * dx + dy * dy <= (near as f64) * (near as f64)
+                })
+            };
+            let result = state.try_mutate_doc_ok(|doc| {
+                let (mut placed, mut skipped, mut failed) = (0usize, 0usize, Vec::new());
+                for (pad, label, center) in &jobs {
+                    if already_stitched(*center) {
+                        skipped += 1;
+                        continue;
+                    }
+                    match doc.try_add_pin_stitching_via(*pad, diameter, drill, stub_width) {
+                        Ok(_) => placed += 1,
+                        Err(e) => failed.push(serde_json::json!({ "pad": label, "error": e.to_string() })),
+                    }
+                }
+                if placed == 0 && !failed.is_empty() {
+                    return Err(format!(
+                        "no via could be placed for any of {} pad(s) on {net_name} -- first failure: {}",
+                        failed.len(),
+                        failed[0]["error"].as_str().unwrap_or("?")
+                    ));
+                }
+                failed.truncate(20);
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "net": net_name,
+                    "pads": jobs.len(),
+                    "placed": placed,
+                    "skipped_already_stitched": skipped,
+                    "failed": failed,
+                }))
+            });
+            match result {
+                Ok(v) => v,
+                Err(e) => error_json(format!("couldn't stitch net {net_name}: {e}")),
+            }
+        }
+        _ => error_json("give either reference+pin (one via) or net (stitch every pad on that net), not both/neither"),
+    }
+}
+
+
 /// [`crate::mcp::McpQuery::RenameNet`]'s handler -- looks the net up by
 /// its current name (the stable thing an MCP client actually has) and
 /// delegates to [`BoardDoc::rename_net`].
@@ -5406,6 +5516,60 @@ mod mcp_handler_tests {
         let check = check_board_json(&screen);
         // r2.1 is off the net again, so the board can't be "done".
         assert_eq!(check["ok"], false);
+    }
+
+    #[test]
+    fn add_pin_stitching_via_stitches_one_pin_then_the_batch_skips_it() {
+        let mut screen = editor_screen();
+        let template = a_template_with_pads(&screen, 2);
+        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let connected = connect_pins_write(
+            &mut screen,
+            crate::mcp::ConnectPinsArgs { ref1: r1.clone(), pin1: "1".into(), ref2: r2, pin2: "1".into() },
+        );
+        assert_eq!(connected["ok"], true, "{connected}");
+        let net = connected["net"].as_str().unwrap().to_string();
+
+        let one = add_pin_stitching_via_write(
+            &mut screen,
+            crate::mcp::AddPinStitchingViaArgs {
+                reference: Some(r1),
+                pin: Some("1".into()),
+                net: None,
+                via_diameter_mm: None,
+                via_drill_mm: None,
+            },
+        );
+        assert_eq!(one["ok"], true, "{one}");
+        assert!(one["via_x_mm"].is_f64() && one["via_y_mm"].is_f64(), "{one}");
+
+        // Batch over the same net: the pad stitched above must be
+        // skipped, only the other one gets a fresh via.
+        let batch = add_pin_stitching_via_write(
+            &mut screen,
+            crate::mcp::AddPinStitchingViaArgs {
+                reference: None,
+                pin: None,
+                net: Some(net),
+                via_diameter_mm: None,
+                via_drill_mm: None,
+            },
+        );
+        assert_eq!(batch["ok"], true, "{batch}");
+        assert_eq!(batch["pads"], 2, "{batch}");
+        assert_eq!(batch["placed"], 1, "{batch}");
+        assert_eq!(batch["skipped_already_stitched"], 1, "{batch}");
+        assert_eq!(batch["failed"].as_array().unwrap().len(), 0, "{batch}");
+
+        let Screen::Editor(state) = &mut screen else { unreachable!() };
+        assert_eq!(state.doc.node.iter().filter(|i| matches!(i, Item::Via { .. })).count(), 2);
+        // The batch was one undo step: one Ctrl+Z removes exactly the
+        // batch's via, the next removes the single-pin one.
+        assert!(state.undo());
+        assert_eq!(state.doc.node.iter().filter(|i| matches!(i, Item::Via { .. })).count(), 1);
+        assert!(state.undo());
+        assert_eq!(state.doc.node.iter().filter(|i| matches!(i, Item::Via { .. })).count(), 0);
     }
 
     #[test]

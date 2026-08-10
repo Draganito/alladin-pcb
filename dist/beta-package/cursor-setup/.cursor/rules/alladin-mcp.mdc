@@ -8,8 +8,9 @@ alwaysApply: true
 - Only these MCP tools exist — read-only: `board_summary`, `get_footprints`,
   `get_nets`, `list_parts`, `check_board`, `get_routing_scene`, `probe_route`;
   write: `new_board`, `download_lcsc_part`, `place_footprint`, `move_footprint`,
-  `remove_footprint`, `connect_pins`, `disconnect_pin`, `rename_net`,
-  `save_board`, `commit_route`, `ripup_wire`.
+  `remove_footprint`, `connect_pins`, `disconnect_pin`,
+  `add_pin_stitching_via`, `rename_net`, `save_board`, `commit_route`,
+  `ripup_wire`.
 - Never create, edit, or parse board `.json` by hand — use MCP / the GUI.
 - Start with `board_summary`. After each batch of changes, verify your own
   work with `check_board` before reporting done.

@@ -38,7 +38,8 @@ MCP tools — read-only: `board_summary`, `get_footprints`, `get_nets`,
 `list_parts`, `check_board`, `get_routing_scene`, `probe_route`; write
 (need `--allow-ai-write`): `new_board`, `download_lcsc_part`,
 `place_footprint`, `move_footprint`, `remove_footprint`, `connect_pins`,
-`disconnect_pin`, `rename_net`, `save_board`, `commit_route`, `ripup_wire`.
+`disconnect_pin`, `add_pin_stitching_via`, `rename_net`, `save_board`,
+`commit_route`, `ripup_wire`.
 Copper routing reuses the GUI's clearance gates (not an autorouter).
 Zone fill stays in the GUI.
 

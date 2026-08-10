@@ -35,7 +35,7 @@ fn parse_layer(s: &str) -> Result<LayerId, String> {
     }
 }
 
-fn pad_label(doc: &BoardDoc, templates: &[FootprintTemplate], pad_id: ItemId) -> Option<(String, String)> {
+pub(crate) fn pad_label(doc: &BoardDoc, templates: &[FootprintTemplate], pad_id: ItemId) -> Option<(String, String)> {
     let footprint = doc.footprints.iter().find(|f| f.pad_item_ids.contains(&pad_id))?;
     let index = footprint.pad_item_ids.iter().position(|&id| id == pad_id)?;
     let pin = templates

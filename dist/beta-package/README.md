@@ -98,8 +98,8 @@ verify its own work — read-only: `board_summary`, `get_footprints`,
 `get_nets`, `list_parts`, `check_board`, `get_routing_scene`,
 `probe_route`; write: `new_board`, `download_lcsc_part`,
 `place_footprint`, `move_footprint`, `remove_footprint`, `connect_pins`,
-`disconnect_pin`, `rename_net`, `save_board`, `commit_route`,
-`ripup_wire`. Every write runs through the same DFM gates and Ctrl+Z undo
+`disconnect_pin`, `add_pin_stitching_via`, `rename_net`, `save_board`,
+`commit_route`, `ripup_wire`. Every write runs through the same DFM gates and Ctrl+Z undo
 history as GUI gestures. Zone fill stays in the GUI (no autorouter).
 
 Copy the *contents* of [`contrib/cursor-setup/`](contrib/cursor-setup)

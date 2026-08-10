@@ -11,8 +11,9 @@
 //! `board_summary`, `list_parts`, `check_board`, `get_routing_scene`,
 //! `probe_route`; write (require `--allow-ai-write`): `new_board`,
 //! `download_lcsc_part`, `place_footprint`, `move_footprint`,
-//! `remove_footprint`, `connect_pins`, `disconnect_pin`, `rename_net`,
-//! `save_board`, `commit_route`, `ripup_wire`. Placement, netlist, and
+//! `remove_footprint`, `connect_pins`, `disconnect_pin`,
+//! `add_pin_stitching_via`, `rename_net`, `save_board`, `commit_route`,
+//! `ripup_wire`. Placement, netlist, and
 //! copper-route writes run through the same DFM gates and undo history
 //! as the GUI's own gestures. Zone fill stays in the GUI.
 
@@ -91,6 +92,23 @@ pub struct DisconnectPinArgs {
     pub reference: String,
     /// Pad number on that footprint, e.g. `"3"`.
     pub pin: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct AddPinStitchingViaArgs {
+    /// Footprint reference for a single pin, e.g. `"U1"` -- give
+    /// together with `pin`. Leave out to use `net` batch mode instead.
+    pub reference: Option<String>,
+    /// Pad number on that footprint, e.g. `"1"`.
+    pub pin: Option<String>,
+    /// Batch mode: stitch EVERY pad on this net (e.g. `"GND"`) that
+    /// doesn't already have a same-net via right next to it. Mutually
+    /// exclusive with reference+pin.
+    pub net: Option<String>,
+    /// Via outer diameter in mm; omit for the GUI's current default.
+    pub via_diameter_mm: Option<f64>,
+    /// Via drill in mm; omit for the GUI's current default.
+    pub via_drill_mm: Option<f64>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -174,6 +192,9 @@ pub enum McpQuery {
     RemoveFootprint { args: RemoveFootprintArgs, reply: oneshot::Sender<String> },
     /// Takes one pin off its net.
     DisconnectPin { args: DisconnectPinArgs, reply: oneshot::Sender<String> },
+    /// Via + stub right next to a pin (or every pad on a net), placed
+    /// automatically like the GUI's "Add via near pin".
+    AddPinStitchingVia { args: AddPinStitchingViaArgs, reply: oneshot::Sender<String> },
     /// Renames a net.
     RenameNet { args: RenameNetArgs, reply: oneshot::Sender<String> },
     /// Creates a fresh board and switches the GUI to it.
@@ -332,6 +353,16 @@ impl AlladinMcp {
         self.ask(|reply| McpQuery::DisconnectPin { args, reply }).await
     }
 
+    #[tool(
+        description = "Places a stitching via with a short connecting stub right next to a pin, automatically at the same spot the GUI's right-click \"Add via near pin\" picks (radially away from the part, sweeping to nearby angles if the natural spot is blocked) -- no coordinates needed. Single pin: reference+pin. Batch: net=\"GND\" stitches every pad on that net that doesn't already have a same-net via next to it, and reports placed/skipped/failed per pad. Same DFM gates and Ctrl+Z undo as the GUI."
+    )]
+    async fn add_pin_stitching_via(&self, Parameters(args): Parameters<AddPinStitchingViaArgs>) -> Result<CallToolResult, McpError> {
+        if let Some(refusal) = self.require_write_access() {
+            return refusal;
+        }
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::AddPinStitchingVia { args, reply }).await
+    }
+
     #[tool(description = "Renames a net (give its current name exactly as get_nets reports it). Use real names like \"5V\", \"GND\", \"DATA\" so exports and the GUI read well.")]
     async fn rename_net(&self, Parameters(args): Parameters<RenameNetArgs>) -> Result<CallToolResult, McpError> {
         if let Some(refusal) = self.require_write_access() {
@@ -391,11 +422,12 @@ impl ServerHandler for AlladinMcp {
         let write_note = if self.allow_ai_write {
             "Write tools are ENABLED for this process (launched with --allow-ai-write): \
              new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
-             disconnect_pin, rename_net, save_board, commit_route, and ripup_wire act directly \
-             on the live board/parts DB."
+             disconnect_pin, add_pin_stitching_via, rename_net, save_board, commit_route, and \
+             ripup_wire act directly on the live board/parts DB."
         } else {
             "Write tools (new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
-             disconnect_pin, rename_net, save_board, commit_route, ripup_wire) are DISABLED for \
+             disconnect_pin, add_pin_stitching_via, rename_net, save_board, commit_route, \
+             ripup_wire) are DISABLED for \
              this process -- every one of them will refuse with an explanation. Relaunch \
              alladin-pcb with --allow-ai-write to enable them."
         };
