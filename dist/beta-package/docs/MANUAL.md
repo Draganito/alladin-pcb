@@ -62,8 +62,8 @@ Other cornerstones:
   in JLCPCB's format.
 - **Manual routing**: guided 45°/orthogonal traces and segment drag;
   no external autorouter.
-- **AI-drivable (desktop)**: mini MCP for parts download, netlist and
-  save (chapter 17). Placement and copper stay in the GUI.
+- **AI-drivable (desktop)**: mini MCP for parts, placement, netlist,
+  manual-style copper routing, and save (chapter 17). Zone fill stays in the GUI.
 - **Portable boards**: saving embeds the non-builtin parts used on the
   board (`embedded_parts`), so one `.json` opens on desktop or web.
   Optional library export/import covers spare parts (chapter 16).
@@ -479,8 +479,9 @@ repository). A public demo is served from GitHub Pages:
 ## 17. AI control via MCP
 
 On **desktop**, Alladin embeds an MCP server. An AI can set up a board,
-fetch and place parts, wire the netlist, and verify its own work — track
-routing and zone fill stay in the GUI on purpose.
+fetch and place parts, wire the netlist, lay copper with the same
+clearance gates as the GUI's manual 45° router, and verify its own work.
+Zone fill stays in the GUI. There is no classical autorouter.
 
 ### 17.1 Setup
 
@@ -490,7 +491,7 @@ routing and zone fill stay in the GUI on purpose.
    (`.cursor/` and `.cursorignore`).
 3. MCP URL: `http://127.0.0.1:8642/mcp`.
 
-### 17.2 Tool reference (14 tools)
+### 17.2 Tool reference (18 tools)
 
 Read-only (always available):
 
@@ -501,6 +502,8 @@ Read-only (always available):
 | `get_nets` | Nets and pins |
 | `list_parts` | Every placeable parts-library template |
 | `check_board` | Verification report (netlist complete? copper connected? zones fresh? DFM findings) |
+| `get_routing_scene` | Pads, tracks/vias, open copper bridges, routing rules |
+| `probe_route` | Batched clearance check for proposed polylines (+ vias) |
 
 Write (need `--allow-ai-write`):
 
@@ -515,11 +518,20 @@ Write (need `--allow-ai-write`):
 | `disconnect_pin` | Take one pin off its net |
 | `rename_net` | Give a net a real name (`5V`, `GND`, …) |
 | `save_board` | Save the board |
+| `commit_route` | Lay a cleared copper route (same gates as the GUI preview) |
+| `ripup_wire` | Remove a wire near a point, or all tracks/vias on a net |
+
+### 17.3 Copper routing workflow
+
+1. `get_routing_scene` — see `open_bridges` (shortest pad pairs between copper islands).
+2. Propose one or more polylines (`segments` with `layer` + `points_mm`; multi-layer needs `vias_mm` at junctions).
+3. `probe_route` — batch-test candidates (green/red = same gates as live preview). A blocked result names the exact leg and the items in the way (kind, net, footprint, layer, position), so the AI can route around them.
+4. `commit_route` — write the first clear candidate (Ctrl+Z undoes). The commit also verifies connectivity: a route that doesn't actually join the net's copper islands (wrong layer, ends in free space) is rolled back and refused — the reply reports `bridge_closed` and the island count before/after.
+5. `check_board` until `open_nets` is empty. On blockage: corners, other layer + via, or `ripup_wire`.
 
 Every MCP write runs through the same JLCPCB DFM gates and the same
 Ctrl+Z undo history as your own GUI gestures — you can always take back
-what the AI did. Track routing and zones are **not** available over MCP —
-use the GUI. (There is no autoroute or batch MCP.)
+what the AI did. Zone fill stays in the GUI.
 
 
 
@@ -536,8 +548,8 @@ With no arguments the GUI starts. With a subcommand Alladin runs headless:
 | `list-footprints <board>` | List footprints |
 | `board-summary <board>` | Compact overview |
 
-Track routing and fab export go through the GUI. MCP covers board setup,
-parts, placement, netlist, verification, and save.
+Fab export goes through the GUI. MCP covers board setup, parts,
+placement, netlist, manual-style copper routing, verification, and save.
 
 
 ## 19. All keyboard shortcuts

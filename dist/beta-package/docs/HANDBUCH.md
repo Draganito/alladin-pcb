@@ -65,8 +65,8 @@ Weitere Eckpfeiler:
   JLCPCB-Format.
 - **Manuelles Routing**: Geführte 45°/orthogonale Leiterbahnen und
   Segment-Drag; kein externer Autorouter.
-- **KI-steuerbar (Desktop)**: Mini-MCP für Parts-Download, Netzliste und
-  Speichern (Kapitel 17). Platzierung und Kupfer bleiben in der GUI.
+- **KI-steuerbar (Desktop)**: Mini-MCP für Parts, Placement, Netzliste,
+  manuelles Kupfer-Routing und Speichern (Kapitel 17). Zone-Fill bleibt GUI.
 - **Portable Boards**: Beim Speichern werden genutzte Nicht-Builtin-
   Parts mitgeschrieben (`embedded_parts`) — eine `.json` öffnet auf
   Desktop und Web. Optionaler Bibliotheks-Export/Import für
@@ -501,8 +501,9 @@ dieses Repository). Öffentliche Demo auf GitHub Pages:
 
 Alladin hat auf dem **Desktop** einen eingebauten MCP-Server. Eine KI
 kann ein Board anlegen, Teile beschaffen und platzieren, die Netzliste
-verdrahten und ihre Arbeit selbst prüfen — Trace-Routing und Zone-Fill
-bleiben bewusst in der GUI.
+verdrahten, Kupfer mit denselben Clearance-Gates wie der manuelle
+45°-Router legen und ihre Arbeit selbst prüfen. Zone-Fill bleibt in der
+GUI. Es gibt keinen klassischen Autorouter.
 
 ### 17.1 Einrichtung
 
@@ -512,7 +513,7 @@ bleiben bewusst in der GUI.
    kopieren (`.cursor/` und `.cursorignore`).
 3. MCP-URL: `http://127.0.0.1:8642/mcp`.
 
-### 17.2 Tool-Referenz (14 Tools)
+### 17.2 Tool-Referenz (18 Tools)
 
 Read-only (immer verfügbar):
 
@@ -523,6 +524,8 @@ Read-only (immer verfügbar):
 | `get_nets` | Netze und Pins |
 | `list_parts` | Alle platzierbaren Templates der Parts-Bibliothek |
 | `check_board` | Prüfbericht (Netzliste komplett? Kupfer verbunden? Zonen aktuell? DFM-Befunde) |
+| `get_routing_scene` | Pads, Tracks/Vias, offene Kupfer-Brücken, Routing-Regeln |
+| `probe_route` | Batch-Clearance-Check für vorgeschlagene Polylinien (+ Vias) |
 
 Schreibend (brauchen `--allow-ai-write`):
 
@@ -537,12 +540,20 @@ Schreibend (brauchen `--allow-ai-write`):
 | `disconnect_pin` | Einen Pin vom Netz nehmen |
 | `rename_net` | Netz sauber benennen (`5V`, `GND`, …) |
 | `save_board` | Board speichern |
+| `commit_route` | Geprüfte Kupferbahn legen (gleiche Gates wie GUI-Preview) |
+| `ripup_wire` | Bahn nahe einem Punkt oder alles Kupfer eines Netzes entfernen |
+
+### 17.3 Kupfer-Routing-Ablauf
+
+1. `get_routing_scene` — `open_bridges` (kürzeste Pad-Paare zwischen Kupferinseln).
+2. Polylinien vorschlagen (`segments` mit `layer` + `points_mm`; Mehrlagen mit `vias_mm` an den Übergängen).
+3. `probe_route` — Kandidaten im Batch prüfen (grün/rot = GUI-Preview). Bei Blockade nennt das Ergebnis das genaue Teilstück und die Items im Weg (Art, Netz, Footprint, Lage, Position) — die KI kann gezielt drumherum routen.
+4. `commit_route` — ersten freien Kandidaten schreiben (Ctrl+Z macht rückgängig). Der Commit prüft zusätzlich die Konnektivität: Eine Bahn, die die Kupferinseln des Netzes nicht wirklich verbindet (falsche Lage, endet im Leeren), wird zurückgerollt und abgelehnt — die Antwort meldet `bridge_closed` und die Inselzahl vorher/nachher.
+5. `check_board`, bis `open_nets` leer ist. Bei Blockade: Ecken, andere Lage + Via, oder `ripup_wire`.
 
 Jeder MCP-Schreibzugriff läuft durch dieselben JLCPCB-DFM-Gates und
 dieselbe Ctrl+Z-Undo-Historie wie deine eigenen GUI-Gesten — du kannst
-alles, was die KI getan hat, jederzeit zurücknehmen. Trace-Routing und
-Zonen gibt es **nicht** über MCP — das bleibt GUI. (Kein Autoroute- oder
-Batch-MCP.)
+alles, was die KI getan hat, jederzeit zurücknehmen. Zone-Fill bleibt GUI.
 
 
 
@@ -559,8 +570,8 @@ Ohne Argumente startet die GUI. Mit Unterbefehl läuft Alladin headless:
 | `list-footprints <board>` | Footprints auflisten |
 | `board-summary <board>` | Kompakter Überblick |
 
-Track-Routing und Fertigungsexport laufen über die GUI. MCP deckt Board-
-Anlage, Parts, Placement, Netzliste, Prüfung und Speichern ab.
+Fertigungsexport läuft über die GUI. MCP deckt Board-Anlage, Parts,
+Placement, Netzliste, manuelles Kupfer-Routing, Prüfung und Speichern ab.
 
 
 ## 19. Alle Tastenkürzel

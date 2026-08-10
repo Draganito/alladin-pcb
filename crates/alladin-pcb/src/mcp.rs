@@ -8,12 +8,13 @@
 //! reply channel. `crate::app::handle_mcp_query` builds the answers.
 //!
 //! Tool surface -- read-only: `get_footprints`, `get_nets`,
-//! `board_summary`, `list_parts`, `check_board`; write (require
-//! `--allow-ai-write`): `new_board`, `download_lcsc_part`,
-//! `place_footprint`, `move_footprint`, `remove_footprint`,
-//! `connect_pins`, `disconnect_pin`, `rename_net`, `save_board`.
-//! Placement and netlist writes run through the same DFM gates and
-//! undo history as the GUI's own gestures.
+//! `board_summary`, `list_parts`, `check_board`, `get_routing_scene`,
+//! `probe_route`; write (require `--allow-ai-write`): `new_board`,
+//! `download_lcsc_part`, `place_footprint`, `move_footprint`,
+//! `remove_footprint`, `connect_pins`, `disconnect_pin`, `rename_net`,
+//! `save_board`, `commit_route`, `ripup_wire`. Placement, netlist, and
+//! copper-route writes run through the same DFM gates and undo history
+//! as the GUI's own gestures. Zone fill stays in the GUI.
 
 use std::sync::mpsc;
 use std::time::Duration;
@@ -115,6 +116,33 @@ pub struct NewBoardArgs {
     pub replace_current: Option<bool>,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct ProbeRouteArgs {
+    /// One or more route candidates to clearance-check in a single call.
+    /// Each candidate: `{ "net": "GND", "width_mm"?: 0.25, "segments":
+    /// [{ "layer": "FCu"|"BCu", "points_mm": [[x,y], ...] }],
+    /// "vias_mm"?: [[x,y], ...] }` — vias required between multi-layer
+    /// segments, each via at the shared junction point.
+    pub candidates: Vec<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct CommitRouteArgs {
+    /// A single route candidate (same shape as one `probe_route`
+    /// candidate). Re-validated with the same gates before commit.
+    pub route: serde_json::Value,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RipupWireArgs {
+    /// Rip up the whole electrically-continuous wire nearest this point
+    /// (mm, board-center origin). Ignored when `net` is set.
+    pub x_mm: Option<f64>,
+    pub y_mm: Option<f64>,
+    /// When set, remove every track and via on this net (pads stay).
+    pub net: Option<String>,
+}
+
 /// One pending request from an MCP tool call, waiting for
 /// [`crate::app::PcbApp::ui`] to drain it and answer via `reply`.
 pub enum McpQuery {
@@ -150,6 +178,14 @@ pub enum McpQuery {
     RenameNet { args: RenameNetArgs, reply: oneshot::Sender<String> },
     /// Creates a fresh board and switches the GUI to it.
     NewBoard { args: NewBoardArgs, reply: oneshot::Sender<String> },
+    /// Geometry + open copper bridges for AI routing.
+    GetRoutingScene { reply: oneshot::Sender<String> },
+    /// Batched clearance probe (same gates as the GUI preview).
+    ProbeRoute { args: ProbeRouteArgs, reply: oneshot::Sender<String> },
+    /// Commit a cleared polyline (+ optional vias) onto the live board.
+    CommitRoute { args: CommitRouteArgs, reply: oneshot::Sender<String> },
+    /// Remove a wire near a point, or all copper on a named net.
+    RipupWire { args: RipupWireArgs, reply: oneshot::Sender<String> },
 }
 
 /// How long a `#[tool]` waits for the UI thread before reporting timeout.
@@ -313,6 +349,40 @@ impl AlladinMcp {
         }
         self.ask(|reply| McpQuery::NewBoard { args, reply }).await
     }
+
+    #[tool(
+        description = "Routing scene for laying copper like the GUI's manual 45° router: every pad (ref/pin/net/x/y/layer), existing tracks and vias, open_bridges (shortest pad-to-pad links between copper islands that still need joining, sorted by distance), and default width/via/clearance rules. Call this before probe_route / commit_route. Not an autorouter — you propose polylines."
+    )]
+    async fn get_routing_scene(&self) -> Result<CallToolResult, McpError> {
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::GetRoutingScene { reply }).await
+    }
+
+    #[tool(
+        description = "Batched clearance probe for proposed copper routes — same gates as the GUI's green/red live preview (path clearance + board-edge margin + via DFM). Pass candidates: [{net, width_mm?, segments:[{layer:FCu|BCu, points_mm:[[x,y],...]}], vias_mm?:[[x,y],...]}]. Multi-layer routes need one via per junction (via point = last point of segment i and first of segment i+1). Returns results[] per candidate: ok, or blocked with the exact leg (segment_index, leg_index, leg_mm) and colliding[] — kind/net/footprint/layer/position of up to 3 items in the way, so you can route around them. Does not mutate the board."
+    )]
+    async fn probe_route(&self, Parameters(args): Parameters<ProbeRouteArgs>) -> Result<CallToolResult, McpError> {
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::ProbeRoute { args, reply }).await
+    }
+
+    #[tool(
+        description = "Commits one copper route (same candidate shape as probe_route) onto the live board after re-running the same clearance/via gates, then verifies connectivity: the route must actually join the net's copper islands (bridge_closed=true, copper_pieces_before/after in the reply). A clean-looking route that lands in free space or on the wrong layer is rolled back and refused — no false positives. On refusal nothing is written and the error names the gate. Use after a successful probe_route. Ctrl+Z undoes. Zone fill stays in the GUI."
+    )]
+    async fn commit_route(&self, Parameters(args): Parameters<CommitRouteArgs>) -> Result<CallToolResult, McpError> {
+        if let Some(refusal) = self.require_write_access() {
+            return refusal;
+        }
+        self.ask(|reply| McpQuery::CommitRoute { args, reply }).await
+    }
+
+    #[tool(
+        description = "Rip up routed copper: either pass net=\"GND\" to remove every track/via on that net (pads stay), or pass x_mm+y_mm to delete the whole electrically-continuous wire nearest that point. Ctrl+Z undoes."
+    )]
+    async fn ripup_wire(&self, Parameters(args): Parameters<RipupWireArgs>) -> Result<CallToolResult, McpError> {
+        if let Some(refusal) = self.require_write_access() {
+            return refusal;
+        }
+        self.ask(|reply| McpQuery::RipupWire { args, reply }).await
+    }
 }
 
 #[tool_handler]
@@ -321,18 +391,21 @@ impl ServerHandler for AlladinMcp {
         let write_note = if self.allow_ai_write {
             "Write tools are ENABLED for this process (launched with --allow-ai-write): \
              new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
-             disconnect_pin, rename_net, and save_board act directly on the live board/parts DB."
+             disconnect_pin, rename_net, save_board, commit_route, and ripup_wire act directly \
+             on the live board/parts DB."
         } else {
             "Write tools (new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
-             disconnect_pin, rename_net, save_board) are DISABLED for this process -- \
-             every one of them will refuse with an explanation. Relaunch alladin-pcb with --allow-ai-write to enable them."
+             disconnect_pin, rename_net, save_board, commit_route, ripup_wire) are DISABLED for \
+             this process -- every one of them will refuse with an explanation. Relaunch \
+             alladin-pcb with --allow-ai-write to enable them."
         };
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(format!(
             "MCP surface for a running alladin-pcb GUI: board setup, parts download + placement, \
-             netlist wiring, and self-verification (check_board), with read-only supports \
-             (get_footprints, get_nets, board_summary, list_parts). Placement/netlist writes run \
-             through the same JLCPCB DFM gates and Ctrl+Z undo history as the human's own GUI \
-             gestures. Track routing and zone fill stay in the GUI on purpose. {write_note}"
+             netlist wiring, manual-style copper routing (get_routing_scene / probe_route / \
+             commit_route — same 45°-clearance gates as the GUI, not an autorouter), and \
+             self-verification (check_board), with read-only supports (get_footprints, get_nets, \
+             board_summary, list_parts). Writes run through the same JLCPCB DFM gates and Ctrl+Z \
+             undo history as the human's own GUI gestures. Zone fill stays in the GUI. {write_note}"
         ))
     }
 }

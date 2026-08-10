@@ -31,14 +31,16 @@ concave notches do not leak fill.
 |---|---|---|
 | Parts | SQLite + LCSC download; merge from opened boards | Session DB + import/`embedded_parts` |
 | Board | Open/save paths | Upload/download JSON |
-| MCP | Full surface on `:8642` (board / place / netlist / verify) | none |
+| MCP | Full surface on `:8642` (board / place / netlist / route / verify) | none |
 | Fab export | Folder write | Manufacturing zip download |
 
 MCP tools — read-only: `board_summary`, `get_footprints`, `get_nets`,
-`list_parts`, `check_board`; write (need `--allow-ai-write`):
-`new_board`, `download_lcsc_part`, `place_footprint`, `move_footprint`,
-`remove_footprint`, `connect_pins`, `disconnect_pin`, `rename_net`,
-`save_board`. Track routing and zone fill stay in the GUI.
+`list_parts`, `check_board`, `get_routing_scene`, `probe_route`; write
+(need `--allow-ai-write`): `new_board`, `download_lcsc_part`,
+`place_footprint`, `move_footprint`, `remove_footprint`, `connect_pins`,
+`disconnect_pin`, `rename_net`, `save_board`, `commit_route`, `ripup_wire`.
+Copper routing reuses the GUI's clearance gates (not an autorouter).
+Zone fill stays in the GUI.
 
 ## What Alladin is not
 

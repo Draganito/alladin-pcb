@@ -4550,6 +4550,18 @@ fn handle_mcp_query(query: crate::mcp::McpQuery, screen: &mut Screen, parts_db: 
         McpQuery::NewBoard { args, reply } => {
             let _ = reply.send(new_board_write(screen, parts_db, args).to_string());
         }
+        McpQuery::GetRoutingScene { reply } => {
+            let _ = reply.send(get_routing_scene_json(screen).to_string());
+        }
+        McpQuery::ProbeRoute { args, reply } => {
+            let _ = reply.send(probe_route_json(screen, args).to_string());
+        }
+        McpQuery::CommitRoute { args, reply } => {
+            let _ = reply.send(commit_route_write(screen, args).to_string());
+        }
+        McpQuery::RipupWire { args, reply } => {
+            let _ = reply.send(ripup_wire_write(screen, args).to_string());
+        }
     }
 }
 
@@ -5110,6 +5122,77 @@ fn rename_net_write(screen: &mut Screen, args: crate::mcp::RenameNetArgs) -> ser
 }
 
 
+/// [`crate::mcp::McpQuery::GetRoutingScene`]'s handler.
+#[cfg(not(target_arch = "wasm32"))]
+fn get_routing_scene_json(screen: &Screen) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json();
+    };
+    crate::mcp_routing::routing_scene_json(&state.doc, &state.templates)
+}
+
+/// [`crate::mcp::McpQuery::ProbeRoute`]'s handler -- read-only batch
+/// clearance check; never mutates the board.
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_route_json(screen: &Screen, args: crate::mcp::ProbeRouteArgs) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json();
+    };
+    if args.candidates.is_empty() {
+        return error_json("candidates must not be empty");
+    }
+    if args.candidates.len() > 50 {
+        return error_json("at most 50 candidates per probe_route call");
+    }
+    crate::mcp_routing::probe_routes_json(&state.doc, &args.candidates)
+}
+
+/// [`crate::mcp::McpQuery::CommitRoute`]'s handler -- same gates as
+/// [`probe_route_json`], then `add_track_path` / `try_add_via` through undo.
+#[cfg(not(target_arch = "wasm32"))]
+fn commit_route_write(screen: &mut Screen, args: crate::mcp::CommitRouteArgs) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    let route = match crate::mcp_routing::parse_route_candidate(&state.doc, &args.route) {
+        Ok(route) => route,
+        Err(e) => return error_json(e),
+    };
+    state.cancel_transient_gestures();
+    match state.try_mutate_doc_ok(|doc| crate::mcp_routing::commit_route(doc, &route)) {
+        Ok(mut v) => {
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("ok".into(), serde_json::json!(true));
+                obj.insert("net".into(), serde_json::json!(route.net_name));
+            }
+            v
+        }
+        Err(e) => error_json(format!("couldn't commit route on {}: {e}", route.net_name)),
+    }
+}
+
+/// [`crate::mcp::McpQuery::RipupWire`]'s handler.
+#[cfg(not(target_arch = "wasm32"))]
+fn ripup_wire_write(screen: &mut Screen, args: crate::mcp::RipupWireArgs) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    state.cancel_transient_gestures();
+    if let Some(net) = args.net.as_deref() {
+        return match state.try_mutate_doc_ok(|doc| crate::mcp_routing::ripup_net_copper(doc, net)) {
+            Ok(v) => v,
+            Err(e) => error_json(e),
+        };
+    }
+    let (Some(x_mm), Some(y_mm)) = (args.x_mm, args.y_mm) else {
+        return error_json("pass net=\"...\" to rip a whole net, or x_mm and y_mm to rip the wire nearest a point");
+    };
+    match state.try_mutate_doc_ok(|doc| crate::mcp_routing::ripup_wire_near(doc, x_mm, y_mm)) {
+        Ok(v) => v,
+        Err(e) => error_json(e),
+    }
+}
+
 /// [`crate::mcp::McpQuery::NewBoard`]'s handler -- the same
 /// [`NewBoardParams::create`] + [`load_templates`] + [`EditorState::new`]
 /// sequence as the GUI's own "Create" button, guarded so an AI can't
@@ -5335,6 +5418,60 @@ mod mcp_handler_tests {
         place(&mut screen, &template, 0.0, 0.0);
         let check = check_board_json(&screen);
         assert_eq!(check["ok"], false, "an unwired pin must fail verification: {check}");
+    }
+
+    #[test]
+    fn mcp_routing_scene_probe_commit_and_ripup_round_trip() {
+        let mut screen = editor_screen();
+        // Exactly one pad: a multi-pad part's unused pins would block a
+        // straight same-net track between pin 1 of each footprint.
+        let template = {
+            let Screen::Editor(state) = &screen else { unreachable!() };
+            state.templates.iter().find(|t| t.pads.len() == 1 && t.holes.is_empty()).expect("single-pad template").name.clone()
+        };
+        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let connected = connect_pins_write(
+            &mut screen,
+            crate::mcp::ConnectPinsArgs { ref1: r1, pin1: "1".into(), ref2: r2, pin2: "1".into() },
+        );
+        assert_eq!(connected["ok"], true, "{connected}");
+        let net = connected["net"].as_str().unwrap().to_string();
+
+        let scene = get_routing_scene_json(&screen);
+        let bridges = scene["open_bridges"].as_array().unwrap();
+        assert_eq!(bridges.len(), 1, "{scene}");
+        let a = &bridges[0]["a"];
+        let b = &bridges[0]["b"];
+        // Prefer the pad's own copper layer from the scene pads list.
+        let layer = scene["pads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["ref"] == a["ref"] && p["pin"] == a["pin"])
+            .and_then(|p| p["layer"].as_str())
+            .unwrap_or("FCu");
+        let route = serde_json::json!({
+            "net": net,
+            "segments": [{
+                "layer": layer,
+                "points_mm": [
+                    [a["x_mm"].as_f64().unwrap(), a["y_mm"].as_f64().unwrap()],
+                    [b["x_mm"].as_f64().unwrap(), b["y_mm"].as_f64().unwrap()]
+                ]
+            }]
+        });
+        let probed = probe_route_json(&screen, crate::mcp::ProbeRouteArgs { candidates: vec![route.clone()] });
+        assert_eq!(probed["results"][0]["ok"], true, "{probed}");
+        let committed = commit_route_write(&mut screen, crate::mcp::CommitRouteArgs { route });
+        assert_eq!(committed["ok"], true, "{committed}");
+        assert!(get_routing_scene_json(&screen)["open_bridges"].as_array().unwrap().is_empty());
+        let ripped = ripup_wire_write(
+            &mut screen,
+            crate::mcp::RipupWireArgs { x_mm: Some(0.0), y_mm: Some(0.0), net: None },
+        );
+        assert_eq!(ripped["ok"], true, "{ripped}");
+        assert_eq!(get_routing_scene_json(&screen)["open_bridges"].as_array().unwrap().len(), 1);
     }
 
     #[test]

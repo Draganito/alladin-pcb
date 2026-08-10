@@ -25,6 +25,8 @@ mod lcsc;
 mod lcsc;
 #[cfg(not(target_arch = "wasm32"))]
 mod mcp;
+#[cfg(not(target_arch = "wasm32"))]
+mod mcp_routing;
 mod parts_db;
 mod parts_transfer;
 #[cfg(target_arch = "wasm32")]
