@@ -133,7 +133,7 @@ pub fn routing_scene_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Va
 }
 
 /// Closest pad-to-pad links between copper islands that still need joining.
-fn open_bridges_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Vec<Value> {
+pub(crate) fn open_bridges_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Vec<Value> {
     let mut bridges = Vec::new();
     for net in &doc.nets {
         if doc.pads_on_net(net.id).len() < 2 {
@@ -193,6 +193,22 @@ fn open_bridges_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Vec<Val
     }
     bridges.sort_by(|a, b| a.0.total_cmp(&b.0));
     bridges.into_iter().take(100).map(|(_, v)| v).collect()
+}
+
+/// Compact open-bridge score for AI floorplanning: sum/max/count plus the
+/// shortest `top_n` bridges (capped at 20). Distances are millimetres.
+pub(crate) fn open_bridges_score_json(doc: &BoardDoc, templates: &[FootprintTemplate], top_n: usize) -> Value {
+    let bridges = open_bridges_json(doc, templates);
+    let distances: Vec<f64> = bridges.iter().filter_map(|b| b.get("distance_mm").and_then(|v| v.as_f64())).collect();
+    let sum_mm: f64 = distances.iter().sum();
+    let max_mm = distances.iter().copied().fold(0.0_f64, f64::max);
+    let top_n = top_n.min(20).min(bridges.len());
+    json!({
+        "sum_mm": sum_mm,
+        "max_mm": max_mm,
+        "count": bridges.len(),
+        "top": bridges.into_iter().take(top_n).collect::<Vec<_>>(),
+    })
 }
 
 /// Parsed route candidate (one or more layer segments + vias at junctions).

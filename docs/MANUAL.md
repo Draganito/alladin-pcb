@@ -499,7 +499,7 @@ Zone fill stays in the GUI. There is no classical autorouter.
    (`.cursor/` and `.cursorignore`).
 3. MCP URL: `http://127.0.0.1:8642/mcp`.
 
-### 17.2 Tool reference (19 tools)
+### 17.2 Tool reference (22 tools)
 
 Read-only (always available):
 
@@ -512,6 +512,7 @@ Read-only (always available):
 | `check_board` | Verification report (netlist complete? copper connected? zones fresh? DFM findings) |
 | `get_routing_scene` | Pads, tracks/vias, open copper bridges, routing rules |
 | `probe_route` | Batched clearance check for proposed polylines (+ vias) |
+| `probe_placement` | Dry-run place/move DFM probe; optional `search_radius_mm` for nearest legal pose |
 | `suggest_route` | Server-side octilinear A* pathfinder (45°-style, no 90° corners); needs write access only with `commit=true` |
 
 Write (need `--allow-ai-write`):
@@ -522,6 +523,8 @@ Write (need `--allow-ai-write`):
 | `download_lcsc_part` | LCSC → parts DB |
 | `place_footprint` | Place a library template (same DFM gates as the GUI) |
 | `move_footprint` | Move/rotate a placed part |
+| `place_parts` | Atomic multi-place (max 50, one undo); optional `pins` net map; reply includes `open_bridges` score |
+| `move_parts` | Atomic multi-move (max 50, one undo); reply includes `open_bridges` score |
 | `remove_footprint` | Remove a placed part |
 | `connect_pins` | Netlist (join two pins) |
 | `disconnect_pin` | Take one pin off its net |
@@ -531,7 +534,11 @@ Write (need `--allow-ai-write`):
 | `commit_route` | Lay a cleared copper route (same gates as the GUI preview) |
 | `ripup_wire` | Remove a wire near a point, or all tracks/vias on a net |
 
-### 17.3 Copper routing workflow
+### 17.3 Floorplan workflow
+
+Prefer `probe_placement` (optionally with `search_radius_mm`) to dry-run a pose, then `place_parts` / `move_parts` for atomic batches (one Ctrl+Z). Optional per-part `pins` maps (`{"1":"GND","2":"3V3"}`) assign nets in the same step. The reply’s `open_bridges` score (`sum_mm` / `max_mm` / `top`) is the ratsnest signal for foresight placement — minimize it before routing. Single `place_footprint` / `move_footprint` remain for one-off edits.
+
+### 17.4 Copper routing workflow
 
 Fastest path: `suggest_route` — a server-side octilinear A* pathfinder. Give it a net plus two pins (`"REF.PIN"`) or points, and it searches a legal 45°-style path on one layer (every leg horizontal/vertical/45°, no 90° corners, no vias) using the exact clearance and edge gates below, so the result is commit-ready. Pass `commit=true` to lay it in the same call, or feed the returned `route_candidate` to `commit_route`. Knobs: `step_mm` (lattice pitch, default 0.5), `bend_penalty_mm` (higher = straighter), `max_expansions` (search budget).
 

@@ -771,7 +771,10 @@ impl EditorState {
 
     /// Runs `f` on the live doc; if it returns `Ok`, pushes the pre-
     /// mutation snapshot onto the undo stack. On `Err` the doc is
-    /// unchanged (BoardDoc mutators leave state untouched on failure).
+    /// restored from the pre-mutation snapshot so a fallible batch that
+    /// mutated mid-flight cannot leave a half-applied board (individual
+    /// BoardDoc mutators still preferably leave state untouched on
+    /// failure; this restore is the safety net).
     fn try_mutate_doc<E>(&mut self, f: impl FnOnce(&mut BoardDoc) -> Result<(), E>) -> Result<(), E> {
         let before = self.doc.clone();
         match f(&mut self.doc) {
@@ -779,7 +782,10 @@ impl EditorState {
                 self.record_undo(before);
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                self.doc = before;
+                Err(e)
+            }
         }
     }
 
@@ -792,7 +798,10 @@ impl EditorState {
                 self.record_undo(before);
                 Ok(v)
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                self.doc = before;
+                Err(e)
+            }
         }
     }
 
@@ -4538,6 +4547,15 @@ fn handle_mcp_query(query: crate::mcp::McpQuery, screen: &mut Screen, parts_db: 
         McpQuery::MoveFootprint { args, reply } => {
             let _ = reply.send(move_footprint_write(screen, args).to_string());
         }
+        McpQuery::ProbePlacement { args, reply } => {
+            let _ = reply.send(probe_placement_json(screen, args).to_string());
+        }
+        McpQuery::PlaceParts { args, reply } => {
+            let _ = reply.send(place_parts_write(screen, args).to_string());
+        }
+        McpQuery::MoveParts { args, reply } => {
+            let _ = reply.send(move_parts_write(screen, args).to_string());
+        }
         McpQuery::RemoveFootprint { args, reply } => {
             let _ = reply.send(remove_footprint_write(screen, args).to_string());
         }
@@ -5110,6 +5128,46 @@ fn move_footprint_write(screen: &mut Screen, args: crate::mcp::MoveFootprintArgs
 }
 
 
+/// [`crate::mcp::McpQuery::ProbePlacement`]'s handler -- read-only DFM probe.
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_placement_json(screen: &Screen, args: crate::mcp::ProbePlacementArgs) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    crate::mcp_placement::probe_placement_json(&state.doc, &state.templates, &args)
+}
+
+
+/// [`crate::mcp::McpQuery::PlaceParts`]'s handler -- atomic multi-place.
+#[cfg(not(target_arch = "wasm32"))]
+fn place_parts_write(screen: &mut Screen, args: crate::mcp::PlacePartsArgs) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    state.cancel_transient_gestures();
+    let templates = state.templates.clone();
+    match state.try_mutate_doc_ok(|doc| crate::mcp_placement::place_parts_on_doc(doc, &templates, &args.parts)) {
+        Ok(v) => v,
+        Err(e) => error_json(format!("couldn't place_parts: {e}")),
+    }
+}
+
+
+/// [`crate::mcp::McpQuery::MoveParts`]'s handler -- atomic multi-move.
+#[cfg(not(target_arch = "wasm32"))]
+fn move_parts_write(screen: &mut Screen, args: crate::mcp::MovePartsArgs) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    state.cancel_transient_gestures();
+    let templates = state.templates.clone();
+    match state.try_mutate_doc_ok(|doc| crate::mcp_placement::move_parts_on_doc(doc, &templates, &args.parts)) {
+        Ok(v) => v,
+        Err(e) => error_json(format!("couldn't move_parts: {e}")),
+    }
+}
+
+
 /// [`crate::mcp::McpQuery::RemoveFootprint`]'s handler -- same
 /// [`BoardDoc::remove_footprint`] as the GUI's Delete key, with the
 /// same gesture/selection cleanup undo does: the removed part's
@@ -5603,6 +5661,173 @@ mod mcp_handler_tests {
         assert_eq!(state.doc.footprints.len(), 1);
         assert!(state.undo());
         assert!(state.doc.footprints.is_empty());
+    }
+
+    #[test]
+    fn probe_placement_reports_illegal_pose_without_mutating() {
+        let screen = editor_screen();
+        let template = a_template_with_pads(&screen, 1);
+        let result = probe_placement_json(
+            &screen,
+            crate::mcp::ProbePlacementArgs {
+                template: Some(template),
+                reference: None,
+                x_mm: 500.0,
+                y_mm: 500.0,
+                rotation_deg: None,
+                search_radius_mm: None,
+                search_step_mm: None,
+            },
+        );
+        assert_eq!(result["ok"], true, "unexpected: {result}");
+        assert_eq!(result["legal"], false, "unexpected: {result}");
+        let Screen::Editor(state) = &screen else { unreachable!() };
+        assert!(state.doc.footprints.is_empty());
+        assert!(state.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn probe_placement_search_finds_a_legal_spot_near_a_collision() {
+        let mut screen = editor_screen();
+        let template = a_template_with_pads(&screen, 1);
+        assert_eq!(place(&mut screen, &template, 0.0, 0.0)["ok"], true);
+        let result = probe_placement_json(
+            &screen,
+            crate::mcp::ProbePlacementArgs {
+                template: Some(template),
+                reference: None,
+                x_mm: 0.0,
+                y_mm: 0.0,
+                rotation_deg: None,
+                search_radius_mm: Some(8.0),
+                search_step_mm: Some(0.5),
+            },
+        );
+        assert_eq!(result["ok"], true, "unexpected: {result}");
+        assert_eq!(result["legal"], true, "unexpected: {result}");
+        assert!(result["suggested"].is_object(), "unexpected: {result}");
+        let Screen::Editor(state) = &screen else { unreachable!() };
+        assert_eq!(state.doc.footprints.len(), 1, "probe must not place");
+    }
+
+    #[test]
+    fn place_parts_atomic_with_pin_nets_and_one_undo() {
+        let mut screen = editor_screen();
+        let template = a_template_with_pads(&screen, 2);
+        let mut pins = std::collections::BTreeMap::new();
+        pins.insert("1".into(), "3V3".into());
+        pins.insert("2".into(), "GND".into());
+        let result = place_parts_write(
+            &mut screen,
+            crate::mcp::PlacePartsArgs {
+                parts: vec![
+                    crate::mcp::PlacePartSpec {
+                        template: template.clone(),
+                        x_mm: -8.0,
+                        y_mm: 0.0,
+                        rotation_deg: None,
+                        pins: Some(pins.clone()),
+                    },
+                    crate::mcp::PlacePartSpec {
+                        template: template.clone(),
+                        x_mm: 8.0,
+                        y_mm: 0.0,
+                        rotation_deg: None,
+                        pins: Some(pins),
+                    },
+                ],
+            },
+        );
+        assert_eq!(result["ok"], true, "unexpected: {result}");
+        assert_eq!(result["placed"].as_array().unwrap().len(), 2);
+        assert!(result["open_bridges"]["count"].is_number());
+        {
+            let Screen::Editor(state) = &mut screen else { unreachable!() };
+            assert_eq!(state.doc.footprints.len(), 2);
+            assert!(state.doc.find_net_by_name("3V3").is_some());
+            assert!(state.doc.find_net_by_name("GND").is_some());
+            assert_eq!(state.undo_stack.len(), 1, "batch must be one undo frame");
+            assert!(state.undo());
+            assert!(state.doc.footprints.is_empty());
+        }
+    }
+
+    #[test]
+    fn place_parts_overlapping_batch_commits_nothing() {
+        let mut screen = editor_screen();
+        let template = a_template_with_pads(&screen, 1);
+        let result = place_parts_write(
+            &mut screen,
+            crate::mcp::PlacePartsArgs {
+                parts: vec![
+                    crate::mcp::PlacePartSpec {
+                        template: template.clone(),
+                        x_mm: 0.0,
+                        y_mm: 0.0,
+                        rotation_deg: None,
+                        pins: None,
+                    },
+                    crate::mcp::PlacePartSpec {
+                        template,
+                        x_mm: 0.0,
+                        y_mm: 0.0,
+                        rotation_deg: None,
+                        pins: None,
+                    },
+                ],
+            },
+        );
+        assert!(result["error"].is_string(), "unexpected: {result}");
+        let Screen::Editor(state) = &screen else { unreachable!() };
+        assert!(state.doc.footprints.is_empty());
+        assert!(state.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn move_parts_relocates_both_and_one_undo_restores() {
+        let mut screen = editor_screen();
+        let template = a_template_with_pads(&screen, 1);
+        let placed = place_parts_write(
+            &mut screen,
+            crate::mcp::PlacePartsArgs {
+                parts: vec![
+                    crate::mcp::PlacePartSpec {
+                        template: template.clone(),
+                        x_mm: -8.0,
+                        y_mm: 0.0,
+                        rotation_deg: None,
+                        pins: None,
+                    },
+                    crate::mcp::PlacePartSpec {
+                        template,
+                        x_mm: 8.0,
+                        y_mm: 0.0,
+                        rotation_deg: None,
+                        pins: None,
+                    },
+                ],
+            },
+        );
+        let r1 = placed["placed"][0]["reference"].as_str().unwrap().to_string();
+        let r2 = placed["placed"][1]["reference"].as_str().unwrap().to_string();
+        let moved = move_parts_write(
+            &mut screen,
+            crate::mcp::MovePartsArgs {
+                parts: vec![
+                    crate::mcp::MovePartSpec { reference: r1, x_mm: -8.0, y_mm: 5.0, rotation_deg: None },
+                    crate::mcp::MovePartSpec { reference: r2, x_mm: 8.0, y_mm: 5.0, rotation_deg: Some(90.0) },
+                ],
+            },
+        );
+        assert_eq!(moved["ok"], true, "unexpected: {moved}");
+        {
+            let Screen::Editor(state) = &mut screen else { unreachable!() };
+            assert_eq!(state.doc.footprints[0].position.y, 5 * MM);
+            assert_eq!(state.doc.footprints[1].rotation_deg, 90.0);
+            assert!(state.undo());
+            assert_eq!(state.doc.footprints[0].position.y, 0);
+            assert_eq!(state.doc.footprints[1].rotation_deg, 0.0);
+        }
     }
 
     #[test]

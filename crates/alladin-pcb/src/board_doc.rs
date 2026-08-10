@@ -885,6 +885,51 @@ pub struct NetRecord {
     pub name: String,
 }
 
+/// One entry for [`BoardDoc::check_batch_placement`] /
+/// [`BoardDoc::place_batch`]: template + pose + optional pin→net map
+/// (`pins` as `(pin_number, net_name)` pairs).
+#[derive(Debug, Clone)]
+pub struct BatchPlaceSpec<'a> {
+    pub template: &'a FootprintTemplate,
+    pub position: Point,
+    pub rotation_deg: f64,
+    pub pins: &'a [(String, String)],
+}
+
+/// One entry for [`BoardDoc::check_batch_move`] / [`BoardDoc::move_batch`].
+#[derive(Debug, Clone)]
+pub struct BatchMoveSpec<'a> {
+    pub id: FootprintId,
+    pub template: &'a FootprintTemplate,
+    pub position: Point,
+    pub rotation_deg: f64,
+}
+
+/// Why a heterogeneous batch place (with optional pin nets) was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchPlaceError {
+    Placement(PlacementError),
+    Net(NetError),
+    Rename(RenameNetError),
+    UnknownPin { pin: String },
+    EmptyNetName,
+    /// Internal consistency failure (placed id missing from `footprints`).
+    Internal,
+}
+
+impl std::fmt::Display for BatchPlaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BatchPlaceError::Placement(e) => write!(f, "{e}"),
+            BatchPlaceError::Net(e) => write!(f, "{e}"),
+            BatchPlaceError::Rename(e) => write!(f, "{e}"),
+            BatchPlaceError::UnknownPin { pin } => write!(f, "template has no pin numbered \"{pin}\""),
+            BatchPlaceError::EmptyNetName => write!(f, "pin net name must not be empty"),
+            BatchPlaceError::Internal => write!(f, "internal batch-place inconsistency"),
+        }
+    }
+}
+
 /// Why a pin-to-net operation was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetError {
@@ -1469,6 +1514,257 @@ impl BoardDoc {
             ids.push(self.try_place_footprint(template, position, rotation_deg)?);
         }
         Ok(ids)
+    }
+
+    /// Dry-run a pose (new place or move). When `search_radius`/`search_step`
+    /// are set, walks a ring grid out to that radius and returns the
+    /// first legal pose (requested pose preferred when already legal).
+    /// Caps: radius ≤ 10mm, step ≥ 0.25mm. Same gates as
+    /// [`Self::check_placement`]; new templates also get the hard DFM
+    /// template floors that [`Self::try_place_footprint`] enforces.
+    pub fn find_nearest_legal_placement(
+        &self,
+        template: &FootprintTemplate,
+        position: Point,
+        rotation_deg: f64,
+        moving: Option<FootprintId>,
+        search_radius: Option<Unit>,
+        search_step: Option<Unit>,
+    ) -> Result<(Point, f64), PlacementError> {
+        if moving.is_none() {
+            if let Some((_, violation)) =
+                crate::footprint::template_dfm_hard_violations(&template.pads, &template.holes).into_iter().next()
+            {
+                return Err(PlacementError::Dfm(violation));
+            }
+        }
+        let check = |pos: Point, rot: f64| -> Result<(), PlacementError> {
+            if moving.is_none() {
+                for item in world_items(template, pos, rot) {
+                    if let Item::Hole { position: hole_position, drill } = item {
+                        if self.violates_hole_to_hole(hole_position, drill, None) {
+                            return Err(PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
+                        }
+                    }
+                }
+            }
+            self.check_placement(template, pos, rot, moving)
+        };
+
+        match check(position, rotation_deg) {
+            Ok(()) => return Ok((position, rotation_deg)),
+            Err(e) => {
+                if search_radius.is_none() {
+                    return Err(e);
+                }
+            }
+        }
+
+        let radius = search_radius.unwrap_or(0).clamp(0, 10 * MM);
+        let step = search_step.unwrap_or(MM / 2).max(MM / 4);
+        if radius == 0 {
+            return check(position, rotation_deg).map(|()| (position, rotation_deg));
+        }
+
+        let mut rad = step;
+        while rad <= radius {
+            // Axis-aligned ring, then diagonals -- cheap and deterministic.
+            let offsets = [
+                Point::new(rad, 0),
+                Point::new(-rad, 0),
+                Point::new(0, rad),
+                Point::new(0, -rad),
+                Point::new(rad, rad),
+                Point::new(-rad, rad),
+                Point::new(rad, -rad),
+                Point::new(-rad, -rad),
+            ];
+            for off in offsets {
+                let candidate = Point::new(position.x + off.x, position.y + off.y);
+                if check(candidate, rotation_deg).is_ok() {
+                    return Ok((candidate, rotation_deg));
+                }
+            }
+            // Extra samples on the ring at half-step cardinals for denser step.
+            let half = rad / 2;
+            if half > 0 {
+                for off in [
+                    Point::new(rad, half),
+                    Point::new(rad, -half),
+                    Point::new(-rad, half),
+                    Point::new(-rad, -half),
+                    Point::new(half, rad),
+                    Point::new(-half, rad),
+                    Point::new(half, -rad),
+                    Point::new(-half, -rad),
+                ] {
+                    let candidate = Point::new(position.x + off.x, position.y + off.y);
+                    if check(candidate, rotation_deg).is_ok() {
+                        return Ok((candidate, rotation_deg));
+                    }
+                }
+            }
+            rad += step;
+        }
+        Err(PlacementError::Collision(0))
+    }
+
+    /// Heterogeneous batch dry-run: every entry must clear
+    /// [`Self::check_placement`] against the live board, and no two new
+    /// members may collide with each other (scratch pads + courtyards,
+    /// same idea as [`Self::check_matrix_placement`]).
+    pub fn check_batch_placement(&self, specs: &[BatchPlaceSpec<'_>]) -> Result<(), PlacementError> {
+        for spec in specs {
+            if let Some((_, violation)) =
+                crate::footprint::template_dfm_hard_violations(&spec.template.pads, &spec.template.holes).into_iter().next()
+            {
+                return Err(PlacementError::Dfm(violation));
+            }
+            for item in world_items(spec.template, spec.position, spec.rotation_deg) {
+                if let Item::Hole { position: hole_position, drill } = item {
+                    if self.violates_hole_to_hole(hole_position, drill, None) {
+                        return Err(PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
+                    }
+                }
+            }
+            self.check_placement(spec.template, spec.position, spec.rotation_deg, None)?;
+        }
+
+        let resolver = self.resolver();
+        let mut scratch = Node::new();
+        let mut scratch_courtyards: Vec<Polygon> = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let courtyard = world_courtyard(spec.template, spec.position, spec.rotation_deg);
+            if scratch_courtyards.iter().any(|other| polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)) {
+                return Err(PlacementError::BodyOverlap);
+            }
+            scratch_courtyards.push(courtyard);
+            for item in world_items(spec.template, spec.position, spec.rotation_deg) {
+                if scratch.is_colliding(&item, resolver) {
+                    return Err(PlacementError::Collision(1));
+                }
+                scratch.add(item);
+            }
+        }
+        Ok(())
+    }
+
+    /// Places many heterogeneous templates in one indivisible step
+    /// (gate first via [`Self::check_batch_placement`]). Optional
+    /// `pins` maps (pin number → net name) are applied after place in
+    /// the same call; pin names are validated up front so a bad map
+    /// never leaves a half-placed board.
+    pub fn place_batch(&mut self, specs: &[BatchPlaceSpec<'_>]) -> Result<Vec<FootprintId>, BatchPlaceError> {
+        self.check_batch_placement(specs).map_err(BatchPlaceError::Placement)?;
+        for spec in specs {
+            for (pin, net_name) in spec.pins {
+                if net_name.trim().is_empty() {
+                    return Err(BatchPlaceError::EmptyNetName);
+                }
+                if !spec.template.pads.iter().any(|p| p.number == *pin) {
+                    return Err(BatchPlaceError::UnknownPin { pin: pin.clone() });
+                }
+            }
+        }
+
+        let mut ids = Vec::with_capacity(specs.len());
+        for spec in specs {
+            ids.push(
+                self.try_place_footprint(spec.template, spec.position, spec.rotation_deg)
+                    .map_err(BatchPlaceError::Placement)?,
+            );
+        }
+
+        // Templates slice for find_pads: build from the specs we just placed.
+        let templates: Vec<FootprintTemplate> = specs.iter().map(|s| s.template.clone()).collect();
+        for (spec, &id) in specs.iter().zip(ids.iter()) {
+            if spec.pins.is_empty() {
+                continue;
+            }
+            let reference = self.footprints.iter().find(|f| f.id == id).map(|f| f.reference.clone()).ok_or(BatchPlaceError::Internal)?;
+            for (pin, net_name) in spec.pins {
+                self.assign_pin_to_named_net(&templates, &reference, pin, net_name)?;
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Dry-run several simultaneous moves: each candidate is checked with
+    /// every mover excluded as an obstacle, then new poses are checked
+    /// against each other via scratch geometry.
+    pub fn check_batch_move(&self, specs: &[BatchMoveSpec<'_>]) -> Result<(), PlacementError> {
+        let excluding: Vec<FootprintId> = specs.iter().map(|s| s.id).collect();
+        for spec in specs {
+            self.check_placement_excluding(spec.template, spec.position, spec.rotation_deg, Some(spec.id), &excluding)?;
+        }
+
+        let resolver = self.resolver();
+        let mut scratch = Node::new();
+        let mut scratch_courtyards: Vec<Polygon> = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let courtyard = world_courtyard(spec.template, spec.position, spec.rotation_deg);
+            if scratch_courtyards.iter().any(|other| polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)) {
+                return Err(PlacementError::BodyOverlap);
+            }
+            scratch_courtyards.push(courtyard);
+            for item in world_items(spec.template, spec.position, spec.rotation_deg) {
+                if scratch.is_colliding(&item, resolver) {
+                    return Err(PlacementError::Collision(1));
+                }
+                scratch.add(item);
+            }
+        }
+        Ok(())
+    }
+
+    /// Moves many footprints in one indivisible step after
+    /// [`Self::check_batch_move`]. Wires on moved pads are ripped, same
+    /// as [`Self::try_move_footprint`].
+    pub fn move_batch(&mut self, specs: &[BatchMoveSpec<'_>]) -> Result<(), PlacementError> {
+        self.check_batch_move(specs)?;
+        for spec in specs {
+            self.commit_move_footprint(spec.id, spec.template, spec.position, spec.rotation_deg);
+        }
+        Ok(())
+    }
+
+    /// Find-or-create a net by exact display name (trimmed).
+    pub fn ensure_net(&mut self, name: &str) -> Result<NetId, RenameNetError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(RenameNetError::EmptyName);
+        }
+        if let Some(id) = self.find_net_by_name(trimmed) {
+            return Ok(id);
+        }
+        let id = self.create_net();
+        self.rename_net(id, trimmed)?;
+        Ok(id)
+    }
+
+    /// Assigns every pad of `reference`.`pin` (multi-pad siblings included)
+    /// onto the named net. Refuses if any sibling already sits on a
+    /// different named net ([`NetError::AlreadyOnDifferentNets`]).
+    pub fn assign_pin_to_named_net(
+        &mut self,
+        templates: &[FootprintTemplate],
+        reference: &str,
+        pin: &str,
+        net_name: &str,
+    ) -> Result<NetId, BatchPlaceError> {
+        let pads = self.find_pads(templates, reference, pin);
+        if pads.is_empty() {
+            return Err(BatchPlaceError::UnknownPin { pin: pin.to_string() });
+        }
+        let net = self.ensure_net(net_name).map_err(BatchPlaceError::Rename)?;
+        for &pad in &pads {
+            let current = self.pad_net(pad).map_err(BatchPlaceError::Net)?;
+            match current {
+                Some(existing) if existing != net => return Err(BatchPlaceError::Net(NetError::AlreadyOnDifferentNets)),
+                _ => self.set_pad_net(pad, Some(net)).map_err(BatchPlaceError::Net)?,
+            }
+        }
+        Ok(net)
     }
 
     /// Places `template` **without** [`Self::check_placement`]'s
@@ -3679,6 +3975,84 @@ mod tests {
         assert!(board.place_matrix(&template, &positions, 0.0).is_err());
         assert_eq!(board.footprints.len(), footprints_before, "a rejected matrix must not partially commit");
         assert_eq!(board.node.iter().count(), node_items_before);
+    }
+
+    #[test]
+    fn find_nearest_legal_placement_returns_requested_pose_when_already_legal() {
+        let board = test_board();
+        let template = two_pin_template();
+        let (pos, rot) = board
+            .find_nearest_legal_placement(&template, Point::new(0, 0), 0.0, None, None, None)
+            .expect("open center must be legal");
+        assert_eq!(pos, Point::new(0, 0));
+        assert_eq!(rot, 0.0);
+    }
+
+    #[test]
+    fn find_nearest_legal_placement_searches_when_requested_pose_collides() {
+        let mut board = test_board();
+        let template = two_pin_template();
+        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let (pos, _) = board
+            .find_nearest_legal_placement(&template, Point::new(0, 0), 0.0, None, Some(8 * MM), Some(MM / 2))
+            .expect("ring search must find a free spot");
+        assert_ne!(pos, Point::new(0, 0));
+        board.try_place_footprint(&template, pos, 0.0).expect("suggested pose must actually place");
+    }
+
+    #[test]
+    fn place_batch_places_two_parts_and_assigns_pin_nets() {
+        let mut board = test_board();
+        let template = two_pin_template();
+        let pins_a = vec![("1".into(), "3V3".into()), ("2".into(), "GND".into())];
+        let pins_b = vec![("1".into(), "3V3".into()), ("2".into(), "GND".into())];
+        let specs = [
+            BatchPlaceSpec { template: &template, position: Point::new(-8 * MM, 0), rotation_deg: 0.0, pins: &pins_a },
+            BatchPlaceSpec { template: &template, position: Point::new(8 * MM, 0), rotation_deg: 0.0, pins: &pins_b },
+        ];
+        let ids = board.place_batch(&specs).expect("batch must place");
+        assert_eq!(ids.len(), 2);
+        assert!(board.find_net_by_name("3V3").is_some());
+        assert!(board.find_net_by_name("GND").is_some());
+        let templates = vec![template.clone()];
+        let r1 = board.footprints[0].reference.clone();
+        let pad = board.find_pad(&templates, &r1, "1").unwrap();
+        assert_eq!(board.pad_net(pad).unwrap(), board.find_net_by_name("3V3"));
+    }
+
+    #[test]
+    fn place_batch_rejects_overlapping_members_and_commits_nothing() {
+        let mut board = test_board();
+        let template = two_pin_template();
+        let empty: [(String, String); 0] = [];
+        let specs = [
+            BatchPlaceSpec { template: &template, position: Point::new(0, 0), rotation_deg: 0.0, pins: &empty },
+            BatchPlaceSpec { template: &template, position: Point::new(0, 0), rotation_deg: 0.0, pins: &empty },
+        ];
+        assert!(board.place_batch(&specs).is_err());
+        assert!(board.footprints.is_empty());
+    }
+
+    #[test]
+    fn move_batch_relocates_both_parts() {
+        let mut board = test_board();
+        let template = two_pin_template();
+        let empty: [(String, String); 0] = [];
+        let ids = board
+            .place_batch(&[
+                BatchPlaceSpec { template: &template, position: Point::new(-8 * MM, 0), rotation_deg: 0.0, pins: &empty },
+                BatchPlaceSpec { template: &template, position: Point::new(8 * MM, 0), rotation_deg: 0.0, pins: &empty },
+            ])
+            .unwrap();
+        board
+            .move_batch(&[
+                BatchMoveSpec { id: ids[0], template: &template, position: Point::new(-8 * MM, 5 * MM), rotation_deg: 0.0 },
+                BatchMoveSpec { id: ids[1], template: &template, position: Point::new(8 * MM, 5 * MM), rotation_deg: 90.0 },
+            ])
+            .expect("batch move");
+        assert_eq!(board.footprints[0].position, Point::new(-8 * MM, 5 * MM));
+        assert_eq!(board.footprints[1].position, Point::new(8 * MM, 5 * MM));
+        assert_eq!(board.footprints[1].rotation_deg, 90.0);
     }
 
     #[test]

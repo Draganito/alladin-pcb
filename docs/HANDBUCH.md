@@ -521,7 +521,7 @@ GUI. Es gibt keinen klassischen Autorouter.
    kopieren (`.cursor/` und `.cursorignore`).
 3. MCP-URL: `http://127.0.0.1:8642/mcp`.
 
-### 17.2 Tool-Referenz (19 Tools)
+### 17.2 Tool-Referenz (22 Tools)
 
 Read-only (immer verfügbar):
 
@@ -534,6 +534,7 @@ Read-only (immer verfügbar):
 | `check_board` | Prüfbericht (Netzliste komplett? Kupfer verbunden? Zonen aktuell? DFM-Befunde) |
 | `get_routing_scene` | Pads, Tracks/Vias, offene Kupfer-Brücken, Routing-Regeln |
 | `probe_route` | Batch-Clearance-Check für vorgeschlagene Polylinien (+ Vias) |
+| `probe_placement` | Dry-Run Place/Move-DFM-Probe; optional `search_radius_mm` für nächsten legalen Spot |
 | `suggest_route` | Serverseitiger octilinearer A*-Pfadfinder (45°-Stil, keine 90°-Ecken); Schreibrecht nur mit `commit=true` nötig |
 
 Schreibend (brauchen `--allow-ai-write`):
@@ -544,6 +545,8 @@ Schreibend (brauchen `--allow-ai-write`):
 | `download_lcsc_part` | LCSC → Parts-DB |
 | `place_footprint` | Template platzieren (dieselben DFM-Gates wie die GUI) |
 | `move_footprint` | Platziertes Teil verschieben/drehen |
+| `place_parts` | Atomares Mehrfach-Platzieren (max. 50, ein Undo); optional `pins`-Netzmap; Antwort mit `open_bridges`-Score |
+| `move_parts` | Atomares Mehrfach-Verschieben (max. 50, ein Undo); Antwort mit `open_bridges`-Score |
 | `remove_footprint` | Platziertes Teil entfernen |
 | `connect_pins` | Netzliste (zwei Pins verbinden) |
 | `disconnect_pin` | Einen Pin vom Netz nehmen |
@@ -553,7 +556,11 @@ Schreibend (brauchen `--allow-ai-write`):
 | `commit_route` | Geprüfte Kupferbahn legen (gleiche Gates wie GUI-Preview) |
 | `ripup_wire` | Bahn nahe einem Punkt oder alles Kupfer eines Netzes entfernen |
 
-### 17.3 Kupfer-Routing-Ablauf
+### 17.3 Floorplan-Ablauf
+
+Bevorzugt `probe_placement` (optional mit `search_radius_mm`) als Dry-Run, dann `place_parts` / `move_parts` für atomare Batches (ein Ctrl+Z). Optional pro Teil `pins` (`{"1":"GND","2":"3V3"}`) setzt Netze im selben Schritt. Der `open_bridges`-Score in der Antwort (`sum_mm` / `max_mm` / `top`) ist das Ratsnest-Signal für vorausschauendes Platzieren — vor dem Routen klein halten. Einzelnes `place_footprint` / `move_footprint` bleibt für Einzeledits.
+
+### 17.4 Kupfer-Routing-Ablauf
 
 Schnellster Weg: `suggest_route` — ein serverseitiger octilinearer A*-Pfadfinder. Netz plus zwei Pins (`"REF.PIN"`) oder Punkte angeben, und er sucht einen legalen 45°-Stil-Pfad auf einer Lage (jedes Teilstück horizontal/vertikal/45°, keine 90°-Ecken, keine Vias) mit exakt denselben Clearance- und Rand-Gates wie unten — das Ergebnis ist direkt commit-fähig. Mit `commit=true` wird es im selben Aufruf gelegt, sonst das zurückgegebene `route_candidate` an `commit_route` geben. Stellschrauben: `step_mm` (Gitterweite, Standard 0,5), `bend_penalty_mm` (höher = gerader), `max_expansions` (Suchbudget).
 

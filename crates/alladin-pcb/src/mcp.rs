@@ -81,6 +81,59 @@ pub struct MoveFootprintArgs {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct ProbePlacementArgs {
+    /// Template name for a new place probe (exactly as `list_parts`).
+    /// Mutually exclusive with `reference`.
+    pub template: Option<String>,
+    /// Existing footprint reference for a move probe. Mutually
+    /// exclusive with `template`.
+    pub reference: Option<String>,
+    pub x_mm: f64,
+    pub y_mm: f64,
+    /// Rotation in degrees; omit for 0 (new place) or keep current (move).
+    pub rotation_deg: Option<f64>,
+    /// When set, search for the nearest legal pose within this radius
+    /// (mm, capped at 10). Omit to only check the requested pose.
+    pub search_radius_mm: Option<f64>,
+    /// Grid step for the search (mm); default 0.5, minimum 0.25.
+    pub search_step_mm: Option<f64>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PlacePartSpec {
+    /// Template name exactly as `list_parts` reports it.
+    pub template: String,
+    pub x_mm: f64,
+    pub y_mm: f64,
+    pub rotation_deg: Option<f64>,
+    /// Optional pin-number → net-name map, e.g. `{"1":"GND","2":"3V3"}`.
+    /// Applied in the same undo step as the place. Multi-pad pins
+    /// (same number) all join the net together.
+    pub pins: Option<std::collections::BTreeMap<String, String>>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct PlacePartsArgs {
+    /// Up to 50 parts to place atomically (all-or-nothing, one Ctrl+Z).
+    pub parts: Vec<PlacePartSpec>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct MovePartSpec {
+    pub reference: String,
+    pub x_mm: f64,
+    pub y_mm: f64,
+    /// Omit to keep each part's current rotation.
+    pub rotation_deg: Option<f64>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct MovePartsArgs {
+    /// Up to 50 footprints to move atomically (all-or-nothing, one Ctrl+Z).
+    pub parts: Vec<MovePartSpec>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct RemoveFootprintArgs {
     /// Reference designator of the footprint to remove, e.g. `"C7"`.
     pub reference: String,
@@ -221,6 +274,12 @@ pub enum McpQuery {
     PlaceFootprint { args: PlaceFootprintArgs, reply: oneshot::Sender<String> },
     /// Moves/rotates an already-placed footprint.
     MoveFootprint { args: MoveFootprintArgs, reply: oneshot::Sender<String> },
+    /// Dry-run placement/move probe (+ optional nearest-legal search).
+    ProbePlacement { args: ProbePlacementArgs, reply: oneshot::Sender<String> },
+    /// Atomic multi-place with optional pin→net maps (one undo).
+    PlaceParts { args: PlacePartsArgs, reply: oneshot::Sender<String> },
+    /// Atomic multi-move (one undo).
+    MoveParts { args: MovePartsArgs, reply: oneshot::Sender<String> },
     /// Removes a placed footprint (and its wires/pads).
     RemoveFootprint { args: RemoveFootprintArgs, reply: oneshot::Sender<String> },
     /// Takes one pin off its net.
@@ -373,6 +432,33 @@ impl AlladinMcp {
         self.ask(|reply| McpQuery::MoveFootprint { args, reply }).await
     }
 
+    #[tool(
+        description = "Read-only placement probe: same JLCPCB DFM gates as place_footprint/move_footprint, but does not mutate the board. Pass template=\"...\" to probe a new place, or reference=\"R1\" to probe moving an existing part. Optional search_radius_mm (≤10) finds the nearest legal pose on a grid (search_step_mm default 0.5). Returns legal=true with x/y/rotation, or legal=false with reason; when a search relocates, suggested holds the legal pose. Prefer this (and place_parts) over blind spiral retries."
+    )]
+    async fn probe_placement(&self, Parameters(args): Parameters<ProbePlacementArgs>) -> Result<CallToolResult, McpError> {
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::ProbePlacement { args, reply }).await
+    }
+
+    #[tool(
+        description = "Places many parts in one atomic step (max 50): all-or-nothing against the board and each other, one Ctrl+Z undo. Each entry: {template, x_mm, y_mm, rotation_deg?, pins?: {\"1\":\"GND\",\"2\":\"3V3\"}}. Optional pins assign named nets in the same undo (multi-pad pins join together). Reply includes placed[] references plus open_bridges {sum_mm,max_mm,count,top} so you can judge the floorplan ratsnest without a separate get_routing_scene. Prefer over N× place_footprint."
+    )]
+    async fn place_parts(&self, Parameters(args): Parameters<PlacePartsArgs>) -> Result<CallToolResult, McpError> {
+        if let Some(refusal) = self.require_write_access() {
+            return refusal;
+        }
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::PlaceParts { args, reply }).await
+    }
+
+    #[tool(
+        description = "Moves many footprints in one atomic step (max 50): all-or-nothing DFM gate with movers excluded as obstacles, one Ctrl+Z undo. Each entry: {reference, x_mm, y_mm, rotation_deg?}. Wires on moved pads are ripped (same as move_footprint). Reply includes moved[] plus open_bridges score. Prefer over N× move_footprint when rearranging a floorplan."
+    )]
+    async fn move_parts(&self, Parameters(args): Parameters<MovePartsArgs>) -> Result<CallToolResult, McpError> {
+        if let Some(refusal) = self.require_write_access() {
+            return refusal;
+        }
+        self.ask_with_timeout(SLOW_REPLY_TIMEOUT, |reply| McpQuery::MoveParts { args, reply }).await
+    }
+
     #[tool(description = "Removes a placed footprint by reference, along with its pads, holes, and any wires ending on them. Nets left without pads are pruned. The human can undo this with Ctrl+Z.")]
     async fn remove_footprint(&self, Parameters(args): Parameters<RemoveFootprintArgs>) -> Result<CallToolResult, McpError> {
         if let Some(refusal) = self.require_write_access() {
@@ -469,24 +555,26 @@ impl ServerHandler for AlladinMcp {
     fn get_info(&self) -> ServerInfo {
         let write_note = if self.allow_ai_write {
             "Write tools are ENABLED for this process (launched with --allow-ai-write): \
-             new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
-             disconnect_pin, add_pin_stitching_via, rename_net, save_board, commit_route, \
-             ripup_wire, and suggest_route with commit=true act directly on the live \
-             board/parts DB."
+             new_board, download_lcsc_part, place/move/remove_footprint, place_parts, \
+             move_parts, connect_pins, disconnect_pin, add_pin_stitching_via, rename_net, \
+             save_board, commit_route, ripup_wire, and suggest_route with commit=true act \
+             directly on the live board/parts DB."
         } else {
-            "Write tools (new_board, download_lcsc_part, place/move/remove_footprint, connect_pins, \
-             disconnect_pin, add_pin_stitching_via, rename_net, save_board, commit_route, \
-             ripup_wire, suggest_route with commit=true) are DISABLED for \
-             this process -- every one of them will refuse with an explanation. Relaunch \
-             alladin-pcb with --allow-ai-write to enable them."
+            "Write tools (new_board, download_lcsc_part, place/move/remove_footprint, \
+             place_parts, move_parts, connect_pins, disconnect_pin, add_pin_stitching_via, \
+             rename_net, save_board, commit_route, ripup_wire, suggest_route with commit=true) \
+             are DISABLED for this process -- every one of them will refuse with an \
+             explanation. Relaunch alladin-pcb with --allow-ai-write to enable them."
         };
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(format!(
-            "MCP surface for a running alladin-pcb GUI: board setup, parts download + placement, \
+            "MCP surface for a running alladin-pcb GUI: board setup, parts download + placement \
+             (prefer probe_placement + place_parts/move_parts for floorplans), \
              netlist wiring, manual-style copper routing (get_routing_scene / probe_route / \
              commit_route — same 45°-clearance gates as the GUI, not an autorouter), and \
              self-verification (check_board), with read-only supports (get_footprints, get_nets, \
-             board_summary, list_parts). Writes run through the same JLCPCB DFM gates and Ctrl+Z \
-             undo history as the human's own GUI gestures. Zone fill stays in the GUI. {write_note}"
+             board_summary, list_parts, probe_placement). Writes run through the same JLCPCB DFM \
+             gates and Ctrl+Z undo history as the human's own GUI gestures. Zone fill stays in \
+             the GUI. {write_note}"
         ))
     }
 }
