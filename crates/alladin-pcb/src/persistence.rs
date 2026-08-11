@@ -536,7 +536,6 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
             courtyard: world_courtyard(template, sf.position, sf.rotation_deg),
             assembly_drills: world_assembly_drills(template, sf.position, sf.rotation_deg),
             pin1_marker: sf.pin1_marker,
-            pad_numbers: template.pads.iter().map(|p| p.number.clone()).collect(),
         });
     }
 

@@ -259,10 +259,6 @@ pub struct PlacedFootprint {
     /// same "components are front-side" assumption the courtyard
     /// checks already make).
     pub pin1_marker: Option<Point>,
-    /// Pin numbers parallel to [`Self::pad_item_ids`] (from the template
-    /// at place/load time) — used so multi-pad pins skip each other in
-    /// thermal spoke probes without needing a live template registry.
-    pub pad_numbers: Vec<String>,
 }
 
 impl PlacedFootprint {
@@ -1496,7 +1492,6 @@ impl BoardDoc {
             courtyard: world_courtyard(template, position, rotation_deg),
             assembly_drills: world_assembly_drills(template, position, rotation_deg),
             pin1_marker: None,
-            pad_numbers: template.pads.iter().map(|p| p.number.clone()).collect(),
         });
         Ok(id)
     }
@@ -1909,7 +1904,6 @@ impl BoardDoc {
             courtyard: world_courtyard(template, position, rotation_deg),
             assembly_drills: world_assembly_drills(template, position, rotation_deg),
             pin1_marker: None,
-            pad_numbers: template.pads.iter().map(|p| p.number.clone()).collect(),
         });
         id
     }
@@ -2032,13 +2026,14 @@ impl BoardDoc {
     }
 
     /// Thermal pads need [`thermal::GAP`] of pour-ring room against
-    /// other pads on the same layer, and ≥[`MIN_FREE_SPOKE_DIRS`] free
-    /// spoke corridors against pads/vias/tracks/holes (sibling pads of
-    /// the same pin number excluded). Runs for every candidate Thermal
-    /// pad, including same-net pairs that `query_colliding` skips.
-    /// `extra_obstacles` are candidate pads not yet in the node (batch
-    /// co-members). `existing_pad_nets` is unused for the geometry check
-    /// but kept so call sites stay aligned with placement's pad order.
+    /// pads of **other** footprints (and ≥[`MIN_FREE_SPOKE_DIRS`] free
+    /// spoke corridors vs pads/vias/tracks/holes). Pads of the same
+    /// footprint never count against each other — package pitch (QFN
+    /// 0.4 mm etc.) is not a board-level pour-CBC concern; only
+    /// same-pin siblings previously skipped that, which still left
+    /// dense ICs unplaceable. `extra_obstacles` are other batch
+    /// members not yet in the node. `existing_pad_nets` unused for
+    /// geometry but kept for call-site alignment.
     fn thermal_keepout_violated(
         &self,
         template: &FootprintTemplate,
@@ -2050,8 +2045,20 @@ impl BoardDoc {
     ) -> bool {
         let candidate_items = world_items(template, position, rotation_deg);
         let spoke_width = self.thermal_spoke_width();
+        // Every pad of this footprint is excluded from spoke probes
+        // (self + package neighbours). Holes on the template still count.
+        let exclude_centers: Vec<(Unit, Unit)> = candidate_items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Pad { shape, .. } => {
+                    let c = shape.center();
+                    Some((c.x, c.y))
+                }
+                _ => None,
+            })
+            .collect();
 
-        for (pad_index, item) in candidate_items.iter().enumerate() {
+        for item in &candidate_items {
             let Item::Pad { shape: c_shape, zone_connection: c_conn, layer: c_layer, .. } = item else { continue };
             let c_keep = thermal_keepout_mm(*c_conn);
             for (id, other) in self.node.iter_with_ids() {
@@ -2073,32 +2080,9 @@ impl BoardDoc {
                     return true;
                 }
             }
-            // Gap keepout vs other candidates in the same batch/place.
+            // Gap keepout vs other footprints in the same batch only —
+            // not vs this template's own pads.
             if c_keep > 0 {
-                for (other_index, other) in candidate_items.iter().enumerate() {
-                    if other_index == pad_index {
-                        continue;
-                    }
-                    let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
-                        continue;
-                    };
-                    if *o_layer != *c_layer {
-                        continue;
-                    }
-                    // Sibling pads of the same pin never pay gap keepout
-                    // against each other (one electrical pin).
-                    if template.pads.get(pad_index).map(|p| &p.number) == template.pads.get(other_index).map(|p| &p.number) {
-                        continue;
-                    }
-                    let o_keep = thermal_keepout_mm(*o_conn);
-                    if o_keep == 0 && c_keep == 0 {
-                        continue;
-                    }
-                    let clearance = JlcpcbClearance::PAD_TO_PAD.max(c_keep + o_keep);
-                    if pad_shapes_closer_than(c_shape, o_shape, clearance) {
-                        return true;
-                    }
-                }
                 for other in extra_obstacles {
                     let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
                         continue;
@@ -2120,27 +2104,11 @@ impl BoardDoc {
             if *c_conn != ZoneConnection::Thermal {
                 continue;
             }
-            // Spoke-corridor freedom: ≥2 free pad-local directions.
-            let number = template.pads.get(pad_index).map(|p| p.number.as_str()).unwrap_or("");
-            let exclude_centers: Vec<(Unit, Unit)> = template
-                .pads
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.number == number)
-                .filter_map(|(i, _)| match candidate_items.get(i) {
-                    Some(Item::Pad { shape, .. }) => {
-                        let c = shape.center();
-                        Some((c.x, c.y))
-                    }
-                    _ => None,
-                })
-                .collect();
             let node_obstacles = self.node.iter_with_ids().filter(|(id, _)| !exclude_ids.contains(id)).map(|(_, item)| item);
-            let extras = extra_obstacles.iter().chain(candidate_items.iter().enumerate().filter(|(i, _)| *i != pad_index).map(|(_, it)| it));
-            // Exclude other candidate pads of this footprint from the
-            // "extra" chain when they are siblings (already in exclude_centers);
-            // free_spoke_directions skips exclude_centers for Pad items.
-            let obstacle_iter = node_obstacles.chain(extras);
+            // Own-footprint holes (NPTH) still obstruct spokes; pads are
+            // skipped via exclude_centers.
+            let own_non_pads = candidate_items.iter().filter(|it| !matches!(it, Item::Pad { .. }));
+            let obstacle_iter = node_obstacles.chain(extra_obstacles.iter()).chain(own_non_pads);
             let free = free_spoke_directions(c_shape, *c_layer, spoke_width, obstacle_iter, &exclude_centers);
             if free < MIN_FREE_SPOKE_DIRS {
                 return true;
@@ -2149,30 +2117,26 @@ impl BoardDoc {
         false
     }
 
-    /// Sibling/self centers for thermal spoke probes, keyed by pad center.
+    /// Centers skipped by thermal spoke probes: every pad of the same
+    /// footprint (package-internal copper is not a pour-CBC obstacle).
     fn thermal_exclude_map(&self) -> std::collections::HashMap<(Unit, Unit), Vec<(Unit, Unit)>> {
         let mut map = std::collections::HashMap::new();
         for fp in &self.footprints {
-            for (i, &pad_id) in fp.pad_item_ids.iter().enumerate() {
+            let all_centers: Vec<(Unit, Unit)> = fp
+                .pad_item_ids
+                .iter()
+                .filter_map(|&id| match self.node.get(id) {
+                    Some(Item::Pad { shape, .. }) => {
+                        let c = shape.center();
+                        Some((c.x, c.y))
+                    }
+                    _ => None,
+                })
+                .collect();
+            for &pad_id in &fp.pad_item_ids {
                 let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else { continue };
                 let c = shape.center();
-                let Some(number) = fp.pad_numbers.get(i) else {
-                    map.insert((c.x, c.y), self_exclude(c));
-                    continue;
-                };
-                let siblings: Vec<(Unit, Unit)> = fp
-                    .pad_numbers
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, n)| *n == number)
-                    .filter_map(|(j, _)| {
-                        let id = *fp.pad_item_ids.get(j)?;
-                        let Item::Pad { shape, .. } = self.node.get(id)? else { return None };
-                        let p = shape.center();
-                        Some((p.x, p.y))
-                    })
-                    .collect();
-                map.insert((c.x, c.y), siblings);
+                map.insert((c.x, c.y), all_centers.clone());
             }
         }
         map
@@ -6116,6 +6080,30 @@ mod tests {
         board
             .try_place_footprint(&t, Point::new(0, 0), 0.0)
             .expect("same-pin sibling thermals must not block each other's spokes");
+    }
+
+    #[test]
+    fn dense_qfn_thermals_on_same_footprint_may_place() {
+        // 0.4mm-pitch signal pads are closer than 2× thermal::GAP; they
+        // must not ThermalKeepout each other (package pitch ≠ pour CBC).
+        let mut board = test_board();
+        let mut t = single_pad_template("DenseQfn", ZoneConnection::Thermal);
+        t.pads = (0..4)
+            .map(|i| crate::footprint::PadTemplate {
+                offset: Point::new(i * 400_000, 0),
+                radius: 100_000,
+                layer: LayerId::FCu,
+                number: format!("{}", i + 1),
+                shape: crate::footprint::PadShapeKind::Rect { width: 850_000, height: 200_000 },
+                rotation_deg: 90.0,
+                hole_diameter: None,
+                pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
+            })
+            .collect();
+        board
+            .try_place_footprint(&t, Point::new(0, 0), 0.0)
+            .expect("QFN-pitch thermals on one footprint must place");
     }
 
     #[test]

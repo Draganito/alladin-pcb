@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use alladin_core::{LayerId, ZoneConnection};
 use alladin_geom::{Point, Unit};
 
-use crate::footprint::{Courtyard, FootprintTemplate, HoleTemplate, PadShapeKind, PadTemplate};
+use crate::footprint::{apply_zone_connection_heuristic, Courtyard, FootprintTemplate, HoleTemplate, PadShapeKind, PadTemplate};
 
 /// The GUI's "Place part" category tree (`crate::app`) groups every
 /// part with no real `category` (`None`, see [`PartRecord::category`]'s
@@ -548,6 +548,12 @@ impl PartsDb {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        // Geometry is source of truth for pour connection — re-apply so
+        // parts imported before the EP/Solid heuristic (or with a stale
+        // `thermal` column on a large center pad) still place and fill
+        // correctly. Stored Solid/Thermal is overwritten on load.
+        let mut pads = pads;
+        apply_zone_connection_heuristic(&mut pads);
 
         let mut hole_stmt = self.conn.prepare("SELECT offset_x, offset_y, drill FROM part_holes WHERE part_id = ?1 ORDER BY hole_index")?;
         let holes = hole_stmt
@@ -736,10 +742,11 @@ mod tests {
             },
             PadTemplate {
                 offset: Point::new(MM, 0),
-                radius: 300_000,
+                radius: MM,
                 layer: LayerId::BCu,
                 number: "A2".to_string(),
-                shape: PadShapeKind::Oval { width: 600_000, height: 300_000 },
+                // ≥ thermal::SOLID_MIN_SIDE so load-time heuristic keeps Solid.
+                shape: PadShapeKind::Oval { width: 2_500_000, height: 2_500_000 },
                 rotation_deg: 0.0,
                 hole_diameter: Some(400_000),
                 pin_name: None,
@@ -756,12 +763,12 @@ mod tests {
         assert_eq!(loaded[0].hole_diameter, None, "an SMD pad must round-trip with no hole");
         assert_eq!(loaded[0].pin_name, Some("GND".to_string()), "a pin's schematic function name must round-trip");
         assert_eq!(loaded[1].number, "A2");
-        assert_eq!(loaded[1].shape, PadShapeKind::Oval { width: 600_000, height: 300_000 });
+        assert_eq!(loaded[1].shape, PadShapeKind::Oval { width: 2_500_000, height: 2_500_000 });
         assert_eq!(loaded[1].layer, LayerId::BCu);
         assert_eq!(loaded[1].hole_diameter, Some(400_000), "a through-hole pad's drill size must round-trip");
         assert_eq!(loaded[1].pin_name, None, "a pin with no known function name must round-trip as None");
         assert_eq!(loaded[0].zone_connection, ZoneConnection::Thermal);
-        assert_eq!(loaded[1].zone_connection, ZoneConnection::Solid, "zone_connection must round-trip through part_pads");
+        assert_eq!(loaded[1].zone_connection, ZoneConnection::Solid, "large pad must stay Solid after load-time heuristic");
     }
 
     #[test]

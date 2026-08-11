@@ -130,21 +130,81 @@ fn pad_longest_side(pad: &PadTemplate) -> Unit {
     }
 }
 
+fn pad_area_nm2(pad: &PadTemplate) -> i64 {
+    match pad.shape {
+        PadShapeKind::Circle => {
+            let d = pad.radius * 2;
+            d * d
+        }
+        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => width * height,
+    }
+}
+
+fn looks_like_exposed_pad_name(pad: &PadTemplate) -> bool {
+    let name = pad.pin_name.as_deref().unwrap_or(pad.number.as_str());
+    let n = name.trim().to_ascii_uppercase();
+    if n.contains("EXPOSED") {
+        return true;
+    }
+    matches!(
+        n.as_str(),
+        "EP" | "E.P." | "THERMAL" | "THERMAL PAD" | "THERMAL_PAD" | "PAD" | "GNDPAD" | "GND_PAD"
+    ) || (n.starts_with("EP") && n.chars().nth(2).is_none_or(|c| !c.is_ascii_alphanumeric()))
+}
+
 /// Assign [`PadTemplate::zone_connection`] from pad geometry / EP grids.
-/// Call once when a part is imported or first saved — not on every fill.
+/// Call on LCSC import and whenever a part is loaded from the parts DB
+/// (so legacy rows downloaded before this rule still get a correct EP).
 ///
 /// Rules (first match wins per pad):
 /// 1. Several pads share the same `number` (exposed-pad paste grid) → Solid
-/// 2. Longest side ≥ [`thermal::SOLID_MIN_SIDE`] → Solid
-/// 3. Else Thermal
+/// 2. Pad / pin name looks like an exposed/thermal pad → Solid
+/// 3. Longest side ≥ [`thermal::SOLID_MIN_SIDE`] → Solid
+/// 4. Single dominant center pad (area ≥ 4× the median of the others,
+///    near the pad centroid) → Solid — catches QFN EPs numbered as a
+///    plain pin (e.g. RP2040 pad `57`) even when slightly under the
+///    size floor after EasyEDA rounding
+/// 5. Else Thermal
 pub fn apply_zone_connection_heuristic(pads: &mut [PadTemplate]) {
     let mut number_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for pad in pads.iter() {
         *number_counts.entry(pad.number.clone()).or_default() += 1;
     }
-    for pad in pads.iter_mut() {
+
+    let areas: Vec<i64> = pads.iter().map(pad_area_nm2).collect();
+    let mut dominant_center = vec![false; pads.len()];
+    if pads.len() >= 3 {
+        let (sum_x, sum_y) = pads.iter().fold((0_i64, 0_i64), |(sx, sy), p| (sx + p.offset.x, sy + p.offset.y));
+        let n = pads.len() as i64;
+        let cx = sum_x / n;
+        let cy = sum_y / n;
+        let span = pads.iter().fold(0_i64, |acc, p| {
+            let dx = (p.offset.x - cx).abs();
+            let dy = (p.offset.y - cy).abs();
+            acc.max(dx).max(dy)
+        });
+        let near = (span / 5).max(MM / 10); // ≤20% of half-span, min 0.1mm
+        for i in 0..pads.len() {
+            let mut others: Vec<i64> = areas.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, a)| *a).collect();
+            others.sort_unstable();
+            let median = others[others.len() / 2];
+            if median <= 0 {
+                continue;
+            }
+            let near_center = (pads[i].offset.x - cx).abs() <= near && (pads[i].offset.y - cy).abs() <= near;
+            if near_center && areas[i] >= median.saturating_mul(4) {
+                dominant_center[i] = true;
+            }
+        }
+    }
+
+    for (i, pad) in pads.iter_mut().enumerate() {
         let ep_grid = number_counts.get(&pad.number).copied().unwrap_or(0) > 1;
-        pad.zone_connection = if ep_grid || pad_longest_side(pad) >= thermal::SOLID_MIN_SIDE {
+        pad.zone_connection = if ep_grid
+            || looks_like_exposed_pad_name(pad)
+            || pad_longest_side(pad) >= thermal::SOLID_MIN_SIDE
+            || dominant_center[i]
+        {
             ZoneConnection::Solid
         } else {
             ZoneConnection::Thermal
@@ -1012,5 +1072,39 @@ mod tests {
         assert_eq!(pads[1].zone_connection, ZoneConnection::Solid, "EP grid pad 9");
         assert_eq!(pads[2].zone_connection, ZoneConnection::Solid, "EP grid pad 9");
         assert_eq!(pads[3].zone_connection, ZoneConnection::Solid, "large pad ≥ 2mm");
+    }
+
+    #[test]
+    fn zone_connection_heuristic_marks_named_ep_and_dominant_center_solid() {
+        let mut named = vec![PadTemplate {
+            offset: Point::new(0, 0),
+            radius: mm(0.3),
+            layer: LayerId::FCu,
+            number: "EP".into(),
+            shape: PadShapeKind::Circle,
+            rotation_deg: 0.0,
+            hole_diameter: None,
+            pin_name: None,
+            zone_connection: ZoneConnection::Thermal,
+        }];
+        apply_zone_connection_heuristic(&mut named);
+        assert_eq!(named[0].zone_connection, ZoneConnection::Solid, "pad number EP");
+
+        // RP2040-style: many tiny edge pads + one large center numbered "57".
+        let mut qfn = Vec::new();
+        qfn.push({
+            let mut ep = rect_pad_template(mm(3.1), mm(3.1), 0.0);
+            ep.number = "57".into();
+            ep
+        });
+        for i in 0..8 {
+            let mut p = rect_pad_template(mm(0.85), mm(0.2), 0.0);
+            p.number = format!("{}", i + 1);
+            p.offset = Point::new(mm(-2.6 + 0.4 * i as f64), mm(-3.4));
+            qfn.push(p);
+        }
+        apply_zone_connection_heuristic(&mut qfn);
+        assert_eq!(qfn[0].zone_connection, ZoneConnection::Solid, "dominant center / ≥2mm EP");
+        assert!(qfn[1..].iter().all(|p| p.zone_connection == ZoneConnection::Thermal));
     }
 }
