@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use alladin_core::LayerId;
+use alladin_core::{LayerId, ZoneConnection};
 use alladin_geom::{Point, Unit};
 
 use crate::footprint::{Courtyard, FootprintTemplate, HoleTemplate, PadShapeKind, PadTemplate};
@@ -111,6 +111,20 @@ fn shape_from_row(kind: &str, width: Unit, height: Unit) -> PadShapeKind {
     }
 }
 
+fn zone_connection_to_text(conn: ZoneConnection) -> &'static str {
+    match conn {
+        ZoneConnection::Thermal => "thermal",
+        ZoneConnection::Solid => "solid",
+    }
+}
+
+fn zone_connection_from_text(text: &str) -> ZoneConnection {
+    match text {
+        "solid" => ZoneConnection::Solid,
+        _ => ZoneConnection::Thermal,
+    }
+}
+
 impl PartsDb {
     fn init(conn: Connection) -> Result<Self, PartsDbError> {
         conn.execute_batch(
@@ -139,7 +153,8 @@ impl PartsDb {
                 shape_height INTEGER NOT NULL DEFAULT 0,
                 pad_rotation_deg REAL NOT NULL DEFAULT 0.0,
                 hole_diameter INTEGER NOT NULL DEFAULT 0,
-                pin_name TEXT
+                pin_name TEXT,
+                zone_connection TEXT NOT NULL DEFAULT 'thermal'
             );
             CREATE TABLE IF NOT EXISTS part_holes (
                 part_id INTEGER NOT NULL REFERENCES parts(id),
@@ -173,7 +188,7 @@ impl PartsDb {
                 existing.insert(name);
             }
         }
-        let missing_columns: [(&str, &str); 7] = [
+        let missing_columns: [(&str, &str); 8] = [
             ("number", "TEXT NOT NULL DEFAULT ''"),
             ("shape_kind", "TEXT NOT NULL DEFAULT 'circle'"),
             ("shape_width", "INTEGER NOT NULL DEFAULT 0"),
@@ -181,6 +196,7 @@ impl PartsDb {
             ("pad_rotation_deg", "REAL NOT NULL DEFAULT 0.0"),
             ("hole_diameter", "INTEGER NOT NULL DEFAULT 0"),
             ("pin_name", "TEXT"),
+            ("zone_connection", "TEXT NOT NULL DEFAULT 'thermal'"),
         ];
         for (name, declaration) in missing_columns {
             if !existing.contains(name) {
@@ -382,8 +398,8 @@ impl PartsDb {
         for (index, pad) in pads.iter().enumerate() {
             let (shape_kind, shape_width, shape_height) = shape_to_row(pad.shape);
             self.conn.execute(
-                "INSERT INTO part_pads (part_id, pad_index, offset_x, offset_y, radius, layer, number, shape_kind, shape_width, shape_height, pad_rotation_deg, hole_diameter, pin_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                "INSERT INTO part_pads (part_id, pad_index, offset_x, offset_y, radius, layer, number, shape_kind, shape_width, shape_height, pad_rotation_deg, hole_diameter, pin_name, zone_connection)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     part_id,
                     index as i64,
@@ -398,6 +414,7 @@ impl PartsDb {
                     pad.rotation_deg,
                     pad.hole_diameter.unwrap_or(0),
                     pad.pin_name,
+                    zone_connection_to_text(pad.zone_connection),
                 ],
             )?;
         }
@@ -501,7 +518,7 @@ impl PartsDb {
         };
 
         let mut stmt = self.conn.prepare(
-            "SELECT offset_x, offset_y, radius, layer, number, shape_kind, shape_width, shape_height, pad_rotation_deg, hole_diameter, pin_name
+            "SELECT offset_x, offset_y, radius, layer, number, shape_kind, shape_width, shape_height, pad_rotation_deg, hole_diameter, pin_name, zone_connection
              FROM part_pads WHERE part_id = ?1 ORDER BY pad_index",
         )?;
         let pads = stmt
@@ -517,6 +534,7 @@ impl PartsDb {
                 let rotation_deg: f64 = row.get(8)?;
                 let hole_diameter: Unit = row.get(9)?;
                 let pin_name: Option<String> = row.get(10)?;
+                let zone_connection: String = row.get(11)?;
                 Ok(PadTemplate {
                     offset: Point::new(x, y),
                     radius,
@@ -526,6 +544,7 @@ impl PartsDb {
                     rotation_deg,
                     hole_diameter: (hole_diameter > 0).then_some(hole_diameter),
                     pin_name,
+                    zone_connection: zone_connection_from_text(&zone_connection),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -633,6 +652,7 @@ mod tests {
             rotation_deg: 0.0,
             hole_diameter: None,
             pin_name: None,
+            zone_connection: ZoneConnection::Thermal,
         }
     }
 
@@ -712,6 +732,7 @@ mod tests {
                 rotation_deg: 90.0,
                 hole_diameter: None,
                 pin_name: Some("GND".to_string()),
+                zone_connection: ZoneConnection::Thermal,
             },
             PadTemplate {
                 offset: Point::new(MM, 0),
@@ -722,6 +743,7 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: Some(400_000),
                 pin_name: None,
+                zone_connection: ZoneConnection::Solid,
             },
         ];
         db.insert_part("QFN-ish", "U", "", None, &pads, &[], false).unwrap();
@@ -738,6 +760,8 @@ mod tests {
         assert_eq!(loaded[1].layer, LayerId::BCu);
         assert_eq!(loaded[1].hole_diameter, Some(400_000), "a through-hole pad's drill size must round-trip");
         assert_eq!(loaded[1].pin_name, None, "a pin with no known function name must round-trip as None");
+        assert_eq!(loaded[0].zone_connection, ZoneConnection::Thermal);
+        assert_eq!(loaded[1].zone_connection, ZoneConnection::Solid, "zone_connection must round-trip through part_pads");
     }
 
     #[test]

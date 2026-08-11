@@ -278,7 +278,7 @@ pub fn draw_board(
 
     if layers.pads {
         for item in items {
-            if let Item::Pad { shape, net, layer } = item {
+            if let Item::Pad { shape, net, layer, .. } = item {
                 if *layer == LayerId::BCu && !layers.back_layer {
                     continue;
                 }

@@ -24,8 +24,40 @@ use alladin_geom::{
     Circle, Point, PolygonEdgeIndex, Polygon, Segment, Unit,
 };
 use rstar::{RTree, RTreeObject, AABB};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
+/// How a pad joins a same-net copper pour ([`Item::Zone`]).
+///
+/// Stored on every [`Item::Pad`] (and on the footprint template / parts
+/// DB) so zone fill and placement keepout share one source of truth:
+/// [`ZoneConnection::Thermal`] punches a gap and restores thin spokes;
+/// [`ZoneConnection::Solid`] leaves the pad fully flooded (exposed pads,
+/// large power pads).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneConnection {
+    /// Annular clearance + spokes into the pour (default for ordinary pads).
+    #[default]
+    Thermal,
+    /// Full copper flood — no thermal gap (EP / large power pads).
+    Solid,
+}
+
+/// Geometry constants shared by zone-fill thermals and placement keepout.
+/// Values sit in the same band as JLCPCB pad/track clearances so a
+/// thermal ring is fab-legal and still large enough for reflow.
+pub mod thermal {
+    use alladin_geom::Unit;
+
+    /// Clearance ring between pad copper and pour copper (0.20 mm).
+    pub const GAP: Unit = 200_000;
+    /// Width of each of the four thermal spokes (0.20 mm).
+    pub const SPOKE_WIDTH: Unit = 200_000;
+    /// Longest pad side at or above this → heuristic picks [`super::ZoneConnection::Solid`] (2.0 mm).
+    pub const SOLID_MIN_SIDE: Unit = 2_000_000;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NetId(pub u32);
@@ -154,6 +186,10 @@ pub enum Item {
         shape: PadShape,
         net: Option<NetId>,
         layer: LayerId,
+        /// Pour join style — see [`ZoneConnection`]. Set from the
+        /// footprint template via `world_items` (parts DB / embedded
+        /// snapshot); older templates without the field use Thermal.
+        zone_connection: ZoneConnection,
     },
     /// A routed track segment (capsule shape).
     Track {
@@ -185,11 +221,12 @@ pub enum Item {
     /// (KiCad's `(zone ... (filled_polygon ...))`) -- a *static*
     /// obstacle Alladin never itself creates or reshapes. `outline` is
     /// exactly the polygon KiCad already filled; Alladin neither
-/// re-fills nor live-updates it as new tracks are routed. Deliberately
-/// unmodeled: thermal-relief spokes, zone-priority between overlaps,
-/// etc. `net: None` models a
-    /// netless keepout area: since [`Item::net`] is then `None`, the
-    /// same-net collision fast path in [`Node::query_colliding`] never
+/// re-fills nor live-updates it as new tracks are routed. Thermal
+    /// spokes are produced at fill time for [`ZoneConnection::Thermal`]
+    /// pads (see `alladin-pcb`'s `zone_fill`); zone-priority between
+    /// overlapping pours of different nets remains unmodeled. `net: None`
+    /// models a netless keepout area: since [`Item::net`] is then `None`,
+    /// the same-net collision fast path in [`Node::query_colliding`] never
     /// fires, so it blocks every net unconditionally -- no separate
     /// keepout mechanism needed.
     Zone {
@@ -1418,16 +1455,19 @@ mod tests {
             shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)),
             net: net1,
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
         world.add(Item::Pad {
             shape: PadShape::Circle(Circle::new(Point::new(5 * MM, 0), 400_000)),
             net: net1,
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
         world.add(Item::Pad {
             shape: PadShape::Circle(Circle::new(Point::new(2_500_000, 0), 800_000)),
             net: net2,
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         assert!(!world.path_is_clear(
@@ -1461,6 +1501,7 @@ mod tests {
             shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)),
             net: net1,
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         // A same-net track passing right through the pad must not be
@@ -1480,8 +1521,8 @@ mod tests {
     fn net_copper_components_reports_one_group_when_a_track_bridges_two_pads() {
         let mut world = Node::new();
         let net = NetId(1);
-        let pad_a = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu });
-        let pad_b = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(2 * MM, 0), 400_000)), net: Some(net), layer: LayerId::FCu });
+        let pad_a = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        let pad_b = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(2 * MM, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         let track = world.add(Item::Track {
             shape: Segment::new(Point::new(0, 0), Point::new(2 * MM, 0), 200_000),
             net: Some(net),
@@ -1502,8 +1543,8 @@ mod tests {
     fn net_copper_components_splits_two_untouched_pads_on_the_same_net() {
         let mut world = Node::new();
         let net = NetId(1);
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu });
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(10 * MM, 0), 400_000)), net: Some(net), layer: LayerId::FCu });
+        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(10 * MM, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
 
         let components = world.net_copper_components(net);
         assert_eq!(components.len(), 2, "two same-net pads with nothing physically bridging them must be reported as disconnected");
@@ -1513,7 +1554,7 @@ mod tests {
     fn net_copper_components_bridges_a_fcu_pad_to_a_bcu_zone_island_through_a_via() {
         let mut world = Node::new();
         let net = NetId(1);
-        let pad = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu });
+        let pad = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         let stub = world.add(Item::Track {
             shape: Segment::new(Point::new(0, 0), Point::new(500_000, 0), 200_000),
             net: Some(net),
@@ -1572,7 +1613,7 @@ mod tests {
         // catches a swapped match arm more directly than the end-to-end
         // tests below.
         let resolver = JlcpcbClearance;
-        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu };
+        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
         let via = Item::Via {
             shape: Circle::new(Point::new(0, 0), 500_000),
             drill: 250_000,
@@ -1604,7 +1645,7 @@ mod tests {
         // only track-to-track should actually move versus the
         // `2layer_1oz` baseline.
         let resolver = Jlcpcb2Layer2Oz;
-        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu };
+        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
         let via = Item::Via {
             shape: Circle::new(Point::new(0, 0), 500_000),
             drill: 250_000,
@@ -1777,6 +1818,7 @@ mod tests {
             shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)),
             net: Some(NetId(1)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
         assert!(
             world_pad.path_is_clear(
@@ -1830,6 +1872,7 @@ mod tests {
             shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
             net: Some(NetId(1)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
         assert_eq!(world.len(), 1);
         assert!(!world.path_is_clear(
@@ -1860,6 +1903,7 @@ mod tests {
             shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
             net: None,
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
         world.remove(id);
         world.remove(id); // second removal of the same id: caller bug, must panic
@@ -1909,8 +1953,8 @@ mod tests {
     #[test]
     fn iter_with_ids_pairs_each_item_with_its_own_stable_id() {
         let mut world = Node::new();
-        let a = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 100)), net: None, layer: LayerId::FCu });
-        let b = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(1 * MM, 0), 100)), net: None, layer: LayerId::FCu });
+        let a = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 100)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        let b = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(1 * MM, 0), 100)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         world.remove(a);
         let ids: Vec<ItemId> = world.iter_with_ids().map(|(id, _)| id).collect();
         assert_eq!(ids, vec![b], "the removed item's id must not appear, and the survivor keeps its original id");
@@ -1925,6 +1969,7 @@ mod tests {
             shape: PadShape::Circle(Circle::new(Point::new(0, 0), 2 * MM)), // huge pad
             net: Some(NetId(1)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         // Same footprint, but routed on the back copper layer: must be
@@ -1962,7 +2007,7 @@ mod tests {
         // Zone match arms' doc comment).
         let resolver = JlcpcbClearance;
         let zone = square_zone(0.0, 10.0, LayerId::FCu, None);
-        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu };
+        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
         let via = Item::Via { shape: Circle::new(Point::new(0, 0), 500_000), drill: 250_000, net: None };
         let track = Item::Track {
             shape: Segment::new(Point::new(0, 0), Point::new(MM, 0), 0),
@@ -2139,6 +2184,7 @@ mod tests {
             shape: rect_pad(Point::new(0, 0), 2 * MM, 500_000),
             net: Some(NetId(1)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         assert!(
@@ -2164,6 +2210,7 @@ mod tests {
             shape: rect_pad(Point::new(0, 0), 2 * MM, 500_000), // true right edge at x=2mm
             net: Some(NetId(1)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         let half_width = 100_000; // 0.1mm track
@@ -2204,12 +2251,14 @@ mod tests {
             shape: rect_pad(Point::new(0, 0), half_width, 500_000),
             net: Some(NetId(1)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         let neighbor_at_x = |x: Unit| Item::Pad {
             shape: rect_pad(Point::new(x, 0), half_width, 500_000),
             net: Some(NetId(2)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         };
         // First pad's right edge at x=2mm; second pad's own left edge
         // (its own half-width away from its center) placed exactly
@@ -2247,6 +2296,7 @@ mod tests {
             shape: rect_pad(Point::new(x, 5 * MM), half_width, 500_000),
             net: Some(NetId(2)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         };
 
         assert!(!world.is_colliding(&pad_at_x(10 * MM), &resolver), "straddling the zone's own edge: must not collide");
@@ -2304,7 +2354,7 @@ mod tests {
         // `hole_keepout_circle`), not the bare drill wall.
         let clearance = JlcpcbClearance::PAD_TO_PAD;
         let x_exactly_clear = 2 * MM + clearance + 500_000; // keep-out radius + clearance + pad radius
-        let pad_at = |x: Unit| Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(x, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu };
+        let pad_at = |x: Unit| Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(x, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
         assert!(!world.is_colliding(&pad_at(x_exactly_clear), &resolver), "exactly at PAD_TO_PAD clearance past the keep-out: must not collide");
         assert!(world.is_colliding(&pad_at(x_exactly_clear - 1), &resolver), "one internal unit closer: must collide");
 
@@ -2355,7 +2405,7 @@ mod tests {
         // never even considered a collision candidate), but it doesn't
         // actually touch anything on its own net either.
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu });
+        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         let far_via = Item::Via { shape: Circle::new(Point::new(10 * MM, 0), 300_000), drill: 150_000, net: Some(NetId(1)) };
         assert!(!world.touches_same_net(&far_via, None));
     }
@@ -2363,7 +2413,7 @@ mod tests {
     #[test]
     fn touches_same_net_is_true_for_a_via_overlapping_a_same_net_pad() {
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu });
+        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         let touching_via = Item::Via { shape: Circle::new(Point::new(700_000, 0), 300_000), drill: 150_000, net: Some(NetId(1)) };
         assert!(world.touches_same_net(&touching_via, None));
     }
@@ -2371,7 +2421,7 @@ mod tests {
     #[test]
     fn touches_same_net_ignores_an_overlapping_pad_on_a_different_net() {
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(2)), layer: LayerId::FCu });
+        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(2)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         let via = Item::Via { shape: Circle::new(Point::new(700_000, 0), 300_000), drill: 150_000, net: Some(NetId(1)) };
         assert!(!world.touches_same_net(&via, None), "different net, however close, must not count as touching");
     }
@@ -2389,7 +2439,7 @@ mod tests {
     #[test]
     fn touches_same_net_ignores_a_same_net_item_on_the_wrong_copper_layer() {
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::BCu });
+        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::BCu, zone_connection: ZoneConnection::Thermal });
         // A track only on F.Cu can never touch a B.Cu-only pad even if
         // it geometrically overlaps -- no shared copper layer.
         let track = Item::Track { shape: Segment::new(Point::new(0, 0), Point::new(MM, 0), 200_000), net: Some(NetId(1)), layer: LayerId::FCu, class: NetClass::C };

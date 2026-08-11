@@ -506,9 +506,14 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
         let mut hole_item_ids = Vec::new();
         for item in world_items(template, sf.position, sf.rotation_deg) {
             match item {
-                Item::Pad { shape, layer, .. } => {
+                Item::Pad { shape, layer, zone_connection, .. } => {
                     let &net = pad_nets.next().unwrap_or(&None);
-                    pad_item_ids.push(node.add(Item::Pad { shape, layer, net: net.map(NetId) }));
+                    pad_item_ids.push(node.add(Item::Pad {
+                        shape,
+                        layer,
+                        net: net.map(NetId),
+                        zone_connection,
+                    }));
                 }
                 Item::Hole { .. } => {
                     hole_item_ids.push(node.add(item));

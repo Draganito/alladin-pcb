@@ -465,6 +465,7 @@ mod tests {
                     rotation_deg: 0.0,
                     hole_diameter: None,
                     pin_name: None,
+                    zone_connection: ZoneConnection::Thermal,
                 },
                 PadTemplate {
                     offset: Point::new(MM / 2, 0),
@@ -475,6 +476,7 @@ mod tests {
                     rotation_deg: 0.0,
                     hole_diameter: None,
                     pin_name: None,
+                    zone_connection: ZoneConnection::Thermal,
                 },
             ],
             holes: Vec::new(),

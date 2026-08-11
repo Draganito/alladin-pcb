@@ -14,7 +14,7 @@ use std::sync::mpsc;
 /// [`BoardDoc`] clone — enough for a working session without unbounded RAM.
 const UNDO_LIMIT: usize = 40;
 
-use alladin_core::{Item, ItemId, JlcpcbDfm, LayerId, NetId, Node, PadShape};
+use alladin_core::{Item, ItemId, JlcpcbDfm, LayerId, NetId, Node, PadShape, ZoneConnection};
 use alladin_geom::{Aabb, Point, Polygon, Unit, MM};
 use alladin_render::{Camera, LayerToggles};
 use eframe::egui::{self, Color32, Stroke};
@@ -2529,7 +2529,7 @@ fn draw_footprint_details(
         }
         let template = templates.iter().find(|t| t.name == fp.template_name);
         for (index, &pad_id) in fp.pad_item_ids.iter().enumerate() {
-            let Some(Item::Pad { shape, net, layer }) = doc.node.get(pad_id) else { continue };
+            let Some(Item::Pad { shape, net, layer, .. }) = doc.node.get(pad_id) else { continue };
             if *layer == LayerId::BCu && !layers.back_layer {
                 continue;
             }
@@ -4341,6 +4341,7 @@ impl eframe::App for PcbApp {
                             shape: PadShape::Circle(alladin_geom::Circle::new(via_center, pending.diameter / 2)),
                             net: None,
                             layer: LayerId::FCu,
+                            zone_connection: ZoneConnection::Thermal,
                         });
                         draw_ghost(&painter, rect, &state.camera, &ghost_items, pending.valid);
                     }

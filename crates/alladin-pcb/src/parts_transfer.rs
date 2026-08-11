@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use alladin_core::LayerId;
+use alladin_core::{LayerId, ZoneConnection};
 use alladin_geom::{Point, Unit};
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +53,9 @@ pub struct PadDto {
     pub pad_rotation_deg: f64,
     pub hole_diameter: Unit,
     pub pin_name: Option<String>,
+    /// Pour join style. Missing in older library JSON → Thermal.
+    #[serde(default)]
+    pub zone_connection: ZoneConnection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +142,7 @@ pub fn snapshot_from_template(
                     pad_rotation_deg: p.rotation_deg,
                     hole_diameter: p.hole_diameter.unwrap_or(0),
                     pin_name: p.pin_name.clone(),
+                    zone_connection: p.zone_connection,
                 }
             })
             .collect(),
@@ -172,6 +176,7 @@ pub fn template_from_snapshot(dto: &PartSnapshot) -> FootprintTemplate {
                 rotation_deg: p.pad_rotation_deg,
                 hole_diameter: (p.hole_diameter > 0).then_some(p.hole_diameter),
                 pin_name: p.pin_name.clone(),
+                zone_connection: p.zone_connection,
             })
             .collect(),
         holes: dto
@@ -262,6 +267,7 @@ pub fn merge_snapshots_into_db(parts_db: &PartsDb, parts: &[PartSnapshot]) -> Re
                 rotation_deg: p.pad_rotation_deg,
                 hole_diameter: (p.hole_diameter > 0).then_some(p.hole_diameter),
                 pin_name: p.pin_name.clone(),
+                zone_connection: p.zone_connection,
             })
             .collect::<Vec<_>>();
         let holes = dto
@@ -339,7 +345,19 @@ mod tests {
             rotation_deg: 0.0,
             hole_diameter: None,
             pin_name: Some("VCC".into()),
+            zone_connection: ZoneConnection::Thermal,
         }
+    }
+
+    #[test]
+    fn pad_dto_missing_zone_connection_defaults_to_thermal() {
+        let json = r#"{
+            "offset_x": 0, "offset_y": 0, "radius": 500000, "layer": "FCu",
+            "number": "1", "shape_kind": "circle", "shape_width": 0, "shape_height": 0,
+            "pad_rotation_deg": 0.0, "hole_diameter": 0, "pin_name": null
+        }"#;
+        let dto: PadDto = serde_json::from_str(json).unwrap();
+        assert_eq!(dto.zone_connection, ZoneConnection::Thermal);
     }
 
     #[test]
@@ -368,6 +386,8 @@ mod tests {
         assert_eq!(part.template.name, "R_0402");
         assert_eq!(part.category.as_deref(), Some("Resistors"));
         assert_eq!(part.template.pads[0].pin_name.as_deref(), Some("VCC"));
+        assert_eq!(part.template.pads[0].zone_connection, ZoneConnection::Thermal);
+        assert!(json.contains("\"zone_connection\": \"thermal\"") || json.contains("\"zone_connection\":\"thermal\""));
 
         let (n2, skip2) = import_library_json(&db2, &json).unwrap();
         assert_eq!((n2, skip2), (0, 1));

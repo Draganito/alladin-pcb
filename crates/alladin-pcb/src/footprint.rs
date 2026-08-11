@@ -17,7 +17,7 @@
 //! `rotation_deg`, used both for on-screen rendering (`crate::app`'s
 //! pad drawing) and for [`world_items`]'s collision polygon.
 
-use alladin_core::{DfmViolation, Item, JlcpcbDfm, LayerId, PadShape};
+use alladin_core::{thermal, DfmViolation, Item, JlcpcbDfm, LayerId, PadShape, ZoneConnection};
 use alladin_geom::{Circle, Point, Polygon, Unit, MM};
 
 /// A genuine unplated mechanical hole (see `alladin_core::Item::Hole`'s
@@ -99,6 +99,11 @@ pub struct PadTemplate {
     /// comment); `None` for built-in/hand-added templates without a
     /// schematic symbol source for pin names.
     pub pin_name: Option<String>,
+    /// How this pad joins a same-net copper pour — see
+    /// [`ZoneConnection`]. Set by the parts DB / LCSC heuristic
+    /// ([`apply_zone_connection_heuristic`]); built-ins default to
+    /// Thermal.
+    pub zone_connection: ZoneConnection,
 }
 
 impl PadTemplate {
@@ -114,7 +119,38 @@ impl PadTemplate {
             rotation_deg: 0.0,
             hole_diameter: None,
             pin_name: None,
+            zone_connection: ZoneConnection::Thermal,
         }
+    }
+}
+
+/// Longest axis of a pad's copper (circle diameter or rect/oval max side).
+fn pad_longest_side(pad: &PadTemplate) -> Unit {
+    match pad.shape {
+        PadShapeKind::Circle => pad.radius * 2,
+        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => width.max(height),
+    }
+}
+
+/// Assign [`PadTemplate::zone_connection`] from pad geometry / EP grids.
+/// Call once when a part is imported or first saved — not on every fill.
+///
+/// Rules (first match wins per pad):
+/// 1. Several pads share the same `number` (exposed-pad paste grid) → Solid
+/// 2. Longest side ≥ [`thermal::SOLID_MIN_SIDE`] → Solid
+/// 3. Else Thermal
+pub fn apply_zone_connection_heuristic(pads: &mut [PadTemplate]) {
+    let mut number_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for pad in pads.iter() {
+        *number_counts.entry(pad.number.clone()).or_default() += 1;
+    }
+    for pad in pads.iter_mut() {
+        let ep_grid = number_counts.get(&pad.number).copied().unwrap_or(0) > 1;
+        pad.zone_connection = if ep_grid || pad_longest_side(pad) >= thermal::SOLID_MIN_SIDE {
+            ZoneConnection::Solid
+        } else {
+            ZoneConnection::Thermal
+        };
     }
 }
 
@@ -511,7 +547,7 @@ pub fn world_items(template: &FootprintTemplate, position: Point, rotation_deg: 
                 PadShape::Polygon { outline: pad_outline_polygon(width, height, corner_radius, total_rotation, center), center }
             }
         };
-        Item::Pad { shape, net: None, layer: pad.layer }
+        Item::Pad { shape, net: None, layer: pad.layer, zone_connection: pad.zone_connection }
     });
     let hole_items = template
         .holes
@@ -806,6 +842,7 @@ mod tests {
             rotation_deg,
             hole_diameter: None,
             pin_name: None,
+            zone_connection: ZoneConnection::Thermal,
         }
     }
 
@@ -819,6 +856,7 @@ mod tests {
             rotation_deg,
             hole_diameter: None,
             pin_name: None,
+            zone_connection: ZoneConnection::Thermal,
         }
     }
 
@@ -836,6 +874,7 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: None,
                 pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
             }],
             holes: Vec::new(),
             exclude_from_bom: false,
@@ -914,5 +953,54 @@ mod tests {
         // it (reach at least as far), never stop a hair short.
         assert!(outline.contains_point(Point::new(mm(1.0) - 1000, 0)), "must not under-cover the oval's true long-axis tip");
         assert!(outline.contains_point(Point::new(0, 0)));
+    }
+
+    #[test]
+    fn zone_connection_heuristic_marks_ep_grid_and_large_pads_solid() {
+        let mut pads = vec![
+            PadTemplate {
+                offset: Point::new(0, 0),
+                radius: mm(0.3),
+                layer: LayerId::FCu,
+                number: "1".into(),
+                shape: PadShapeKind::Circle,
+                rotation_deg: 0.0,
+                hole_diameter: None,
+                pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
+            },
+            PadTemplate {
+                offset: Point::new(mm(1.0), 0),
+                radius: mm(0.25),
+                layer: LayerId::FCu,
+                number: "9".into(),
+                shape: PadShapeKind::Circle,
+                rotation_deg: 0.0,
+                hole_diameter: None,
+                pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
+            },
+            PadTemplate {
+                offset: Point::new(mm(1.5), 0),
+                radius: mm(0.25),
+                layer: LayerId::FCu,
+                number: "9".into(),
+                shape: PadShapeKind::Circle,
+                rotation_deg: 0.0,
+                hole_diameter: None,
+                pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
+            },
+            {
+                let mut large = rect_pad_template(mm(3.0), mm(3.0), 0.0);
+                large.number = "EP".into();
+                large
+            },
+        ];
+        apply_zone_connection_heuristic(&mut pads);
+        assert_eq!(pads[0].zone_connection, ZoneConnection::Thermal);
+        assert_eq!(pads[1].zone_connection, ZoneConnection::Solid, "EP grid pad 9");
+        assert_eq!(pads[2].zone_connection, ZoneConnection::Solid, "EP grid pad 9");
+        assert_eq!(pads[3].zone_connection, ZoneConnection::Solid, "large pad ≥ 2mm");
     }
 }

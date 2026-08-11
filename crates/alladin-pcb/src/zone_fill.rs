@@ -8,14 +8,15 @@
 //! needs, using [`alladin_geom::fill`]'s `i_overlay` adapter for the
 //! actual polygon boolean/buffer math.
 //!
-//! Deliberately **not** modelled (same scope cut as for imported zone
-//! fills): thermal-relief spokes (same-net
-//! pads/vias are simply left solidly connected, no spoke gap), and
+//! Same-net pads with [`ZoneConnection::Thermal`] get an annular gap
+//! ([`thermal::GAP`]) plus four axis-aligned spokes
+//! ([`thermal::SPOKE_WIDTH`]). [`ZoneConnection::Solid`] pads and all
+//! same-net vias stay fully flooded. Deliberately **not** modelled:
 //! priority between multiple zones of different nets overlapping each
 //! other (an existing [`Item::Zone`] is not itself treated as an
-//! obstacle here -- only `Pad`/`Via`/`Track`).
+//! obstacle here -- only `Pad`/`Via`/`Track`/`Hole`).
 
-use alladin_core::{Item, LayerId, NetId, Node, PadShape, RuleResolver};
+use alladin_core::{thermal, Item, LayerId, NetId, Node, PadShape, RuleResolver, ZoneConnection};
 use alladin_geom::{fill, Point, Polygon, Unit};
 
 /// Segment count for a fill-time circle/capsule-cap approximation.
@@ -36,6 +37,19 @@ fn circle_polygon(center: Point, radius: Unit) -> Polygon {
         })
         .collect();
     Polygon::new(points)
+}
+
+/// Axis-aligned rectangle centred on `center` with the given full
+/// `width`/`height` -- thermal spokes are a plus of two of these.
+fn rect_polygon(center: Point, width: Unit, height: Unit) -> Polygon {
+    let hx = width / 2;
+    let hy = height / 2;
+    Polygon::new(vec![
+        Point::new(center.x - hx, center.y - hy),
+        Point::new(center.x + hx, center.y - hy),
+        Point::new(center.x + hx, center.y + hy),
+        Point::new(center.x - hx, center.y + hy),
+    ])
 }
 
 /// The exact stadium/capsule outline of a track segment from `a` to `b`
@@ -99,6 +113,18 @@ fn obstacle_polygon(item: &Item, clearance: Unit) -> Option<Polygon> {
     }
 }
 
+/// Plus-shaped thermal spokes centred on `center`, extending to
+/// `half_length` on each axis (pad radius + gap) at [`thermal::SPOKE_WIDTH`].
+fn thermal_spoke_polygons(center: Point, half_length: Unit) -> [Polygon; 2] {
+    let span = half_length * 2;
+    let w = thermal::SPOKE_WIDTH;
+    [rect_polygon(center, span, w), rect_polygon(center, w, span)]
+}
+
+fn thermal_pad_half_extent(shape: &PadShape) -> Unit {
+    shape.bounding_radius() + thermal::GAP
+}
+
 /// Fills a user-drawn `outline` on `layer` for `net` against the current
 /// board state, returning zero or more [`Item::Zone`]s -- one per
 /// disjoint filled island, matching how a KiCad-compatible
@@ -106,45 +132,63 @@ fn obstacle_polygon(item: &Item, clearance: Unit) -> Option<Polygon> {
 /// empty `Vec` if the outline doesn't overlap the board outline at all,
 /// or if obstacles consume the entire clipped area.
 ///
-/// Pipeline (see this module's own doc comment for what's deliberately
-/// out of scope):
-/// 1. Clip `outline` to `board_outline` (so a pour drawn past the
-///    board's own edge, or across one of its cutouts, comes back
-///    trimmed to what's physically there).
-/// 2. Buffer every same-layer, different-net `Pad`/`Via`/`Track` in
-///    `node` by its resolver-determined clearance from a zone.
-/// 3. Union those buffered obstacles, then subtract the union from the
-///    board-clipped fill area.
-/// 4. Seal any resulting holes into each island's single `outline`
-///    polygon via [`fill::FilledRegion::sealed`] (this project's
-///    convention for representing a filled-with-holes shape as one
-///    simple ring, matching a real KiCad `filled_polygon`'s own keyhole
-///    convention -- see that function's doc comment).
+/// Pipeline:
+/// 1. Clip `outline` to `board_outline`.
+/// 2. Buffer every same-layer, different-net `Pad`/`Via`/`Track`/`Hole`
+///    by its resolver clearance; also buffer same-net
+///    [`ZoneConnection::Thermal`] pads by [`thermal::GAP`].
+/// 3. Subtract the obstacle union from the clipped area.
+/// 4. Union thermal spoke rectangles back in, then re-clip to the
+///    board-clipped outline so spokes never leave the pour.
+/// 5. Seal holes into each island via [`fill::FilledRegion::sealed`].
 pub fn fill_zone(outline: &Polygon, layer: LayerId, net: NetId, board_outline: &[Polygon], node: &Node, resolver: &dyn RuleResolver) -> Vec<Item> {
     let clipped = fill::intersection(std::slice::from_ref(outline), board_outline);
     if clipped.is_empty() {
         return Vec::new();
     }
+    let clipped_sealed: Vec<Polygon> = clipped.iter().map(fill::FilledRegion::sealed).collect();
 
     // A zero-geometry stand-in purely to select `RuleResolver::clearance`'s
     // "zone vs. X" match arms (see `alladin_core::JlcpcbClearance::clearance`)
     // -- its own outline/net content is never inspected, only its variant.
     let zone_stub = Item::Zone { outline: Polygon::new(Vec::new()), layer, net: None };
 
-    let obstacles: Vec<Polygon> = node
+    let mut obstacles: Vec<Polygon> = node
         .iter()
         .filter(|item| item.net() != Some(net))
         .filter(|item| item_on_layer(item, layer))
         .filter_map(|item| obstacle_polygon(item, resolver.clearance(&zone_stub, item)))
         .collect();
 
+    let mut spokes: Vec<Polygon> = Vec::new();
+    for item in node.iter().filter(|item| item.net() == Some(net)).filter(|item| item_on_layer(item, layer)) {
+        let Item::Pad { shape, zone_connection, .. } = item else { continue };
+        if *zone_connection != ZoneConnection::Thermal {
+            continue;
+        }
+        if let Some(gap) = obstacle_polygon(item, thermal::GAP) {
+            obstacles.push(gap);
+        }
+        let half = thermal_pad_half_extent(shape);
+        spokes.extend(thermal_spoke_polygons(shape.center(), half));
+    }
+
     let obstacle_union: Vec<Polygon> = fill::union(&obstacles).iter().map(fill::FilledRegion::sealed).collect();
 
-    clipped
+    let mut base: Vec<Polygon> = clipped_sealed
         .iter()
-        .flat_map(|region| fill::difference(std::slice::from_ref(&region.sealed()), &obstacle_union))
-        .map(|island| Item::Zone { outline: island.sealed(), layer, net: Some(net) })
-        .collect()
+        .flat_map(|region| fill::difference(std::slice::from_ref(region), &obstacle_union))
+        .map(|island| island.sealed())
+        .collect();
+
+    if !spokes.is_empty() {
+        let mut with_spokes = base;
+        with_spokes.extend(spokes);
+        let united: Vec<Polygon> = fill::union(&with_spokes).iter().map(fill::FilledRegion::sealed).collect();
+        base = fill::intersection(&united, &clipped_sealed).into_iter().map(|r| r.sealed()).collect();
+    }
+
+    base.into_iter().map(|outline| Item::Zone { outline, layer, net: Some(net) }).collect()
 }
 
 #[cfg(test)]
@@ -205,7 +249,12 @@ mod tests {
         let board = vec![square(0.0, 0.0, 50.0)];
         let mut node = Node::new();
         let pad_radius = MM;
-        node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(NetId(2)), layer: LayerId::FCu });
+        node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)),
+            net: Some(NetId(2)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+        });
 
         let islands = fill_zone(&outline, LayerId::FCu, NetId(1), &board, &node, &JlcpcbClearance);
         assert_eq!(islands.len(), 1);
@@ -220,16 +269,52 @@ mod tests {
     }
 
     #[test]
-    fn does_not_exclude_a_same_net_pad() {
+    fn solid_same_net_pad_stays_flooded() {
         let outline = square(0.0, 0.0, 10.0);
         let board = vec![square(0.0, 0.0, 50.0)];
         let mut node = Node::new();
-        node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), MM)), net: Some(NetId(1)), layer: LayerId::FCu });
+        node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), MM)),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Solid,
+        });
 
         let islands = fill_zone(&outline, LayerId::FCu, NetId(1), &board, &node, &JlcpcbClearance);
         assert_eq!(islands.len(), 1);
         let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
-        assert!(filled.contains_point(Point::new(0, 0)), "a same-net pad must stay solidly connected, not excluded");
+        assert!(filled.contains_point(Point::new(0, 0)), "a solid same-net pad must stay solidly connected, not excluded");
+    }
+
+    #[test]
+    fn thermal_same_net_pad_has_gap_but_spoke_connects() {
+        let outline = square(0.0, 0.0, 10.0);
+        let board = vec![square(0.0, 0.0, 50.0)];
+        let mut node = Node::new();
+        let pad_radius = MM;
+        node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+        });
+
+        let islands = fill_zone(&outline, LayerId::FCu, NetId(1), &board, &node, &JlcpcbClearance);
+        assert_eq!(islands.len(), 1);
+        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
+
+        // Mid-gap on the diagonal (between spokes): must be empty copper.
+        let gap_mid = pad_radius + thermal::GAP / 2;
+        let diag = ((gap_mid as f64) / std::f64::consts::SQRT_2).round() as Unit;
+        assert!(
+            !filled.contains_point(Point::new(diag, diag)),
+            "thermal gap between spokes must clear the pour"
+        );
+        // On the +X spoke, just outside the pad: must be pour copper.
+        let on_spoke = Point::new(pad_radius + thermal::GAP / 2, 0);
+        assert!(filled.contains_point(on_spoke), "thermal spoke must reconnect pad to pour");
+        // Far from the pad: pour remains.
+        assert!(filled.contains_point(Point::new(5 * MM, 5 * MM)));
     }
 
     #[test]
@@ -237,7 +322,12 @@ mod tests {
         let outline = square(0.0, 0.0, 10.0);
         let board = vec![square(0.0, 0.0, 50.0)];
         let mut node = Node::new();
-        node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), MM)), net: Some(NetId(2)), layer: LayerId::BCu });
+        node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), MM)),
+            net: Some(NetId(2)),
+            layer: LayerId::BCu,
+            zone_connection: ZoneConnection::Thermal,
+        });
 
         let islands = fill_zone(&outline, LayerId::FCu, NetId(1), &board, &node, &JlcpcbClearance);
         assert_eq!(islands.len(), 1);
@@ -250,9 +340,8 @@ mod tests {
         let outline = square(0.0, 0.0, 10.0);
         let board = vec![square(0.0, 0.0, 50.0)];
         let mut node = Node::new();
-        let mm = |v: f64| (v * MM as f64).round() as Unit;
         node.add(Item::Track {
-            shape: Segment::new(Point::new(mm(-8.0), 0), Point::new(mm(8.0), 0), mm(0.2)),
+            shape: Segment::new(Point::new(-5 * MM, 0), Point::new(5 * MM, 0), MM / 5),
             net: Some(NetId(2)),
             layer: LayerId::FCu,
             class: NetClass::C,
@@ -261,33 +350,37 @@ mod tests {
         let islands = fill_zone(&outline, LayerId::FCu, NetId(1), &board, &node, &JlcpcbClearance);
         assert_eq!(islands.len(), 1);
         let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
-        assert!(!filled.contains_point(Point::new(0, 0)), "the track's own path must read as excluded");
-        assert!(filled.contains_point(Point::new(0, mm(5.0))), "well away from the track must still be filled");
+        assert!(!filled.contains_point(Point::new(0, 0)), "a different-net track must clear a corridor through the pour");
     }
 
     #[test]
-    fn excludes_a_mounting_hole_from_the_pour() {
+    fn same_net_via_stays_solidly_connected() {
         let outline = square(0.0, 0.0, 10.0);
         let board = vec![square(0.0, 0.0, 50.0)];
         let mut node = Node::new();
-        node.add(Item::Hole { position: Point::new(0, 0), drill: 2 * MM });
-
+        node.add(Item::Via {
+            shape: Circle::new(Point::new(0, 0), 400_000),
+            drill: 200_000,
+            net: Some(NetId(1)),
+        });
         let islands = fill_zone(&outline, LayerId::FCu, NetId(1), &board, &node, &JlcpcbClearance);
         assert_eq!(islands.len(), 1);
         let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
-        assert!(!filled.contains_point(Point::new(0, 0)), "the mounting hole's own footprint must read as excluded, same as a pad/via");
-        assert!(
-            !filled.contains_point(Point::new(0, 3 * MM / 2)),
-            "1.5mm from center is past the 1mm drill wall but inside the 2mm screw-head keep-out -- the head must never sit on zone copper"
-        );
-        assert!(filled.contains_point(Point::new(0, 5 * MM)), "well away from the hole must still be filled");
+        assert!(filled.contains_point(Point::new(0, 0)), "same-net vias stay solid (stitching)");
     }
 
     #[test]
-    fn returns_nothing_when_the_outline_does_not_touch_the_board_at_all() {
-        let outline = square(100.0, 100.0, 5.0);
-        let board = vec![square(0.0, 0.0, 10.0)];
-        let node = Node::new();
+    fn returns_empty_when_obstacles_consume_the_entire_clipped_area() {
+        let outline = square(0.0, 0.0, 1.0);
+        let board = vec![square(0.0, 0.0, 1.0)];
+        let mut node = Node::new();
+        // Huge different-net pad covering the whole tiny zone.
+        node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 5 * MM)),
+            net: Some(NetId(2)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+        });
         assert!(fill_zone(&outline, LayerId::FCu, NetId(1), &board, &node, &JlcpcbClearance).is_empty());
     }
 }

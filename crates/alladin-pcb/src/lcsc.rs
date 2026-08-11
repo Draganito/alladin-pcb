@@ -57,11 +57,11 @@ use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 
-use alladin_core::LayerId;
+use alladin_core::{LayerId, ZoneConnection};
 use alladin_geom::{Point, Unit};
 use serde_json::Value;
 
-use crate::footprint::{Courtyard, PadShapeKind, PadTemplate};
+use crate::footprint::{apply_zone_connection_heuristic, Courtyard, PadShapeKind, PadTemplate};
 
 const API_VERSION: &str = "6.4.19.5";
 /// EasyEDA's CDN answers a bare `curl`/`reqwest`-style request (no
@@ -305,11 +305,12 @@ fn parse_response(code: &str, body: &Value) -> Result<FetchedPart, FetchError> {
 
     let shapes = data.get("shape").and_then(Value::as_array).ok_or_else(|| FetchError::Parse("footprint has no 'shape' array".to_string()))?;
     let shape_lines: Vec<&str> = shapes.iter().filter_map(Value::as_str).collect();
-    let pads: Vec<PadTemplate> = shape_lines.iter().filter_map(|line| parse_pad_line(line, origin_x, origin_y)).collect();
+    let mut pads: Vec<PadTemplate> = shape_lines.iter().filter_map(|line| parse_pad_line(line, origin_x, origin_y)).collect();
 
     if pads.is_empty() {
         return Err(FetchError::NoFootprint(code.to_string()));
     }
+    apply_zone_connection_heuristic(&mut pads);
 
     let explicit_courtyard = parse_silk_courtyard(&shape_lines, origin_x, origin_y);
 
@@ -591,7 +592,7 @@ fn parse_pad_line(line: &str, origin_x: f64, origin_y: f64) -> Option<PadTemplat
     // unmanufacturable SMD pad.
     let hole_diameter = is_tht.then(|| easyeda_unit_to_nm(hole_dia).max(1));
 
-    Some(PadTemplate { offset, radius, layer: pad_layer, number, shape, rotation_deg, hole_diameter, pin_name: None })
+    Some(PadTemplate { offset, radius, layer: pad_layer, number, shape, rotation_deg, hole_diameter, pin_name: None, zone_connection: ZoneConnection::Thermal })
 }
 
 /// The bounding box (in nanometres, already origin-shifted) of a

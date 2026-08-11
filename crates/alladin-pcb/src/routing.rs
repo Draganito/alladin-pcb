@@ -774,6 +774,7 @@ mod tests {
             shape: PadShape::Circle(Circle::new(Point::new(a.x + 2 * MM, a.y + 5 * MM), 500_000)),
             net: Some(NetId(7777)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         let cursor = Point::new(a.x + 2 * MM, a.y + 8 * MM);
@@ -1246,6 +1247,7 @@ mod tests {
             shape: PadShape::Circle(Circle::new(blocked_corner, 400_000)),
             net: Some(NetId(7777)),
             layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
         });
 
         let mut drag = TraceDrag::start(&doc, leg_p1_p2).unwrap();

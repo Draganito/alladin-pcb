@@ -3,7 +3,10 @@
 //! the single source of geometric truth for DRC-aware placement and
 //! manual routing.
 
-use alladin_core::{DfmViolation, Item, ItemId, Jlcpcb2Layer2Oz, JlcpcbClearance, JlcpcbDfm, LayerId, NetClass, NetId, Node, PadShape, RuleResolver};
+use alladin_core::{
+    thermal, DfmViolation, Item, ItemId, Jlcpcb2Layer2Oz, JlcpcbClearance, JlcpcbDfm, LayerId, NetClass, NetId, Node,
+    PadShape, RuleResolver, ZoneConnection,
+};
 use alladin_geom::{
     circle_polygon_collides, circle_within_outline, dist_segment_to_segment, polygon_polygon_collides, polygon_within_outline_with_clearance,
     segment_polygon_collides, segment_within_outline_with_clearance, Aabb, Circle, Point, Polygon, Segment, Unit, MM,
@@ -423,6 +426,23 @@ fn circles_touch(a: &Circle, b: &Circle, clearance: Unit) -> bool {
     ((a.center.x - b.center.x) as f64).hypot((a.center.y - b.center.y) as f64) < (a.radius + b.radius + clearance) as f64
 }
 
+fn pad_shapes_closer_than(a: &PadShape, b: &PadShape, clearance: Unit) -> bool {
+    match (a, b) {
+        (PadShape::Circle(c1), PadShape::Circle(c2)) => circles_touch(c1, c2, clearance),
+        (PadShape::Circle(c), PadShape::Polygon { outline, .. }) | (PadShape::Polygon { outline, .. }, PadShape::Circle(c)) => {
+            circle_polygon_collides(c, outline, clearance)
+        }
+        (PadShape::Polygon { outline: o1, .. }, PadShape::Polygon { outline: o2, .. }) => polygon_polygon_collides(o1, o2, clearance),
+    }
+}
+
+fn thermal_keepout_mm(conn: ZoneConnection) -> Unit {
+    match conn {
+        ZoneConnection::Thermal => thermal::GAP,
+        ZoneConnection::Solid => 0,
+    }
+}
+
 /// How far a pad template's copper plausibly reaches from its own
 /// center in any direction -- the circumscribing radius
 /// [`BoardDoc::try_enable_pin1_marker`]'s sweep clears before adding
@@ -730,6 +750,12 @@ pub enum PlacementError {
     /// trace, or end the track *at* the via (place the via first, then
     /// the stub).
     OnTrack,
+    /// Pads with [`ZoneConnection::Thermal`] would sit too close for
+    /// their annular pour gaps ([`thermal::GAP`]) to form. Clearance is
+    /// `max(PAD_TO_PAD, sum of thermal keepouts)` so ordinary packing
+    /// still works while same-net pairs (skipped by `query_colliding`)
+    /// cannot collapse the rings. Solid pads do not pay the extra keepout.
+    ThermalKeepout,
 }
 
 impl std::fmt::Display for PlacementError {
@@ -762,6 +788,11 @@ impl std::fmt::Display for PlacementError {
             PlacementError::OnTrack => write!(
                 f,
                 "would put the via on or too close to a track (a drill through a trace severs that copper, same-net included) -- place the via beside the track, or end the track at the via"
+            ),
+            PlacementError::ThermalKeepout => write!(
+                f,
+                "would place same-net pads too close for thermal-relief keepout ({:.2}mm gap around each thermal pad that joins a copper pour)",
+                thermal::GAP as f64 / MM as f64
             ),
         }
     }
@@ -1205,6 +1236,13 @@ impl BoardDoc {
 
         if colliding > 0 {
             return Err(PlacementError::Collision(colliding));
+        }
+
+        // Same-net pad pairs never reach `query_colliding` (KiCad-style
+        // fast path), but two Thermal pads on the same net still need
+        // room for their pour gaps -- see `PlacementError::ThermalKeepout`.
+        if self.thermal_keepout_violated(template, position, rotation_deg, &exclude_ids, &existing_pad_nets) {
+            return Err(PlacementError::ThermalKeepout);
         }
 
         // The exact mirror of `Self::silk_text_fits`'s own pad check
@@ -1798,9 +1836,9 @@ impl BoardDoc {
         let mut hole_item_ids = Vec::new();
         for item in world_items(template, position, rotation_deg) {
             match item {
-                Item::Pad { shape, layer, .. } => {
+                Item::Pad { shape, layer, zone_connection, .. } => {
                     let &net = pad_nets.next().unwrap_or(&None);
-                    pad_item_ids.push(self.node.add(Item::Pad { shape, layer, net }));
+                    pad_item_ids.push(self.node.add(Item::Pad { shape, layer, net, zone_connection }));
                 }
                 Item::Hole { .. } => {
                     hole_item_ids.push(self.node.add(item));
@@ -1844,7 +1882,7 @@ impl BoardDoc {
     fn wires_touching_pads(&self, pad_item_ids: &[ItemId]) -> Vec<ItemId> {
         let mut entry_points = Vec::new();
         for &pad_id in pad_item_ids {
-            let Some(Item::Pad { shape, layer, net }) = self.node.get(pad_id) else { continue };
+            let Some(Item::Pad { shape, layer, net, .. }) = self.node.get(pad_id) else { continue };
             entry_points.push((shape.center(), *layer, *net));
         }
 
@@ -1944,6 +1982,46 @@ impl BoardDoc {
             fp.courtyard = world_courtyard(template, fp.position, fp.rotation_deg);
             fp.assembly_drills = world_assembly_drills(template, fp.position, fp.rotation_deg);
         }
+    }
+
+    /// Thermal pads need [`thermal::GAP`] of pour-ring room against
+    /// other pads on the same layer. Runs for every candidate pad whose
+    /// template property is Thermal (and against other Thermal pads'
+    /// keepouts), including same-net pairs that `query_colliding` skips.
+    /// `existing_pad_nets` is unused for the geometry check but kept so
+    /// call sites stay aligned with the rest of placement's pad order.
+    fn thermal_keepout_violated(
+        &self,
+        template: &FootprintTemplate,
+        position: Point,
+        rotation_deg: f64,
+        exclude_ids: &[ItemId],
+        _existing_pad_nets: &[Option<NetId>],
+    ) -> bool {
+        for item in world_items(template, position, rotation_deg) {
+            let Item::Pad { shape: c_shape, zone_connection: c_conn, layer: c_layer, .. } = item else { continue };
+            let c_keep = thermal_keepout_mm(c_conn);
+            for (id, other) in self.node.iter_with_ids() {
+                if exclude_ids.contains(&id) {
+                    continue;
+                }
+                let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
+                    continue;
+                };
+                if *o_layer != c_layer {
+                    continue;
+                }
+                let o_keep = thermal_keepout_mm(*o_conn);
+                if c_keep == 0 && o_keep == 0 {
+                    continue;
+                }
+                let clearance = JlcpcbClearance::PAD_TO_PAD.max(c_keep + o_keep);
+                if pad_shapes_closer_than(&c_shape, o_shape, clearance) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Whether placing `template` at `position`/`rotation_deg` would
@@ -2133,7 +2211,7 @@ impl BoardDoc {
     /// live pad.
     pub(crate) fn pad_endpoint(&self, id: ItemId) -> Option<(Point, LayerId, Option<NetId>)> {
         match self.node.get(id) {
-            Some(Item::Pad { shape, layer, net }) => Some((shape.center(), *layer, *net)),
+            Some(Item::Pad { shape, layer, net, .. }) => Some((shape.center(), *layer, *net)),
             _ => None,
         }
     }
@@ -2457,7 +2535,7 @@ impl BoardDoc {
         if let Err(v) = JlcpcbDfm::check_track_width(stub_width) {
             return Err(PinStitchingViaError::Via(PlacementError::Dfm(v)));
         }
-        let Some(Item::Pad { shape, net, layer }) = self.node.get(pad_id).cloned() else {
+        let Some(Item::Pad { shape, net, layer, .. }) = self.node.get(pad_id).cloned() else {
             return Err(PinStitchingViaError::NotAPad);
         };
         let Some(net) = net else { return Err(PinStitchingViaError::NoNet) };
@@ -3036,8 +3114,8 @@ impl BoardDoc {
 
     fn set_pad_net(&mut self, id: ItemId, net: Option<NetId>) -> Result<(), NetError> {
         match self.node.get(id).cloned() {
-            Some(Item::Pad { shape, layer, .. }) => {
-                self.node.replace(id, Item::Pad { shape, net, layer });
+            Some(Item::Pad { shape, layer, zone_connection, .. }) => {
+                self.node.replace(id, Item::Pad { shape, net, layer, zone_connection });
                 Ok(())
             }
             _ => Err(NetError::NotAPad),
@@ -3899,6 +3977,7 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: None,
                 pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
             }],
             holes: vec![crate::footprint::HoleTemplate { offset: Point::new(mm_to_unit(1.0), 0), drill: mm_to_unit(2.2) }],
             exclude_from_bom: true,
@@ -4120,6 +4199,7 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: None,
                 pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
             }],
             holes: Vec::new(),
             exclude_from_bom: false,
@@ -4170,6 +4250,7 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: None,
                 pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
             }],
             holes: Vec::new(),
             exclude_from_bom: false,
@@ -4199,6 +4280,7 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: None,
                 pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
             }],
             holes: Vec::new(),
             exclude_from_bom: false,
@@ -4245,6 +4327,7 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: None,
                 pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
             }],
             holes: Vec::new(),
             exclude_from_bom: false,
@@ -5048,6 +5131,7 @@ mod tests {
                 rotation_deg,
                 hole_diameter: None,
                 pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
             }],
             holes: Vec::new(),
             exclude_from_bom: false,
@@ -5492,7 +5576,7 @@ mod tests {
         let net_a = board.create_net();
         let net_b = board.create_net();
         let pad_radius = mm_to_unit(0.1);
-        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu });
+        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         // Smallest JLCPCB-legal via (0.35/0.15 -- annular ring exactly
         // at MIN_VIA_ANNULAR_RING once drill is at MIN_VIA_HOLE).
         let via_diameter = mm_to_unit(0.35);
@@ -5526,7 +5610,7 @@ mod tests {
         let net_a = board.create_net();
         let net_b = board.create_net();
         let pad_radius = mm_to_unit(0.1);
-        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu });
+        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
 
         let ideal = board.pin_stitching_via_candidates(pad_id, DEFAULT_VIA_DIAMETER)[0];
         // A tiny via, but sitting exactly on the one point being
@@ -5569,7 +5653,7 @@ mod tests {
         let net_a = board.create_net();
         let net_b = board.create_net();
         let pad_radius = mm_to_unit(0.1);
-        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu });
+        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
         board.node.add(Item::Via { shape: Circle::new(Point::new(0, 0), mm_to_unit(2.0)), drill: 0, net: Some(net_b) });
         let items_before = board.node.iter().count();
 
@@ -5696,5 +5780,54 @@ mod tests {
         board.remove_zone(id); // already gone -- must not panic or touch anything
         assert_eq!(board.node.iter().count(), node_count);
         assert!(board.zones.is_empty());
+    }
+
+    fn single_pad_template(name: &str, zone_connection: ZoneConnection) -> crate::footprint::FootprintTemplate {
+        let mut t = two_pin_template();
+        t.name = name.into();
+        // Tiny courtyard so body-clearance does not mask the copper gate under test.
+        t.explicit_courtyard = Some(crate::footprint::Courtyard {
+            center: Point::new(0, 0),
+            width: MM / 10,
+            height: MM / 10,
+        });
+        t.pads = vec![crate::footprint::PadTemplate {
+            offset: Point::new(0, 0),
+            radius: MM / 2,
+            layer: LayerId::FCu,
+            number: "1".into(),
+            shape: crate::footprint::PadShapeKind::Circle,
+            rotation_deg: 0.0,
+            hole_diameter: None,
+            pin_name: None,
+            zone_connection,
+        }];
+        t.holes.clear();
+        t
+    }
+
+    #[test]
+    fn thermal_keepout_refuses_two_thermal_pads_closer_than_two_gaps() {
+        let mut board = test_board();
+        let a = single_pad_template("ThermalA", ZoneConnection::Thermal);
+        let b = single_pad_template("ThermalB", ZoneConnection::Thermal);
+        board.try_place_footprint(&a, Point::new(0, 0), 0.0).unwrap();
+        // Radii 0.5mm; centres 1.35mm apart → copper edge gap 0.35mm.
+        // Clears body spacing (0.3mm) and PAD_TO_PAD (0.15mm), but not
+        // 2× thermal::GAP (0.40mm).
+        let err = board.try_place_footprint(&b, Point::new(MM + 350_000, 0), 0.0).unwrap_err();
+        assert_eq!(err, PlacementError::ThermalKeepout);
+    }
+
+    #[test]
+    fn solid_pads_skip_thermal_keepout_and_may_pack_denser() {
+        let mut board = test_board();
+        let a = single_pad_template("SolidA", ZoneConnection::Solid);
+        let b = single_pad_template("SolidB", ZoneConnection::Solid);
+        board.try_place_footprint(&a, Point::new(0, 0), 0.0).unwrap();
+        // Same geometry that ThermalKeepout refused — Solid must pass.
+        board
+            .try_place_footprint(&b, Point::new(MM + 350_000, 0), 0.0)
+            .expect("solid EP-style pads must not pay thermal keepout");
     }
 }
