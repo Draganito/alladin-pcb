@@ -14,6 +14,7 @@ use alladin_geom::{
 
 use crate::footprint::{world_assembly_drills, world_courtyard, world_items, FootprintTemplate};
 use crate::routing::path_keeps_edge_clearance;
+use crate::thermal_relief::{first_illegal_thermal_anywhere, free_spoke_directions, self_exclude, MIN_FREE_SPOKE_DIRS};
 use crate::zone_fill;
 
 /// Board layer count `alladin-pcb`'s "New board" dialog offers. Only 1/2
@@ -258,6 +259,10 @@ pub struct PlacedFootprint {
     /// same "components are front-side" assumption the courtyard
     /// checks already make).
     pub pin1_marker: Option<Point>,
+    /// Pin numbers parallel to [`Self::pad_item_ids`] (from the template
+    /// at place/load time) — used so multi-pad pins skip each other in
+    /// thermal spoke probes without needing a live template registry.
+    pub pad_numbers: Vec<String>,
 }
 
 impl PlacedFootprint {
@@ -751,10 +756,11 @@ pub enum PlacementError {
     /// the stub).
     OnTrack,
     /// Pads with [`ZoneConnection::Thermal`] would sit too close for
-    /// their annular pour gaps ([`thermal::GAP`]) to form. Clearance is
-    /// `max(PAD_TO_PAD, sum of thermal keepouts)` so ordinary packing
-    /// still works while same-net pairs (skipped by `query_colliding`)
-    /// cannot collapse the rings. Solid pads do not pay the extra keepout.
+    /// legal thermal reliefs: either the annular pour-gap keepout
+    /// ([`thermal::GAP`]) against other pads fails, or fewer than
+    /// [`MIN_FREE_SPOKE_DIRS`] spoke corridors are free against
+    /// pads/vias/tracks/holes on the same layer. Solid pads do not pay
+    /// the thermal keepout.
     ThermalKeepout,
 }
 
@@ -791,7 +797,8 @@ impl std::fmt::Display for PlacementError {
             ),
             PlacementError::ThermalKeepout => write!(
                 f,
-                "would place same-net pads too close for thermal-relief keepout ({:.2}mm gap around each thermal pad that joins a copper pour)",
+                "would leave a thermal pad with fewer than {MIN_FREE_SPOKE_DIRS} free spoke directions \
+                 (need {:.2}mm pour gap plus spoke room clear of pads/vias/tracks/holes)",
                 thermal::GAP as f64 / MM as f64
             ),
         }
@@ -1250,10 +1257,9 @@ impl BoardDoc {
             return Err(PlacementError::Collision(colliding));
         }
 
-        // Same-net pad pairs never reach `query_colliding` (KiCad-style
-        // fast path), but two Thermal pads on the same net still need
-        // room for their pour gaps -- see `PlacementError::ThermalKeepout`.
-        if self.thermal_keepout_violated(template, position, rotation_deg, &exclude_ids, &existing_pad_nets) {
+        // Thermal pads need pour-gap keepout and ≥2 free spoke corridors
+        // -- see `PlacementError::ThermalKeepout`.
+        if self.thermal_keepout_violated(template, position, rotation_deg, &exclude_ids, &existing_pad_nets, &[]) {
             return Err(PlacementError::ThermalKeepout);
         }
 
@@ -1421,7 +1427,11 @@ impl BoardDoc {
         }
 
         self.outline = new_outline;
-        self.refill_all_zones();
+        // Best-effort: illegal thermals leave those zones stale rather than
+        // aborting an otherwise legal outline change.
+        for id in self.zones.iter().map(|z| z.id).collect::<Vec<_>>() {
+            let _ = self.refill_zone(id);
+        }
         Ok(())
     }
 
@@ -1486,6 +1496,7 @@ impl BoardDoc {
             courtyard: world_courtyard(template, position, rotation_deg),
             assembly_drills: world_assembly_drills(template, position, rotation_deg),
             pin1_marker: None,
+            pad_numbers: template.pads.iter().map(|p| p.number.clone()).collect(),
         });
         Ok(id)
     }
@@ -1709,6 +1720,29 @@ impl BoardDoc {
                 scratch.add(item);
             }
         }
+        // Re-check thermal spoke room against co-placed candidates.
+        let all_extras: Vec<Item> = specs
+            .iter()
+            .flat_map(|s| world_items(s.template, s.position, s.rotation_deg))
+            .collect();
+        for spec in specs {
+            let mine = world_items(spec.template, spec.position, spec.rotation_deg);
+            let extras: Vec<Item> = all_extras
+                .iter()
+                .filter(|other| {
+                    !mine.iter().any(|m| match (m, *other) {
+                        (Item::Pad { shape: a, .. }, Item::Pad { shape: b, .. }) => {
+                            a.center() == b.center()
+                        }
+                        _ => false,
+                    })
+                })
+                .cloned()
+                .collect();
+            if self.thermal_keepout_violated(spec.template, spec.position, spec.rotation_deg, &[], &[], &extras) {
+                return Err(PlacementError::ThermalKeepout);
+            }
+        }
         Ok(())
     }
 
@@ -1875,6 +1909,7 @@ impl BoardDoc {
             courtyard: world_courtyard(template, position, rotation_deg),
             assembly_drills: world_assembly_drills(template, position, rotation_deg),
             pin1_marker: None,
+            pad_numbers: template.pads.iter().map(|p| p.number.clone()).collect(),
         });
         id
     }
@@ -1997,11 +2032,13 @@ impl BoardDoc {
     }
 
     /// Thermal pads need [`thermal::GAP`] of pour-ring room against
-    /// other pads on the same layer. Runs for every candidate pad whose
-    /// template property is Thermal (and against other Thermal pads'
-    /// keepouts), including same-net pairs that `query_colliding` skips.
-    /// `existing_pad_nets` is unused for the geometry check but kept so
-    /// call sites stay aligned with the rest of placement's pad order.
+    /// other pads on the same layer, and ≥[`MIN_FREE_SPOKE_DIRS`] free
+    /// spoke corridors against pads/vias/tracks/holes (sibling pads of
+    /// the same pin number excluded). Runs for every candidate Thermal
+    /// pad, including same-net pairs that `query_colliding` skips.
+    /// `extra_obstacles` are candidate pads not yet in the node (batch
+    /// co-members). `existing_pad_nets` is unused for the geometry check
+    /// but kept so call sites stay aligned with placement's pad order.
     fn thermal_keepout_violated(
         &self,
         template: &FootprintTemplate,
@@ -2009,10 +2046,14 @@ impl BoardDoc {
         rotation_deg: f64,
         exclude_ids: &[ItemId],
         _existing_pad_nets: &[Option<NetId>],
+        extra_obstacles: &[Item],
     ) -> bool {
-        for item in world_items(template, position, rotation_deg) {
+        let candidate_items = world_items(template, position, rotation_deg);
+        let spoke_width = self.thermal_spoke_width();
+
+        for (pad_index, item) in candidate_items.iter().enumerate() {
             let Item::Pad { shape: c_shape, zone_connection: c_conn, layer: c_layer, .. } = item else { continue };
-            let c_keep = thermal_keepout_mm(c_conn);
+            let c_keep = thermal_keepout_mm(*c_conn);
             for (id, other) in self.node.iter_with_ids() {
                 if exclude_ids.contains(&id) {
                     continue;
@@ -2020,7 +2061,7 @@ impl BoardDoc {
                 let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
                     continue;
                 };
-                if *o_layer != c_layer {
+                if *o_layer != *c_layer {
                     continue;
                 }
                 let o_keep = thermal_keepout_mm(*o_conn);
@@ -2028,12 +2069,125 @@ impl BoardDoc {
                     continue;
                 }
                 let clearance = JlcpcbClearance::PAD_TO_PAD.max(c_keep + o_keep);
-                if pad_shapes_closer_than(&c_shape, o_shape, clearance) {
+                if pad_shapes_closer_than(c_shape, o_shape, clearance) {
                     return true;
                 }
             }
+            // Gap keepout vs other candidates in the same batch/place.
+            if c_keep > 0 {
+                for (other_index, other) in candidate_items.iter().enumerate() {
+                    if other_index == pad_index {
+                        continue;
+                    }
+                    let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
+                        continue;
+                    };
+                    if *o_layer != *c_layer {
+                        continue;
+                    }
+                    // Sibling pads of the same pin never pay gap keepout
+                    // against each other (one electrical pin).
+                    if template.pads.get(pad_index).map(|p| &p.number) == template.pads.get(other_index).map(|p| &p.number) {
+                        continue;
+                    }
+                    let o_keep = thermal_keepout_mm(*o_conn);
+                    if o_keep == 0 && c_keep == 0 {
+                        continue;
+                    }
+                    let clearance = JlcpcbClearance::PAD_TO_PAD.max(c_keep + o_keep);
+                    if pad_shapes_closer_than(c_shape, o_shape, clearance) {
+                        return true;
+                    }
+                }
+                for other in extra_obstacles {
+                    let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
+                        continue;
+                    };
+                    if *o_layer != *c_layer {
+                        continue;
+                    }
+                    let o_keep = thermal_keepout_mm(*o_conn);
+                    if c_keep == 0 && o_keep == 0 {
+                        continue;
+                    }
+                    let clearance = JlcpcbClearance::PAD_TO_PAD.max(c_keep + o_keep);
+                    if pad_shapes_closer_than(c_shape, o_shape, clearance) {
+                        return true;
+                    }
+                }
+            }
+
+            if *c_conn != ZoneConnection::Thermal {
+                continue;
+            }
+            // Spoke-corridor freedom: ≥2 free pad-local directions.
+            let number = template.pads.get(pad_index).map(|p| p.number.as_str()).unwrap_or("");
+            let exclude_centers: Vec<(Unit, Unit)> = template
+                .pads
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.number == number)
+                .filter_map(|(i, _)| match candidate_items.get(i) {
+                    Some(Item::Pad { shape, .. }) => {
+                        let c = shape.center();
+                        Some((c.x, c.y))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let node_obstacles = self.node.iter_with_ids().filter(|(id, _)| !exclude_ids.contains(id)).map(|(_, item)| item);
+            let extras = extra_obstacles.iter().chain(candidate_items.iter().enumerate().filter(|(i, _)| *i != pad_index).map(|(_, it)| it));
+            // Exclude other candidate pads of this footprint from the
+            // "extra" chain when they are siblings (already in exclude_centers);
+            // free_spoke_directions skips exclude_centers for Pad items.
+            let obstacle_iter = node_obstacles.chain(extras);
+            let free = free_spoke_directions(c_shape, *c_layer, spoke_width, obstacle_iter, &exclude_centers);
+            if free < MIN_FREE_SPOKE_DIRS {
+                return true;
+            }
         }
         false
+    }
+
+    /// Sibling/self centers for thermal spoke probes, keyed by pad center.
+    fn thermal_exclude_map(&self) -> std::collections::HashMap<(Unit, Unit), Vec<(Unit, Unit)>> {
+        let mut map = std::collections::HashMap::new();
+        for fp in &self.footprints {
+            for (i, &pad_id) in fp.pad_item_ids.iter().enumerate() {
+                let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else { continue };
+                let c = shape.center();
+                let Some(number) = fp.pad_numbers.get(i) else {
+                    map.insert((c.x, c.y), self_exclude(c));
+                    continue;
+                };
+                let siblings: Vec<(Unit, Unit)> = fp
+                    .pad_numbers
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, n)| *n == number)
+                    .filter_map(|(j, _)| {
+                        let id = *fp.pad_item_ids.get(j)?;
+                        let Item::Pad { shape, .. } = self.node.get(id)? else { return None };
+                        let p = shape.center();
+                        Some((p.x, p.y))
+                    })
+                    .collect();
+                map.insert((c.x, c.y), siblings);
+            }
+        }
+        map
+    }
+
+    /// Whether every Thermal pad on the board still has ≥[`MIN_FREE_SPOKE_DIRS`]
+    /// free spoke corridors (used after hypothetically adding copper).
+    pub(crate) fn thermals_remain_legal(&self) -> Result<(), PlacementError> {
+        let spoke_width = self.thermal_spoke_width();
+        let map = self.thermal_exclude_map();
+        let exclude = |center: Point| map.get(&(center.x, center.y)).cloned().unwrap_or_else(|| self_exclude(center));
+        if first_illegal_thermal_anywhere(&self.node, spoke_width, &exclude).is_some() {
+            return Err(PlacementError::ThermalKeepout);
+        }
+        Ok(())
     }
 
     /// Whether placing `template` at `position`/`rotation_deg` would
@@ -2239,13 +2393,37 @@ impl BoardDoc {
     }
 
     /// Commits a routed polyline as one `Item::Track` per leg -- the only
-    /// place `alladin-pcb` adds tracks to `self.node`. This function
-    /// itself does no validation, trusting the caller already has a
-    /// legal path (see `crate::routing`).
+    /// place `alladin-pcb` adds tracks to `self.node`. Prefers
+    /// [`Self::try_add_track_path`] when thermal integrity must be gated.
     pub(crate) fn add_track_path(&mut self, path: &[Point], net: NetId, layer: LayerId, width: Unit, class: NetClass) {
         for leg in path.windows(2) {
             self.node.add(Item::Track { shape: Segment::new(leg[0], leg[1], width), net: Some(net), layer, class });
         }
+    }
+
+    /// Like [`Self::add_track_path`], but rolls back and returns
+    /// [`PlacementError::ThermalKeepout`] if the new copper would leave
+    /// any Thermal pad with fewer than [`MIN_FREE_SPOKE_DIRS`] free
+    /// spoke corridors.
+    pub(crate) fn try_add_track_path(
+        &mut self,
+        path: &[Point],
+        net: NetId,
+        layer: LayerId,
+        width: Unit,
+        class: NetClass,
+    ) -> Result<(), PlacementError> {
+        let ids_before: std::collections::HashSet<usize> = self.node.iter_with_ids().map(|(id, _)| id.0).collect();
+        self.add_track_path(path, net, layer, width, class);
+        if let Err(e) = self.thermals_remain_legal() {
+            let added: Vec<ItemId> =
+                self.node.iter_with_ids().map(|(id, _)| id).filter(|id| !ids_before.contains(&id.0)).collect();
+            for id in added {
+                self.node.remove(id);
+            }
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Places a through-hole via (always FCu<->BCu, see
@@ -2284,7 +2462,12 @@ impl BoardDoc {
             return Err(PlacementError::Collision(colliding));
         }
 
-        Ok(self.node.add(candidate))
+        let id = self.node.add(candidate);
+        if let Err(e) = self.thermals_remain_legal() {
+            self.node.remove(id);
+            return Err(e);
+        }
+        Ok(id)
     }
 
     /// Whether a new drilled hole (a via barrel or an NPTH mechanical
@@ -2583,7 +2766,11 @@ impl BoardDoc {
                 continue;
             }
 
-            self.add_track_path(&[pad_center, via_center], net, layer, stub_width, NetClass::C);
+            if let Err(e) = self.try_add_track_path(&[pad_center, via_center], net, layer, stub_width, NetClass::C) {
+                self.node.remove(via_id);
+                first_err.get_or_insert(PinStitchingViaError::Via(e));
+                continue;
+            }
             return Ok(PinStitchingVia { via_id, center: via_center });
         }
         Err(first_err.expect("pin_stitching_via_candidates never returns empty for a pad_id already confirmed live above"))
@@ -3009,7 +3196,7 @@ impl BoardDoc {
     /// later `refill_zone` (once the board around it changes) can still
     /// find it and try again, rather than the user having to redraw it
     /// from scratch.
-    pub fn add_zone(&mut self, outline: Polygon, layer: LayerId, net: NetId) -> ZoneId {
+    pub fn add_zone(&mut self, outline: Polygon, layer: LayerId, net: NetId) -> Result<ZoneId, zone_fill::FillZoneError> {
         // Read *before* computing the fill -- not that it matters here,
         // since inserting the resulting `Item::Zone`(s) never itself
         // bumps `obstacle_revision` (see that field's own doc comment),
@@ -3020,8 +3207,10 @@ impl BoardDoc {
         let filled_at_revision = self.node.obstacle_revision();
         let resolver = self.resolver();
         let spoke_width = self.thermal_spoke_width();
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width);
-        self.insert_new_zone(outline, layer, net, items, filled_at_revision)
+        let map = self.thermal_exclude_map();
+        let exclude = |center: Point| map.get(&(center.x, center.y)).cloned().unwrap_or_else(|| self_exclude(center));
+        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width, &exclude)?;
+        Ok(self.insert_new_zone(outline, layer, net, items, filled_at_revision))
     }
 
     /// The insertion half of [`Self::add_zone`] -- adds the
@@ -3074,15 +3263,20 @@ impl BoardDoc {
     /// why). The zone's previous fill islands are removed from
     /// `self.node` first, so a shrinking pour never leaves stale copper
     /// behind. A no-op if `id` doesn't name a currently-recorded zone.
-    pub fn refill_zone(&mut self, id: ZoneId) {
-        self.clear_zone_fill(id);
-        let Some(index) = self.zones.iter().position(|z| z.id == id) else { return };
+    pub fn refill_zone(&mut self, id: ZoneId) -> Result<(), zone_fill::FillZoneError> {
+        let Some(index) = self.zones.iter().position(|z| z.id == id) else { return Ok(()) };
         let (outline, layer, net) = (self.zones[index].outline.clone(), self.zones[index].layer, self.zones[index].net);
-        let filled_at_revision = self.node.obstacle_revision();
         let resolver = self.resolver();
         let spoke_width = self.thermal_spoke_width();
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width);
+        let map = self.thermal_exclude_map();
+        let exclude = |center: Point| map.get(&(center.x, center.y)).cloned().unwrap_or_else(|| self_exclude(center));
+        // Validate/compute before clearing so a refused fill leaves prior
+        // copper (zones stay stale with an error rather than going empty).
+        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width, &exclude)?;
+        self.clear_zone_fill(id);
+        let filled_at_revision = self.node.obstacle_revision();
         self.insert_zone_refill(id, items, filled_at_revision);
+        Ok(())
     }
 
     /// Whether any current [`ZoneRecord`]'s fill predates the board's
@@ -3103,10 +3297,11 @@ impl BoardDoc {
     /// [`Self::refill_zone`] for every zone currently on the board -- the
     /// "Refill zones" UI action, for when several pours need to catch up
     /// with the board at once rather than one at a time.
-    pub fn refill_all_zones(&mut self) {
+    pub fn refill_all_zones(&mut self) -> Result<(), zone_fill::FillZoneError> {
         for id in self.zones.iter().map(|z| z.id).collect::<Vec<_>>() {
-            self.refill_zone(id);
+            self.refill_zone(id)?;
         }
+        Ok(())
     }
 
     /// Deletes `id` outright: removes its current fill island(s) from
@@ -3384,11 +3579,25 @@ impl BoardDoc {
     /// required to be contiguous or even electrically connected --
     /// callers (just [`crate::routing::TraceDrag`] today) are trusted to
     /// have already picked a sensible set.
-    pub(crate) fn replace_wire_segment(&mut self, remove: &[ItemId], new_path: &[Point], net: NetId, layer: LayerId, width: Unit, class: NetClass) {
+    pub(crate) fn replace_wire_segment(
+        &mut self,
+        remove: &[ItemId],
+        new_path: &[Point],
+        net: NetId,
+        layer: LayerId,
+        width: Unit,
+        class: NetClass,
+    ) -> Result<(), PlacementError> {
+        let node_before = self.node.clone();
         for &id in remove {
             self.remove_item(id);
         }
         self.add_track_path(new_path, net, layer, width, class);
+        if let Err(e) = self.thermals_remain_legal() {
+            self.node = node_before;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Deletes the *entire* electrically-continuous wire at `id` (see
@@ -3991,7 +4200,9 @@ mod tests {
                 rotation_deg: 0.0,
                 hole_diameter: None,
                 pin_name: None,
-                zone_connection: ZoneConnection::Thermal,
+                // Solid: a 2.2mm drill keep-out beside a Thermal pad would
+                // fail the spoke-corridor gate (same-footprint hole counts).
+                zone_connection: ZoneConnection::Solid,
             }],
             holes: vec![crate::footprint::HoleTemplate { offset: Point::new(mm_to_unit(1.0), 0), drill: mm_to_unit(2.2) }],
             exclude_from_bom: true,
@@ -4537,7 +4748,7 @@ mod tests {
         // exactly what the GUI's "Solid F.Cu/B.Cu plane" checkbox
         // produces.
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net);
+        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
         assert!(board.node.iter().any(|item| matches!(item, Item::Zone { .. })), "the plane must have actually filled");
 
         let new_position = Point::new(-10 * MM, 15 * MM);
@@ -4560,7 +4771,7 @@ mod tests {
         let _ = other;
 
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net);
+        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
         assert!(board.node.iter().any(|item| matches!(item, Item::Zone { .. })), "the plane must have actually filled");
 
         // `moving`'s own two pads are still net-less -- neither one
@@ -4586,7 +4797,7 @@ mod tests {
         let net = board.connect_pads(pad_ids_of(&board, 0)[0], pad_ids_of(&board, 0)[1]).unwrap();
 
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net);
+        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
 
         // The new, still-unconnected part, placed squarely on top of
         // the just-poured plane.
@@ -4596,7 +4807,7 @@ mod tests {
             assert_eq!(board.pad_net(pad), Ok(None), "a freshly placed pad must start net-less");
         }
 
-        board.refill_all_zones();
+        board.refill_all_zones().unwrap();
 
         for &pad in &new_pads {
             assert_eq!(board.pad_net(pad), Ok(None), "refilling zones must never wire an unrelated pad onto the plane's net");
@@ -4613,13 +4824,13 @@ mod tests {
         let net = board.connect_pads(a, b).unwrap();
 
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net);
+        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
         assert!(!board.zones_are_stale(), "a zone must never be stale immediately after its own fill");
 
         board.try_move_footprint(moving, &template, Point::new(-10 * MM, 10 * MM), 0.0).expect("moving under its own same-net plane must succeed");
         assert!(board.zones_are_stale(), "the plane's fill still reflects the footprint's old position, not its new one");
 
-        board.refill_all_zones();
+        board.refill_all_zones().unwrap();
         assert!(!board.zones_are_stale(), "refilling must catch every zone back up to the board's current state");
     }
 
@@ -5749,7 +5960,7 @@ mod tests {
     fn set_outline_reclips_an_existing_zone_to_the_smaller_shape() {
         let mut board = test_board(); // 40x40mm
         let net = board.create_net();
-        board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net);
+        board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net).unwrap();
         assert!(!board.zones[0].item_ids.is_empty(), "test setup: the zone must have filled to something on the full board");
 
         let smaller_outline = vec![Polygon::rounded_rect(10 * MM, 10 * MM, 0, 8)];
@@ -5772,7 +5983,7 @@ mod tests {
     fn remove_zone_deletes_its_fill_islands_and_forgets_the_record() {
         let mut board = test_board(); // 40x40mm
         let net = board.create_net();
-        let id = board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net);
+        let id = board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net).unwrap();
         let island_count = board.zones[0].item_ids.len();
         assert!(island_count > 0, "test setup: an obstacle-free pour must fill to at least one island");
         let node_count_before = board.node.iter().count();
@@ -5787,7 +5998,7 @@ mod tests {
     fn remove_zone_is_a_no_op_for_an_id_that_is_no_longer_recorded() {
         let mut board = test_board();
         let net = board.create_net();
-        let id = board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net);
+        let id = board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net).unwrap();
         board.remove_zone(id);
         let node_count = board.node.iter().count();
 
@@ -5843,5 +6054,91 @@ mod tests {
         board
             .try_place_footprint(&b, Point::new(MM + 350_000, 0), 0.0)
             .expect("solid EP-style pads must not pay thermal keepout");
+    }
+
+    #[test]
+    fn thermal_placement_ok_when_isolated() {
+        let mut board = test_board();
+        let a = single_pad_template("ThermalIso", ZoneConnection::Thermal);
+        board.try_place_footprint(&a, Point::new(0, 0), 0.0).expect("isolated thermal must place");
+    }
+
+    #[test]
+    fn thermal_placement_refuses_when_track_blocks_spoke_corridors() {
+        let mut board = test_board();
+        let net = board.create_net();
+        // Four tracks boxing in a 0.5mm pad so every spoke corridor hits copper.
+        let r = MM / 2;
+        let gap = thermal::GAP + board.thermal_spoke_width();
+        let d = r + gap / 2;
+        let w = board.thermal_spoke_width();
+        for (a, b) in [
+            (Point::new(-2 * MM, d), Point::new(2 * MM, d)),
+            (Point::new(-2 * MM, -d), Point::new(2 * MM, -d)),
+            (Point::new(d, -2 * MM), Point::new(d, 2 * MM)),
+            (Point::new(-d, -2 * MM), Point::new(-d, 2 * MM)),
+        ] {
+            board.add_track_path(&[a, b], net, LayerId::FCu, w, NetClass::C);
+        }
+        let pad = single_pad_template("BoxedThermal", ZoneConnection::Thermal);
+        let err = board.try_place_footprint(&pad, Point::new(0, 0), 0.0).unwrap_err();
+        assert_eq!(err, PlacementError::ThermalKeepout);
+    }
+
+    #[test]
+    fn sibling_thermal_pads_same_pin_may_sit_close() {
+        let mut board = test_board();
+        let mut t = single_pad_template("MultiPaste", ZoneConnection::Thermal);
+        t.pads = vec![
+            crate::footprint::PadTemplate {
+                offset: Point::new(0, 0),
+                radius: MM / 2,
+                layer: LayerId::FCu,
+                number: "EP".into(),
+                shape: crate::footprint::PadShapeKind::Circle,
+                rotation_deg: 0.0,
+                hole_diameter: None,
+                pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
+            },
+            crate::footprint::PadTemplate {
+                offset: Point::new(MM + 50_000, 0), // edge gap 0.05mm
+                radius: MM / 2,
+                layer: LayerId::FCu,
+                number: "EP".into(),
+                shape: crate::footprint::PadShapeKind::Circle,
+                rotation_deg: 0.0,
+                hole_diameter: None,
+                pin_name: None,
+                zone_connection: ZoneConnection::Thermal,
+            },
+        ];
+        board
+            .try_place_footprint(&t, Point::new(0, 0), 0.0)
+            .expect("same-pin sibling thermals must not block each other's spokes");
+    }
+
+    #[test]
+    fn route_refuses_track_that_drops_thermal_below_two_free_dirs() {
+        let mut board = test_board();
+        let pad = single_pad_template("RouteGate", ZoneConnection::Thermal);
+        let id = board.try_place_footprint(&pad, Point::new(0, 0), 0.0).unwrap();
+        let pad_id = board.footprints.iter().find(|f| f.id == id).unwrap().pad_item_ids[0];
+        let net = board.connect_pads(pad_id, pad_id).unwrap();
+
+        let w = board.thermal_spoke_width();
+        let r = MM / 2;
+        // Tracks that do NOT terminate on the pad (parallel blockers).
+        let d = r + thermal::GAP + w / 2;
+        // Block only +X and -X — leave ±Y free (≥2).
+        board.add_track_path(&[Point::new(d, -MM), Point::new(d, MM)], net, LayerId::FCu, w, NetClass::C);
+        board.add_track_path(&[Point::new(-d, -MM), Point::new(-d, MM)], net, LayerId::FCu, w, NetClass::C);
+        assert!(board.thermals_remain_legal().is_ok());
+
+        // Block +Y as well → only -Y left → refuse.
+        let err = board
+            .try_add_track_path(&[Point::new(-MM, d), Point::new(MM, d)], net, LayerId::FCu, w, NetClass::C)
+            .unwrap_err();
+        assert_eq!(err, PlacementError::ThermalKeepout);
     }
 }

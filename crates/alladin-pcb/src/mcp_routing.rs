@@ -546,7 +546,11 @@ pub fn commit_route(doc: &mut BoardDoc, route: &ParsedRoute) -> Result<Value, St
                 return Err(format!("via after segment {i}: {e} — rolled back"));
             }
         }
-        doc.add_track_path(path, route.net, *layer, route.width, NetClass::C);
+        if let Err(e) = doc.try_add_track_path(path, route.net, *layer, route.width, NetClass::C) {
+            rollback(doc, &ids_before);
+            let e: crate::board_doc::PlacementError = e;
+            return Err(format!("track segment {i}: {e} — rolled back"));
+        }
     }
 
     let pieces_after = doc.node.net_copper_components(route.net).len();

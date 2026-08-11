@@ -536,6 +536,7 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
             courtyard: world_courtyard(template, sf.position, sf.rotation_deg),
             assembly_drills: world_assembly_drills(template, sf.position, sf.rotation_deg),
             pin1_marker: sf.pin1_marker,
+            pad_numbers: template.pads.iter().map(|p| p.number.clone()).collect(),
         });
     }
 
@@ -613,7 +614,7 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
                 doc.insert_new_zone(sz.outline, layer, net, items, filled_at_revision);
             }
             None => {
-                doc.add_zone(sz.outline, layer, net);
+                doc.add_zone(sz.outline, layer, net).expect("embedded zone fill");
             }
         }
     }
@@ -765,7 +766,7 @@ mod tests {
             Point::new(20 * MM, 10 * MM),
             Point::new(-20 * MM, 10 * MM),
         ]);
-        let zone_id = doc.add_zone(outline.clone(), LayerId::FCu, net);
+        let zone_id = doc.add_zone(outline.clone(), LayerId::FCu, net).unwrap();
         let islands_before: Vec<Polygon> = doc
             .zones
             .iter()
@@ -811,7 +812,7 @@ mod tests {
             Point::new(20 * MM, 10 * MM),
             Point::new(-20 * MM, 10 * MM),
         ]);
-        doc.add_zone(outline, LayerId::FCu, net);
+        doc.add_zone(outline, LayerId::FCu, net).unwrap();
 
         let json = to_json(&doc, &[]);
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -835,7 +836,7 @@ mod tests {
             Point::new(20 * MM, 10 * MM),
             Point::new(-20 * MM, 10 * MM),
         ]);
-        doc.add_zone(outline, LayerId::FCu, net);
+        doc.add_zone(outline, LayerId::FCu, net).unwrap();
         // Routing a track after the fill bumps `obstacle_revision`, so
         // the zone's copper no longer matches the board it sits on.
         doc.add_track_path(&[Point::new(-10 * MM, 0), Point::new(10 * MM, 0)], net, LayerId::BCu, 250_000, NetClass::C);
@@ -879,7 +880,7 @@ mod tests {
         let mut doc = NewBoardParams::default().create();
         let net = doc.create_net();
         let drawn_outline = Polygon::new(vec![Point::new(-5 * MM, -5 * MM), Point::new(5 * MM, -5 * MM), Point::new(5 * MM, 5 * MM), Point::new(-5 * MM, 5 * MM)]);
-        doc.add_zone(drawn_outline, LayerId::FCu, net);
+        doc.add_zone(drawn_outline, LayerId::FCu, net).unwrap();
         let static_outline = Polygon::new(vec![Point::new(-20 * MM, -10 * MM), Point::new(20 * MM, -10 * MM), Point::new(20 * MM, 10 * MM), Point::new(-20 * MM, 10 * MM)]);
         doc.node.add(Item::Zone { outline: static_outline, layer: LayerId::BCu, net: Some(net) });
 

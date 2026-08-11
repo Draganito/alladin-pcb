@@ -408,8 +408,7 @@ impl RoutingDrag {
         let Some(dock_path) = &self.preview else { return false };
         let mut path = self.fixed_path();
         path.extend_from_slice(&dock_path[1..]);
-        doc.add_track_path(&path, self.net, self.layer, self.width, NetClass::C);
-        true
+        doc.try_add_track_path(&path, self.net, self.layer, self.width, NetClass::C).is_ok()
     }
 
     /// Drops a via at the current live end, commits tracks up to it, flips layer.
@@ -420,11 +419,14 @@ impl RoutingDrag {
         }
         let via_center = *live.last().unwrap();
 
-        doc.try_add_via(via_center, self.net, self.via_diameter, self.via_drill).map_err(DropViaError::Via)?;
+        let via_id = doc.try_add_via(via_center, self.net, self.via_diameter, self.via_drill).map_err(DropViaError::Via)?;
 
         let mut path = self.fixed_path();
         path.extend_from_slice(live);
-        doc.add_track_path(&path, self.net, self.layer, self.width, NetClass::C);
+        if let Err(e) = doc.try_add_track_path(&path, self.net, self.layer, self.width, NetClass::C) {
+            doc.node.remove(via_id);
+            return Err(DropViaError::Via(e));
+        }
 
         self.layer = match self.layer {
             LayerId::FCu => LayerId::BCu,
@@ -648,8 +650,7 @@ impl TraceDrag {
     /// original trace exactly as it was, not commit a half-drawn mess.
     pub fn commit(&self, doc: &mut BoardDoc) -> bool {
         let Some(path) = self.preview() else { return false };
-        doc.replace_wire_segment(&self.to_remove, path, self.net, self.layer, self.width, NetClass::C);
-        true
+        doc.replace_wire_segment(&self.to_remove, path, self.net, self.layer, self.width, NetClass::C).is_ok()
     }
 }
 
@@ -886,7 +887,7 @@ mod tests {
 
         let plane_net = doc.create_net();
         let board_outline = doc.outline.clone();
-        doc.add_zone(board_outline[0].clone(), LayerId::FCu, plane_net);
+        doc.add_zone(board_outline[0].clone(), LayerId::FCu, plane_net).unwrap();
         assert!(doc.node.iter().any(|item| matches!(item, Item::Zone { .. })), "the plane must have actually filled");
 
         let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();

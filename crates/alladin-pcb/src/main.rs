@@ -14,6 +14,7 @@ mod ratsnest;
 mod routing;
 mod stroke_font;
 mod stroke_font_data;
+mod thermal_relief;
 mod zone_fill;
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -30,13 +30,12 @@ use crate::footprint::{self, world_items, FootprintTemplate, PadShapeKind};
 use crate::parts_db::PartsDb;
 use crate::ratsnest;
 use crate::routing::{RoutingDrag, TraceDrag};
-use crate::zone_fill;
 
 /// Progress / completion messages from the native zone-refill worker.
 #[cfg(not(target_arch = "wasm32"))]
 enum ZoneRefillEvent {
     Progress { done: usize, total: usize },
-    Finished(BoardDoc),
+    Finished { doc: BoardDoc, errors: Vec<String> },
 }
 
 /// In-flight "Refill zones" job. While active, board edits are locked and
@@ -51,6 +50,7 @@ enum ZoneRefillJob {
         remaining: Vec<ZoneId>,
         done: usize,
         total: usize,
+        errors: Vec<String>,
     },
     /// Full refill on a background thread — desktop path.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1528,18 +1528,21 @@ impl EditorState {
         let outline = Polygon::new(std::mem::take(&mut self.zone_points));
         let layer = self.zone_layer;
         let before = self.doc.clone();
-        let resolver = self.doc.resolver();
-        let filled_at_revision = self.doc.node.obstacle_revision();
-        let spoke_width = self.doc.thermal_spoke_width();
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.doc.outline, &self.doc.node, resolver, spoke_width);
-        let island_count = items.len();
-        self.doc.insert_new_zone(outline, layer, net, items, filled_at_revision);
-        self.record_undo(before);
-        self.zone_message = Some(if island_count > 0 {
-            format!("Zone filled into {island_count} island(s).")
-        } else {
-            "Zone outline recorded, but the fill came back empty (fully off-board, or fully consumed by clearances) -- it can be refilled later once obstacles change.".to_string()
-        });
+        match self.doc.add_zone(outline.clone(), layer, net) {
+            Ok(id) => {
+                let island_count = self.doc.zones.iter().find(|z| z.id == id).map(|z| z.item_ids.len()).unwrap_or(0);
+                self.record_undo(before);
+                self.zone_message = Some(if island_count > 0 {
+                    format!("Zone filled into {island_count} island(s).")
+                } else {
+                    "Zone outline recorded, but the fill came back empty (fully off-board, or fully consumed by clearances) -- it can be refilled later once obstacles change.".to_string()
+                });
+            }
+            Err(e) => {
+                self.zone_points = outline.points;
+                self.zone_message = Some(format!("Zone fill refused: {e}"));
+            }
+        }
     }
 
     /// (Re)creates or removes the whole-board solid plane on `layer` synchronously.
@@ -1549,7 +1552,7 @@ impl EditorState {
             LayerId::FCu => std::mem::take(&mut self.front_plane_zones),
             LayerId::BCu => std::mem::take(&mut self.back_plane_zones),
         };
-        for id in old_zones {
+        for &id in &old_zones {
             self.doc.remove_zone(id);
         }
         let Some(net) = net else {
@@ -1561,17 +1564,21 @@ impl EditorState {
             return;
         };
         let outlines = self.doc.outline.clone();
-        let board_outline = self.doc.outline.clone();
-        let resolver = self.doc.resolver();
-        let filled_at_revision = self.doc.node.obstacle_revision();
-        let new_zones: Vec<_> = outlines
-            .into_iter()
-            .map(|outline| {
-                let spoke_width = self.doc.thermal_spoke_width();
-                let items = zone_fill::fill_zone(&outline, layer, net, &board_outline, &self.doc.node, resolver, spoke_width);
-                self.doc.insert_new_zone(outline, layer, net, items, filled_at_revision)
-            })
-            .collect();
+        let mut new_zones = Vec::new();
+        for outline in outlines {
+            match self.doc.add_zone(outline, layer, net) {
+                Ok(id) => new_zones.push(id),
+                Err(e) => {
+                    self.doc = before;
+                    match layer {
+                        LayerId::FCu => self.front_plane_zones = old_zones,
+                        LayerId::BCu => self.back_plane_zones = old_zones,
+                    }
+                    self.zone_message = Some(format!("Solid plane refused: {e}"));
+                    return;
+                }
+            }
+        }
         match layer {
             LayerId::FCu => self.front_plane_zones = new_zones,
             LayerId::BCu => self.back_plane_zones = new_zones,
@@ -1600,17 +1607,26 @@ impl EditorState {
             let mut doc = self.doc.clone();
             let (tx, rx) = mpsc::channel();
             thread::spawn(move || {
+                let mut errors = Vec::new();
                 for (i, id) in ids.into_iter().enumerate() {
-                    doc.refill_zone(id);
+                    if let Err(e) = doc.refill_zone(id) {
+                        errors.push(e.to_string());
+                    }
                     let _ = tx.send(ZoneRefillEvent::Progress { done: i + 1, total });
                 }
-                let _ = tx.send(ZoneRefillEvent::Finished(doc));
+                let _ = tx.send(ZoneRefillEvent::Finished { doc, errors });
             });
             self.zone_refill = Some(ZoneRefillJob::Background { before, rx, done: 0, total });
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.zone_refill = Some(ZoneRefillJob::Cooperative { before, remaining: ids, done: 0, total });
+            self.zone_refill = Some(ZoneRefillJob::Cooperative {
+                before,
+                remaining: ids,
+                done: 0,
+                total,
+                errors: Vec::new(),
+            });
         }
     }
 
@@ -1625,18 +1641,24 @@ impl EditorState {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let ZoneRefillJob::Cooperative { before, mut remaining, mut done, total } = job;
+            let ZoneRefillJob::Cooperative { before, mut remaining, mut done, total, mut errors } = job;
             if let Some(id) = remaining.first().copied() {
                 remaining.remove(0);
-                self.doc.refill_zone(id);
+                if let Err(e) = self.doc.refill_zone(id) {
+                    errors.push(e.to_string());
+                }
                 done += 1;
                 self.zone_message = Some(format!("Refilling zones\u{2026} {done}/{total}"));
             }
             if remaining.is_empty() {
                 self.record_undo(before);
-                self.zone_message = Some("Zones refilled.".to_string());
+                self.zone_message = Some(if errors.is_empty() {
+                    "Zones refilled.".to_string()
+                } else {
+                    format!("Zones refilled with {} thermal error(s): {}", errors.len(), errors[0])
+                });
             } else {
-                self.zone_refill = Some(ZoneRefillJob::Cooperative { before, remaining, done, total });
+                self.zone_refill = Some(ZoneRefillJob::Cooperative { before, remaining, done, total, errors });
             }
         }
 
@@ -1650,11 +1672,15 @@ impl EditorState {
                         total = t;
                         self.zone_message = Some(format!("Refilling zones\u{2026} {done}/{total}"));
                     }
-                    Ok(ZoneRefillEvent::Finished(doc)) => {
+                    Ok(ZoneRefillEvent::Finished { doc, errors }) => {
                         self.record_undo(before);
                         self.doc = doc;
                         self.sync_plane_zones_from_doc();
-                        self.zone_message = Some("Zones refilled.".to_string());
+                        self.zone_message = Some(if errors.is_empty() {
+                            "Zones refilled.".to_string()
+                        } else {
+                            format!("Zones refilled with {} thermal error(s): {}", errors.len(), errors[0])
+                        });
                         break;
                     }
                     Err(mpsc::TryRecvError::Empty) => {
