@@ -8,7 +8,7 @@
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
-use alladin_core::{Item, LayerId};
+use alladin_core::{Item, LayerId, ZoneConnection};
 use alladin_geom::{Point, Unit, MM};
 use alladin_gerber::{
     set_generation_software, Circle as GerberCircle, DrillKind, ExcellonFile, GerberLayer, Oblong, PadMaster, Path as GerberPath, Rectangle,
