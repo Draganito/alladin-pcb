@@ -1,5 +1,9 @@
 # Alladin PCB — Bedienungsanleitung für Anfänger
 
+Alladin ist für **Hobby und Bastler**: schnell von der Idee zu einer
+JLCPCB-fertigen Platine (ESP32, Smart-Home, kleine Robotik-Boards) —
+kein volles Profi-EDA, sondern ein schlanker Start.
+
 Diese Anleitung erklärt Schritt für Schritt, wie man mit **Alladin PCB**
 ein eigenes, produktionsreifes 2-Layer-Board baut — von der leeren Fläche
 bis zur fertig gerouteten Platine mit GND-Netz, 5V-Versorgung, Vias und

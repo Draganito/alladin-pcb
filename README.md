@@ -1,8 +1,13 @@
 # Alladin PCB
 
+**For hobbyists and makers — get from idea to a JLCPCB board quickly.**
+
 Correct-by-construction PCB editor: real **JLCPCB** design rules enforced
 live while you place and route. Desktop AI via an embedded **MCP** surface.
 Written in Rust. Builds as a native desktop app and (experimental) WASM web shell.
+
+Aimed at ESP32 / smart-home / small robotics-style 1–2 layer boards, not
+as a full professional EDA suite.
 
 **License: [AGPL-3.0-only](LICENSE)** — Copyright © 2026 Dragan Bojovic.
 See [NOTICE](NOTICE) for third-party credits (Hershey font).

@@ -2,6 +2,8 @@ Alladin PCB — Debian-Paket
 ==========================
 
 Vorkompilierter Linux-Build von Alladin PCB (AGPL-3.0) als .deb-Paket.
+Für Hobby und Bastler: schnell von der Idee zu einer JLCPCB-Platine
+(ESP32, Smart-Home, kleine Robotik-Boards) — kein Profi-EDA-Ersatz.
 Quellcode: https://github.com/Draganito/alladin-pcb
 Lizenzhinweise: LICENSE.txt
 

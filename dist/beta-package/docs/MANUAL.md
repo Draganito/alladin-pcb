@@ -37,15 +37,19 @@ this manual is the reference that covers *everything*.
 
 ## 1. What Alladin PCB is — the concept
 
-Alladin PCB is an interactive editor for 1- and 2-layer boards built
-around one principle that sets it apart from classic PCB tools:
-**correct-by-construction**. Classic programs let you draw anything and
-report rule violations afterwards in a Design Rule Check (DRC). Alladin
-inverts that: actions that would violate the manufacturing rules are
-**not allowed to happen in the first place**. A part that would land too
-close to another turns red and cannot be dropped there; a trace that
-would create a short is never committed. Whatever is on the board is
-rule-compliant by construction.
+Alladin is for **hobbyists and makers**: get from idea to a
+**JLCPCB**-ready 1-/2-layer board quickly — typically ESP32, smart-home,
+and small robotics boards. Not a full professional EDA suite, but a lean
+path to an orderable board (optionally with AI via MCP).
+
+Alladin PCB is an interactive editor built around one principle that sets
+it apart from classic PCB tools: **correct-by-construction**. Classic
+programs let you draw anything and report rule violations afterwards in a
+Design Rule Check (DRC). Alladin inverts that: actions that would violate
+the manufacturing rules are **not allowed to happen in the first place**.
+A part that would land too close to another turns red and cannot be
+dropped there; a trace that would create a short is never committed.
+Whatever is on the board is rule-compliant by construction.
 
 The rules behind this are the real **JLCPCB manufacturing rules**
 (clearances depending on copper weight: 0.10 mm at 1 oz, 0.16 mm at
