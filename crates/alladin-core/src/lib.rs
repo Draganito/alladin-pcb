@@ -53,10 +53,18 @@ pub mod thermal {
 
     /// Clearance ring between pad copper and pour copper (0.20 mm).
     pub const GAP: Unit = 200_000;
-    /// Width of each of the four thermal spokes (0.20 mm).
+    /// Nominal width of each thermal spoke (0.20 mm). Actual fill width
+    /// is [`spoke_width`] so it never drops below the board's min track.
     pub const SPOKE_WIDTH: Unit = 200_000;
     /// Longest pad side at or above this → heuristic picks [`super::ZoneConnection::Solid`] (2.0 mm).
     pub const SOLID_MIN_SIDE: Unit = 2_000_000;
+
+    /// Fill-time spoke width: at least [`SPOKE_WIDTH`], and never thinner
+    /// than the board's minimum track (1 oz floor 0.10 mm; callers pass
+    /// 0.16 mm for 2 oz so the pour neck stays fab-legal).
+    pub fn spoke_width(min_track_width: Unit) -> Unit {
+        SPOKE_WIDTH.max(min_track_width)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

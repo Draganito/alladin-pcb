@@ -1109,6 +1109,18 @@ impl BoardDoc {
         }
     }
 
+    /// Thermal spoke width for [`zone_fill::fill_zone`]: at least
+    /// [`thermal::SPOKE_WIDTH`], and never thinner than this board's
+    /// fab min track (1 oz [`JlcpcbDfm::MIN_TRACK_WIDTH`]; 2 oz uses the
+    /// 0.16 mm floor that matches `2layer_2oz` min track / spacing).
+    pub(crate) fn thermal_spoke_width(&self) -> Unit {
+        let min_track = match self.copper_weight {
+            CopperWeight::OneOz => JlcpcbDfm::MIN_TRACK_WIDTH,
+            CopperWeight::TwoOz => Jlcpcb2Layer2Oz::TRACK_TO_TRACK,
+        };
+        thermal::spoke_width(min_track)
+    }
+
     /// Whether `template` placed at `position`/`rotation_deg` is
     /// geometrically legal *right now*: every pad stays fully on the
     /// board outline (holes/cutouts included) and none collides with any
@@ -3007,7 +3019,8 @@ impl BoardDoc {
         // the real intent directly.
         let filled_at_revision = self.node.obstacle_revision();
         let resolver = self.resolver();
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver);
+        let spoke_width = self.thermal_spoke_width();
+        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width);
         self.insert_new_zone(outline, layer, net, items, filled_at_revision)
     }
 
@@ -3067,7 +3080,8 @@ impl BoardDoc {
         let (outline, layer, net) = (self.zones[index].outline.clone(), self.zones[index].layer, self.zones[index].net);
         let filled_at_revision = self.node.obstacle_revision();
         let resolver = self.resolver();
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver);
+        let spoke_width = self.thermal_spoke_width();
+        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width);
         self.insert_zone_refill(id, items, filled_at_revision);
     }
 

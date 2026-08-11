@@ -1484,7 +1484,8 @@ impl EditorState {
         let before = self.doc.clone();
         let resolver = self.doc.resolver();
         let filled_at_revision = self.doc.node.obstacle_revision();
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.doc.outline, &self.doc.node, resolver);
+        let spoke_width = self.doc.thermal_spoke_width();
+        let items = zone_fill::fill_zone(&outline, layer, net, &self.doc.outline, &self.doc.node, resolver, spoke_width);
         let island_count = items.len();
         self.doc.insert_new_zone(outline, layer, net, items, filled_at_revision);
         self.record_undo(before);
@@ -1520,7 +1521,8 @@ impl EditorState {
         let new_zones: Vec<_> = outlines
             .into_iter()
             .map(|outline| {
-                let items = zone_fill::fill_zone(&outline, layer, net, &board_outline, &self.doc.node, resolver);
+                let spoke_width = self.doc.thermal_spoke_width();
+                let items = zone_fill::fill_zone(&outline, layer, net, &board_outline, &self.doc.node, resolver, spoke_width);
                 self.doc.insert_new_zone(outline, layer, net, items, filled_at_revision)
             })
             .collect();
