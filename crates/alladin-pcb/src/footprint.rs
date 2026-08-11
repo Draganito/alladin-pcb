@@ -80,14 +80,12 @@ pub struct PadTemplate {
     /// (that field is a derived geometric value, always present for
     /// every pad kind regardless of its true collision shape; whether a
     /// pad also has a physical drilled hole is an orthogonal fact).
-    /// Only ever populated by real
-    /// downloads (`crate::lcsc`, from EasyEDA's own hole diameter) --
-    /// every built-in/hand-added template pad is `None` (SMD) today,
-    /// see [`Self::circle`]. Exists specifically so manufacturing export
-    /// can write a correct through-hole pad with its actual drill size
-    /// instead of silently downgrading every through-hole part
-    /// (headers, THT connectors, ...) to SMD, which would produce an
-    /// unmanufacturable board.
+    /// Only ever populated by real downloads (`crate::lcsc`, from
+    /// EasyEDA's own hole diameter) or by deliberate built-ins that are
+    /// truly PTH (today: [`wire_pad_template`]). [`Self::circle`] still
+    /// defaults to `None` (SMD). Manufacturing export uses this to write
+    /// a plated drill plus copper on both layers instead of silently
+    /// downgrading every through-hole part to SMD.
     pub hole_diameter: Option<Unit>,
     /// The pin's *function*, as the schematic symbol names it (`"GND"`,
     /// `"VDD"`, `"DIN"`, `"DOUT"`, ...) -- distinct from [`Self::number`]
@@ -416,20 +414,22 @@ pub fn builtin_templates() -> Vec<FootprintTemplate> {
     ]
 }
 
-/// A single, generic solder pad for a wire connection (power input,
-/// ground strap, a hand-soldered jumper, ...) -- exactly the "Lötpads
-/// für Strom usw." gap the "drawing-to-manufacturing" pipeline plan
-/// identified: a board frequently needs *somewhere* to solder a bare
-/// wire that isn't a real component with an LCSC part number.
-/// `exclude_from_bom: true` (see that field's own doc comment): a bare
-/// solder pad is never a purchasable BOM line item, matching how the
-/// original board this pipeline targets already marks its own wire
-/// pads "Exclude from BOM".
+/// A single through-hole solder pad for a wire connection (power input,
+/// ground strap, Litze poked through and soldered, ...) -- the "Lötpads
+/// für Strom usw." gap: a board frequently needs *somewhere* to land a
+/// bare wire that isn't a real LCSC part. Copper is a 2.5 mm circle with
+/// a 1.5 mm plated drill (0.5 mm annular ring, above
+/// [`JlcpcbDfm::MIN_PTH_ANNULAR_RING`]) so ~0.75 mm² Litze fits for
+/// multi-amp LED feeds. The template name keeps the historical
+/// `"…2mm"` suffix for board compatibility. `exclude_from_bom: true`: a
+/// bare solder pad is never a purchasable BOM line.
 fn wire_pad_template() -> FootprintTemplate {
+    let mut pad = PadTemplate::circle(Point::new(0, 0), mm(1.25), LayerId::FCu, "1");
+    pad.hole_diameter = Some(mm(1.5));
     FootprintTemplate {
         name: "Wire pad (solder, 2mm)".to_string(),
         reference_prefix: "W".to_string(),
-        pads: vec![PadTemplate::circle(Point::new(0, 0), mm(1.0), LayerId::FCu, "1")],
+        pads: vec![pad],
         holes: Vec::new(),
         exclude_from_bom: true,
         explicit_courtyard: None,
@@ -703,6 +703,16 @@ mod tests {
             assert!(t.pads.is_empty());
             assert_eq!(t.holes.len(), 1);
         }
+    }
+
+    #[test]
+    fn wire_pad_is_pth_with_a_fab_legal_drill_for_litze() {
+        let t = builtin_templates().into_iter().find(|t| t.name.starts_with("Wire pad")).expect("wire pad builtin");
+        assert_eq!(t.pads.len(), 1);
+        assert_eq!(t.pads[0].hole_diameter, Some(mm(1.5)));
+        assert_eq!(t.pads[0].radius, mm(1.25));
+        assert_eq!(JlcpcbDfm::check_pth_pad(t.pads[0].radius * 2, t.pads[0].hole_diameter.unwrap()), Ok(()));
+        assert!(template_dfm_violations(&t.pads, &t.holes).is_empty());
     }
 
     #[test]

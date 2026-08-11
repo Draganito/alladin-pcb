@@ -9,6 +9,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
 
 /// Max document snapshots kept for Ctrl+Z / Ctrl+Y. Each entry is a full
 /// [`BoardDoc`] clone — enough for a working session without unbounded RAM.
@@ -29,6 +31,47 @@ use crate::parts_db::PartsDb;
 use crate::ratsnest;
 use crate::routing::{RoutingDrag, TraceDrag};
 use crate::zone_fill;
+
+/// Progress / completion messages from the native zone-refill worker.
+#[cfg(not(target_arch = "wasm32"))]
+enum ZoneRefillEvent {
+    Progress { done: usize, total: usize },
+    Finished(BoardDoc),
+}
+
+/// In-flight "Refill zones" job. While active, board edits are locked and
+/// a toolbar progress bar is shown. Desktop fills on a worker thread
+/// (same idea as LCSC download); WASM advances one zone per egui frame
+/// so the single-threaded event loop can breathe.
+enum ZoneRefillJob {
+    /// One [`BoardDoc::refill_zone`] per frame — WASM path.
+    #[cfg(target_arch = "wasm32")]
+    Cooperative {
+        before: BoardDoc,
+        remaining: Vec<ZoneId>,
+        done: usize,
+        total: usize,
+    },
+    /// Full refill on a background thread — desktop path.
+    #[cfg(not(target_arch = "wasm32"))]
+    Background {
+        before: BoardDoc,
+        rx: mpsc::Receiver<ZoneRefillEvent>,
+        done: usize,
+        total: usize,
+    },
+}
+
+impl ZoneRefillJob {
+    fn progress(&self) -> (usize, usize) {
+        match self {
+            #[cfg(target_arch = "wasm32")]
+            ZoneRefillJob::Cooperative { done, total, .. } => (*done, *total),
+            #[cfg(not(target_arch = "wasm32"))]
+            ZoneRefillJob::Background { done, total, .. } => (*done, *total),
+        }
+    }
+}
 
 pub(crate) enum Screen {
     NewBoard(NewBoardParams),
@@ -389,6 +432,8 @@ pub(crate) struct EditorState {
     /// "shown until replaced" convention as `net_message`/`route_message`/
     /// `via_message`.
     zone_message: Option<String>,
+    /// Non-blocking "Refill zones" job, if any — see [`ZoneRefillJob`].
+    zone_refill: Option<ZoneRefillJob>,
     /// The text an active [`Tool::PlaceSilkText`] session will place on
     /// the next click -- freely editable in the side panel the whole
     /// time the tool is active, so the user can place several
@@ -730,6 +775,7 @@ impl EditorState {
             zone_net: None,
             zone_layer: LayerId::FCu,
             zone_message: None,
+            zone_refill: None,
             silk_text_input: String::new(),
             silk_layer: LayerId::FCu,
             silk_text_message: None,
@@ -1533,13 +1579,101 @@ impl EditorState {
         self.record_undo(before);
     }
 
-    /// Refills every zone on the UI thread.
-    fn refill_all_zones_in_background(&mut self) {
-        self.zone_message = Some("Refilling zones...".to_string());
-        self.mutate_doc(|doc| {
-            doc.refill_all_zones();
-        });
-        self.zone_message = Some("Zones refilled.".to_string());
+    /// Starts a non-blocking refill of every zone. Desktop: worker thread.
+    /// WASM: one zone per egui frame. Progress shows next to "Refill zones".
+    fn start_refill_all_zones(&mut self) {
+        if self.zone_refill.is_some() {
+            return;
+        }
+        let ids: Vec<ZoneId> = self.doc.zones.iter().map(|z| z.id).collect();
+        if ids.is_empty() {
+            self.zone_message = Some("No zones to refill.".to_string());
+            return;
+        }
+        self.cancel_transient_gestures();
+        let total = ids.len();
+        let before = self.doc.clone();
+        self.zone_message = Some(format!("Refilling zones\u{2026} 0/{total}"));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut doc = self.doc.clone();
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                for (i, id) in ids.into_iter().enumerate() {
+                    doc.refill_zone(id);
+                    let _ = tx.send(ZoneRefillEvent::Progress { done: i + 1, total });
+                }
+                let _ = tx.send(ZoneRefillEvent::Finished(doc));
+            });
+            self.zone_refill = Some(ZoneRefillJob::Background { before, rx, done: 0, total });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.zone_refill = Some(ZoneRefillJob::Cooperative { before, remaining: ids, done: 0, total });
+        }
+    }
+
+    /// Advances / completes [`Self::zone_refill`]. Call once per frame while
+    /// a job is active; requests a repaint so progress keeps moving without
+    /// user input.
+    fn poll_zone_refill(&mut self, ctx: &egui::Context) {
+        let Some(job) = self.zone_refill.take() else {
+            return;
+        };
+        ctx.request_repaint();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let ZoneRefillJob::Cooperative { before, mut remaining, mut done, total } = job;
+            if let Some(id) = remaining.first().copied() {
+                remaining.remove(0);
+                self.doc.refill_zone(id);
+                done += 1;
+                self.zone_message = Some(format!("Refilling zones\u{2026} {done}/{total}"));
+            }
+            if remaining.is_empty() {
+                self.record_undo(before);
+                self.zone_message = Some("Zones refilled.".to_string());
+            } else {
+                self.zone_refill = Some(ZoneRefillJob::Cooperative { before, remaining, done, total });
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ZoneRefillJob::Background { before, rx, mut done, mut total } = job;
+            loop {
+                match rx.try_recv() {
+                    Ok(ZoneRefillEvent::Progress { done: d, total: t }) => {
+                        done = d;
+                        total = t;
+                        self.zone_message = Some(format!("Refilling zones\u{2026} {done}/{total}"));
+                    }
+                    Ok(ZoneRefillEvent::Finished(doc)) => {
+                        self.record_undo(before);
+                        self.doc = doc;
+                        self.sync_plane_zones_from_doc();
+                        self.zone_message = Some("Zones refilled.".to_string());
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        self.zone_refill = Some(ZoneRefillJob::Background { before, rx, done, total });
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        self.doc = before;
+                        self.sync_plane_zones_from_doc();
+                        self.zone_message = Some("Zone refill failed (worker ended unexpectedly).".to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn zone_refill_active(&self) -> bool {
+        self.zone_refill.is_some()
     }
     /// Writes manufacturing files synchronously into `out_dir`.
     fn export_manufacturing_files_sync(&mut self, out_dir: PathBuf, parts_db: &PartsDb) {
@@ -2935,7 +3069,10 @@ impl eframe::App for PcbApp {
                 // barely-perceptible-lag cadence rather than every
                 // single frame.
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
-                state.maybe_reload_from_disk(&self.parts_db, ui.input(|i| i.time));
+                if !state.zone_refill_active() {
+                    state.maybe_reload_from_disk(&self.parts_db, ui.input(|i| i.time));
+                }
+                state.poll_zone_refill(ui.ctx());
 
                 if let Some(rx) = &state.lcsc_fetch {
                     match rx.try_recv() {
@@ -3021,7 +3158,9 @@ impl eframe::App for PcbApp {
                         let redo = (ctrl && y) || (ctrl && z && i.modifiers.shift);
                         (undo, redo)
                     });
-                    if undo_pressed {
+                    if state.zone_refill_active() {
+                        // Don't tear the board out from under a running refill.
+                    } else if undo_pressed {
                         if state.routing.is_some() {
                             state.routing = None;
                             state.route_message = Some("Route cancelled \u{2014} Ctrl+Z undoes committed board changes.".to_string());
@@ -3216,11 +3355,21 @@ impl eframe::App for PcbApp {
                             state.clear_selection();
                             state.silk_dot_message = None;
                         }
-                        if ui
-                            .add(egui::Button::new("Refill zones"))
+                        if state.zone_refill_active() {
+                            let (done, total) = state.zone_refill.as_ref().map(|j| j.progress()).unwrap_or((0, 1));
+                            let frac = if total == 0 { 1.0 } else { done as f32 / total as f32 };
+                            ui.add(
+                                egui::ProgressBar::new(frac)
+                                    .desired_width(140.0)
+                                    .text(format!("Zones {done}/{total}")),
+                            )
+                            .on_hover_text("Refilling copper pours — board edits are paused until this finishes.");
+                        } else if ui
+                            .add_enabled(!state.zone_refill_active(), egui::Button::new("Refill zones"))
+                            .on_hover_text("Recompute every copper pour against the current board (non-blocking).")
                             .clicked()
                         {
-                            state.refill_all_zones_in_background();
+                            state.start_refill_all_zones();
                         }
                     });
                     ui.horizontal(|ui| {
@@ -3986,21 +4135,29 @@ impl eframe::App for PcbApp {
                     // popup itself has mouse focus, `response.hover_pos()`
                     // no longer reliably reports the pad that was
                     // actually right-clicked.
-                    if response.secondary_clicked() {
+                    let board_locked = state.zone_refill_active();
+                    if !board_locked && response.secondary_clicked() {
                         state.context_menu_pad = hover_board.and_then(|p| state.doc.pad_at(p));
                     }
-                    response.context_menu(|ui| {
-                        if let Some(pad_id) = state.context_menu_pad {
-                            if ui.button("Add via near pin").clicked() {
-                                state.add_pin_stitching_via_at(pad_id);
-                                ui.close();
+                    if !board_locked {
+                        response.context_menu(|ui| {
+                            if let Some(pad_id) = state.context_menu_pad {
+                                if ui.button("Add via near pin").clicked() {
+                                    state.add_pin_stitching_via_at(pad_id);
+                                    ui.close();
+                                }
+                            } else {
+                                ui.label("(nothing here)");
                             }
-                        } else {
-                            ui.label("(nothing here)");
-                        }
-                    });
+                        });
+                    }
 
-                    if state.pending_pin_via.is_some() {
+                    if board_locked {
+                        // Still allow pan while pours recompute.
+                        if response.dragged() {
+                            state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
+                        }
+                    } else if state.pending_pin_via.is_some() {
                         // The footprint+via unit follows the cursor
                         // exactly like an ordinary `Dragging` move,
                         // but driven purely by hover (see

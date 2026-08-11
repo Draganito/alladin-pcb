@@ -824,7 +824,7 @@
   ],
   "layer_count": 2,
   "copper_weight": 2,
-  "next_footprint_serial": 225,
+  "next_footprint_serial": 228,
   "next_net_serial": 111,
   "nets": [
     {
@@ -4460,45 +4460,6 @@
       "pin1_marker": null
     },
     {
-      "reference": "W215",
-      "template_name": "Wire pad (solder, 2mm)",
-      "position": {
-        "x": -13049999,
-        "y": -71335568
-      },
-      "rotation_deg": -90.0,
-      "pad_nets": [
-        111
-      ],
-      "pin1_marker": null
-    },
-    {
-      "reference": "W216",
-      "template_name": "Wire pad (solder, 2mm)",
-      "position": {
-        "x": -7949999,
-        "y": -71335568
-      },
-      "rotation_deg": -90.0,
-      "pad_nets": [
-        110
-      ],
-      "pin1_marker": null
-    },
-    {
-      "reference": "W217",
-      "template_name": "Wire pad (solder, 2mm)",
-      "position": {
-        "x": 13049999,
-        "y": -71335568
-      },
-      "rotation_deg": -90.0,
-      "pad_nets": [
-        1
-      ],
-      "pin1_marker": null
-    },
-    {
       "reference": "U218",
       "template_name": "SKC6812RGBW-NW",
       "position": {
@@ -4623,6 +4584,45 @@
         111,
         93,
         110
+      ],
+      "pin1_marker": null
+    },
+    {
+      "reference": "W226",
+      "template_name": "Wire pad (solder, 2mm)",
+      "position": {
+        "x": -13049999,
+        "y": -71335568
+      },
+      "rotation_deg": -90.0,
+      "pad_nets": [
+        111
+      ],
+      "pin1_marker": null
+    },
+    {
+      "reference": "W227",
+      "template_name": "Wire pad (solder, 2mm)",
+      "position": {
+        "x": -7949999,
+        "y": -71335568
+      },
+      "rotation_deg": -90.0,
+      "pad_nets": [
+        110
+      ],
+      "pin1_marker": null
+    },
+    {
+      "reference": "W228",
+      "template_name": "Wire pad (solder, 2mm)",
+      "position": {
+        "x": 14049999,
+        "y": -72335568
+      },
+      "rotation_deg": -90.0,
+      "pad_nets": [
+        1
       ],
       "pin1_marker": null
     }
@@ -13170,20 +13170,6 @@
     },
     {
       "from": {
-        "x": -7949999,
-        "y": -71335568
-      },
-      "to": {
-        "x": -6498999,
-        "y": -71335568
-      },
-      "width": 250000,
-      "net": 110,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
         "x": -60997277,
         "y": -38379281
       },
@@ -13291,104 +13277,6 @@
       },
       "width": 250000,
       "net": 110,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
-        "x": 13050000,
-        "y": -71336000
-      },
-      "to": {
-        "x": 13050000,
-        "y": -69336000
-      },
-      "width": 250000,
-      "net": 1,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
-        "x": 13050000,
-        "y": -69336000
-      },
-      "to": {
-        "x": 6100000,
-        "y": -69336000
-      },
-      "width": 250000,
-      "net": 1,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
-        "x": 6100000,
-        "y": -69336000
-      },
-      "to": {
-        "x": 4464000,
-        "y": -67700000
-      },
-      "width": 250000,
-      "net": 1,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
-        "x": 4464000,
-        "y": -67700000
-      },
-      "to": {
-        "x": -4464000,
-        "y": -67700000
-      },
-      "width": 250000,
-      "net": 1,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
-        "x": -4464000,
-        "y": -67700000
-      },
-      "to": {
-        "x": -6100000,
-        "y": -69336000
-      },
-      "width": 250000,
-      "net": 1,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
-        "x": -6100000,
-        "y": -69336000
-      },
-      "to": {
-        "x": -33594000,
-        "y": -69336000
-      },
-      "width": 250000,
-      "net": 1,
-      "layer": "FCu",
-      "class": "C"
-    },
-    {
-      "from": {
-        "x": -33594000,
-        "y": -69336000
-      },
-      "to": {
-        "x": -39164000,
-        "y": -63766000
-      },
-      "width": 250000,
-      "net": 1,
       "layer": "FCu",
       "class": "C"
     },
@@ -13515,6 +13403,188 @@
       },
       "width": 250000,
       "net": 8,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -7949999,
+        "y": -71335568
+      },
+      "to": {
+        "x": -7949999,
+        "y": -68935568
+      },
+      "width": 250000,
+      "net": 110,
+      "layer": "BCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -7949999,
+        "y": -68935568
+      },
+      "to": {
+        "x": -11100054,
+        "y": -65785513
+      },
+      "width": 250000,
+      "net": 110,
+      "layer": "BCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -11100054,
+        "y": -65785513
+      },
+      "to": {
+        "x": -11100054,
+        "y": -65742058
+      },
+      "width": 250000,
+      "net": 110,
+      "layer": "BCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -11100054,
+        "y": -65742058
+      },
+      "to": {
+        "x": -8100054,
+        "y": -68742058
+      },
+      "width": 250000,
+      "net": 110,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -8100054,
+        "y": -68742058
+      },
+      "to": {
+        "x": -8100054,
+        "y": -69492058
+      },
+      "width": 250000,
+      "net": 110,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -8100054,
+        "y": -69492058
+      },
+      "to": {
+        "x": -7949999,
+        "y": -69642113
+      },
+      "width": 250000,
+      "net": 110,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -7949999,
+        "y": -69642113
+      },
+      "to": {
+        "x": -7949999,
+        "y": -71335568
+      },
+      "width": 250000,
+      "net": 110,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": 14049999,
+        "y": -72335568
+      },
+      "to": {
+        "x": 11299999,
+        "y": -75085568
+      },
+      "width": 250000,
+      "net": 1,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": 11299999,
+        "y": -75085568
+      },
+      "to": {
+        "x": -17950001,
+        "y": -75085568
+      },
+      "width": 250000,
+      "net": 1,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -17950001,
+        "y": -75085568
+      },
+      "to": {
+        "x": -26200001,
+        "y": -66835568
+      },
+      "width": 250000,
+      "net": 1,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -26200001,
+        "y": -66835568
+      },
+      "to": {
+        "x": -34700001,
+        "y": -66835568
+      },
+      "width": 250000,
+      "net": 1,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -34700001,
+        "y": -66835568
+      },
+      "to": {
+        "x": -37769511,
+        "y": -63766058
+      },
+      "width": 250000,
+      "net": 1,
+      "layer": "FCu",
+      "class": "C"
+    },
+    {
+      "from": {
+        "x": -37769511,
+        "y": -63766058
+      },
+      "to": {
+        "x": -39163946,
+        "y": -63766058
+      },
+      "width": 250000,
+      "net": 1,
       "layer": "FCu",
       "class": "C"
     }
@@ -15405,15 +15475,6 @@
       "center": {
         "x": 58947295,
         "y": 36238084
-      },
-      "diameter": 600000,
-      "drill": 300000,
-      "net": 110
-    },
-    {
-      "center": {
-        "x": -6498999,
-        "y": -71335568
       },
       "diameter": 600000,
       "drill": 300000,
@@ -17682,7 +17743,7 @@
           ]
         }
       ],
-      "fill_stale": false
+      "fill_stale": true
     },
     {
       "outline": {
@@ -153061,7 +153122,7 @@
           ]
         }
       ],
-      "fill_stale": false
+      "fill_stale": true
     }
   ],
   "static_zone_islands": [],
