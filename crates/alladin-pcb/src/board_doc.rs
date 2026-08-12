@@ -8,8 +8,9 @@ use alladin_core::{
     PadShape, RuleResolver, ZoneConnection,
 };
 use alladin_geom::{
-    circle_polygon_collides, circle_within_outline, dist_segment_to_segment, polygon_polygon_collides, polygon_within_outline_with_clearance,
-    segment_polygon_collides, segment_within_outline_with_clearance, Aabb, Circle, Point, Polygon, Segment, Unit, MM,
+    circle_polygon_collides, circle_segment_collides, circle_within_outline, dist_segment_to_segment, polygon_polygon_collides,
+    polygon_within_outline_with_clearance, segment_polygon_collides, segment_within_outline_with_clearance, Aabb, Circle, Point, Polygon,
+    Segment, Unit, MM,
 };
 
 use crate::footprint::{world_assembly_drills, world_courtyard, world_items, FootprintTemplate};
@@ -590,6 +591,10 @@ pub enum SilkDotError {
     /// sweep violated one of the rules above (typical on a very dense
     /// board where neighbouring pads/parts crowd the pin-1 corner).
     NoRoomNearPin1,
+    /// Would print over a track or via (same-side copper) -- unreadable
+    /// and a silk-over-copper fab hazard, same clearance as
+    /// [`JlcpcbDfm::SILK_TO_PAD`].
+    OverCopper,
 }
 
 impl std::fmt::Display for SilkDotError {
@@ -601,6 +606,7 @@ impl std::fmt::Display for SilkDotError {
             SilkDotError::UnderComponentBody => write!(f, "would print the dot underneath a component's body, where it can never be seen"),
             SilkDotError::NotFound => write!(f, "no such silk dot"),
             SilkDotError::NoRoomNearPin1 => write!(f, "no legal spot for a pin-1 dot anywhere around this part's pad 1"),
+            SilkDotError::OverCopper => write!(f, "would print over a track or via -- silk must stay on empty board"),
         }
     }
 }
@@ -3012,16 +3018,29 @@ impl BoardDoc {
         }
 
         for item in self.node.iter() {
-            let Item::Pad { shape, layer: pad_layer, .. } = item else { continue };
-            if *pad_layer != layer {
-                continue;
-            }
-            let too_close = match shape {
-                PadShape::Circle(p) => circles_touch(circle, p, JlcpcbDfm::SILK_TO_PAD),
-                PadShape::Polygon { outline, .. } => circle_polygon_collides(circle, outline, JlcpcbDfm::SILK_TO_PAD),
-            };
-            if too_close {
-                return Err(SilkDotError::TooCloseToPad);
+            match item {
+                Item::Pad { shape, layer: pad_layer, .. } if *pad_layer == layer => {
+                    let too_close = match shape {
+                        PadShape::Circle(p) => circles_touch(circle, p, JlcpcbDfm::SILK_TO_PAD),
+                        PadShape::Polygon { outline, .. } => circle_polygon_collides(circle, outline, JlcpcbDfm::SILK_TO_PAD),
+                    };
+                    if too_close {
+                        return Err(SilkDotError::TooCloseToPad);
+                    }
+                }
+                Item::Track { shape, layer: track_layer, .. } if *track_layer == layer => {
+                    if circle_segment_collides(circle, shape, JlcpcbDfm::SILK_TO_PAD) {
+                        return Err(SilkDotError::OverCopper);
+                    }
+                }
+                Item::Via { shape, .. } => {
+                    // Vias pierce both sides — silk on either copper
+                    // face must clear the via annular ring.
+                    if circles_touch(circle, shape, JlcpcbDfm::SILK_TO_PAD) {
+                        return Err(SilkDotError::OverCopper);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -3123,18 +3142,15 @@ impl BoardDoc {
 
     /// Enables `id`'s pin-1 marker dot: finds pad "1" in `template`
     /// (the same template registry lookup every other footprint
-    /// operation already routes through the caller), then sweeps 12
-    /// candidate directions around that pad -- starting outward, away
-    /// from the part's own center, the natural "pin-1 corner" spot --
-    /// at a distance that clears the pad's own reach plus
-    /// [`JlcpcbDfm::SILK_TO_PAD`], committing the first spot
-    /// [`Self::silk_circle_fits`] accepts (the part's *own* body
-    /// included: a marker hidden under its own part would be
-    /// pointless). The winning spot is stored as a footprint-local
-    /// offset so it rides along with every later move/rotate (see
-    /// [`PlacedFootprint::pin1_marker`]'s doc comment). Refused with
-    /// [`SilkDotError::NoRoomNearPin1`] if every candidate is illegal
-    /// -- the flag stays off, nothing changes.
+    /// operation already routes through the caller), then searches
+    /// **outside the package body** in rings around that pad —
+    /// nearest ring first, then a little farther (still capped) —
+    /// committing the first spot [`Self::silk_circle_fits`] accepts
+    /// (empty board only: not on pads/tracks/vias, not under any body,
+    /// not on other silk). Prefer a readable pin-1 corner over a far
+    /// orphaned dot; if nothing within the cap fits, refuse with
+    /// [`SilkDotError::NoRoomNearPin1`]. The winning spot is stored as
+    /// a footprint-local offset so it rides along with move/rotate.
     pub fn try_enable_pin1_marker(&mut self, id: FootprintId, template: &FootprintTemplate) -> Result<(), SilkDotError> {
         let Some(fp_index) = self.footprints.iter().position(|f| f.id == id) else { return Err(SilkDotError::NotFound) };
         let fp = &self.footprints[fp_index];
@@ -3143,10 +3159,13 @@ impl BoardDoc {
         };
         let radius = PIN1_MARKER_DIAMETER / 2;
         let reach = pad_template_reach(pad1);
-        // 0.05mm on top of the DFM minimum, so the committed spot
-        // never sits *exactly* on the refusal threshold where a later
-        // rounding wiggle could flip it illegal.
-        let dist = (reach + JlcpcbDfm::SILK_TO_PAD + radius + MM / 20) as f64;
+        // Innermost ring: pad reach + silk clearance + marker radius +
+        // 0.05mm so we never sit on the refusal threshold.
+        let base_dist = (reach + JlcpcbDfm::SILK_TO_PAD + radius + MM / 20) as f64;
+        // Extra rings (mm beyond base): near first, then a bit out —
+        // stop before the marker drifts too far from pin 1 to read as
+        // "this pin" (~1.5mm extra ≈ still next to the pad).
+        let ring_extras_mm = [0.0_f64, 0.35, 0.7, 1.1, 1.5];
         let base_angle = if pad1.offset.x == 0 && pad1.offset.y == 0 {
             // A single-pad-at-origin part has no "outward": default to
             // up-left, the classic pin-1 corner.
@@ -3154,13 +3173,19 @@ impl BoardDoc {
         } else {
             (pad1.offset.y as f64).atan2(pad1.offset.x as f64)
         };
-        for step_deg in [0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0, 120.0, -120.0, 150.0, -150.0, 180.0] {
-            let angle = base_angle + (step_deg as f64).to_radians();
-            let local = Point::new(pad1.offset.x + (dist * angle.cos()).round() as Unit, pad1.offset.y + (dist * angle.sin()).round() as Unit);
-            let world = Circle::new(local.rotated(fp.rotation_deg).add(fp.position), radius);
-            if self.silk_circle_fits(&world, LayerId::FCu, None, Some(id)).is_ok() {
-                self.footprints[fp_index].pin1_marker = Some(local);
-                return Ok(());
+        let step_degs = [
+            0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 90.0, -90.0, 120.0, -120.0, 150.0, -150.0, 180.0,
+        ];
+        for &extra_mm in &ring_extras_mm {
+            let dist = base_dist + extra_mm * MM as f64;
+            for step_deg in step_degs {
+                let angle = base_angle + (step_deg as f64).to_radians();
+                let local = Point::new(pad1.offset.x + (dist * angle.cos()).round() as Unit, pad1.offset.y + (dist * angle.sin()).round() as Unit);
+                let world = Circle::new(local.rotated(fp.rotation_deg).add(fp.position), radius);
+                if self.silk_circle_fits(&world, LayerId::FCu, None, Some(id)).is_ok() {
+                    self.footprints[fp_index].pin1_marker = Some(local);
+                    return Ok(());
+                }
             }
         }
         Err(SilkDotError::NoRoomNearPin1)
@@ -4073,6 +4098,62 @@ mod tests {
         assert_eq!(board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap_err(), PlacementError::OverSilkDot);
         // Well away from the dot it still places fine.
         board.try_place_footprint(&template, Point::new(-10 * MM, -10 * MM), 0.0).expect("clear of the dot, placement must succeed");
+    }
+
+    #[test]
+    fn silk_dot_refuses_track_and_via_copper() {
+        let mut board = test_board();
+        let net = board.create_net();
+        let w = 250_000; // 0.25mm default class-C width
+        board.add_track_path(&[Point::new(-5 * MM, 0), Point::new(5 * MM, 0)], net, LayerId::FCu, w, NetClass::C);
+        assert_eq!(
+            board.check_silk_dot_placement(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu),
+            Err(SilkDotError::OverCopper)
+        );
+        // Clear of the track must still be fine.
+        board
+            .check_silk_dot_placement(Point::new(0, 3 * MM), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu)
+            .expect("empty copper area must accept a silk dot");
+    }
+
+    #[test]
+    fn pin1_marker_skips_spots_over_tracks_and_searches_farther() {
+        let mut board = NewBoardParams {
+            width_mm: 60.0,
+            height_mm: 60.0,
+            layer_count: LayerCount::Two,
+            copper_weight: CopperWeight::OneOz,
+            corner_radius_mm: 0.0,
+        }
+        .create();
+        let template = two_pin_template();
+        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let net = board.create_net();
+        // Flood the first pin-1 ring with a copper box so only a farther
+        // (or alternate-angle) empty spot can win — or refuse.
+        let w = MM / 2;
+        let r = 2 * MM;
+        for (a, b) in [
+            (Point::new(-r, r), Point::new(r, r)),
+            (Point::new(-r, -r), Point::new(r, -r)),
+            (Point::new(r, -r), Point::new(r, r)),
+            (Point::new(-r, -r), Point::new(-r, r)),
+        ] {
+            board.add_track_path(&[a, b], net, LayerId::FCu, w, NetClass::C);
+        }
+        // Must either place off the copper cage or refuse — never land on a track.
+        match board.try_enable_pin1_marker(id, &template) {
+            Ok(()) => {
+                let c = board.footprints[0].pin1_marker_circle().unwrap();
+                // Exclude self from the free-dot check (pin-1 is also silk ink).
+                board.disable_pin1_marker(id);
+                board
+                    .check_silk_dot_placement(c.center, PIN1_MARKER_DIAMETER, LayerId::FCu)
+                    .expect("committed pin-1 spot must clear copper and silk rules");
+            }
+            Err(SilkDotError::NoRoomNearPin1) => {}
+            Err(e) => panic!("unexpected: {e}"),
+        }
     }
 
     #[test]
