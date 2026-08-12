@@ -3723,6 +3723,27 @@ impl eframe::App for PcbApp {
 
                     ui.separator();
                     ui.heading(format!("Parts ({})", state.doc.footprints.len()));
+                    if ui
+                        .button("Pin-1 auf allen Teilen")
+                        .on_hover_text(
+                            "Setzt auf jedem Bauteil mit Pads einen Silkscreen-Punkt an Pin 1 — \
+                             dieselben JLCPCB-Silk-Regeln wie die Einzel-Checkbox (Abstand zu Pads/Kante/Body). \
+                             Teile ohne Platz oder ohne Pads werden \u{fc}bersprungen. Ein Ctrl+Z macht den Batch r\u{fc}ckg\u{e4}ngig.",
+                        )
+                        .clicked()
+                    {
+                        let templates = state.templates.clone();
+                        let mut report = crate::board_doc::Pin1BatchReport::default();
+                        state.mutate_doc(|doc| {
+                            report = doc.try_enable_pin1_markers_for_all(&templates);
+                        });
+                        state.silk_dot_message = Some(report.summary_line());
+                    }
+                    if state.selected.is_none() {
+                        if let Some(message) = &state.silk_dot_message {
+                            ui.label(message);
+                        }
+                    }
                     let mut to_delete = None;
                     let mut to_select = None;
                     egui::ScrollArea::vertical().id_salt("parts_scroll").max_height(260.0).show(ui, |ui| {

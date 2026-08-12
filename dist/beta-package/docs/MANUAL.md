@@ -273,6 +273,10 @@ to move. R to rotate, Del to remove."
 - **"Pin-1-Punkt (Silk)"**: checkbox on the selected part — places a
   silkscreen dot at pin 1 that moves with the part (important for
   polarized parts such as LEDs).
+- **"Pin-1 auf allen Teilen"** (under the Parts list): same marker in
+  batch on every part that has pads, using the same JLCPCB silk rules;
+  parts with no pads or no legal spot are skipped (status line below).
+  One Ctrl+Z undoes the whole batch.
 
 Already-routed traces do **not** move along with a part; the net
 membership is preserved (the ratsnest shows the connection as open

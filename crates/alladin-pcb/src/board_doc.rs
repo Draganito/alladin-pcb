@@ -605,6 +605,36 @@ impl std::fmt::Display for SilkDotError {
     }
 }
 
+/// Result of [`BoardDoc::try_enable_pin1_markers_for_all`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pin1BatchReport {
+    /// References that newly received a pin-1 silk dot.
+    pub enabled: Vec<String>,
+    /// Already had a marker — left unchanged.
+    pub already: Vec<String>,
+    /// No pads (mounting holes, etc.) — skipped.
+    pub skipped_no_pads: Vec<String>,
+    /// Could not place a legal dot (or template missing): `(reference, reason)`.
+    pub failed: Vec<(String, String)>,
+}
+
+impl Pin1BatchReport {
+    /// Short status line for the GUI / CLI.
+    pub fn summary_line(&self) -> String {
+        let mut parts = vec![format!("{} gesetzt", self.enabled.len())];
+        if !self.already.is_empty() {
+            parts.push(format!("{} schon aktiv", self.already.len()));
+        }
+        if !self.skipped_no_pads.is_empty() {
+            parts.push(format!("{} ohne Pads", self.skipped_no_pads.len()));
+        }
+        if !self.failed.is_empty() {
+            parts.push(format!("{} ohne Platz", self.failed.len()));
+        }
+        format!("Pin-1-Punkte: {}", parts.join(", "))
+    }
+}
+
 /// [`SilkDot::diameter`] for every new dot a caller doesn't size
 /// itself -- comfortably legible next to typical 0603..SOIC parts and
 /// far above [`JlcpcbDfm::MIN_SILK_LINE_WIDTH`], same "default above
@@ -3149,6 +3179,41 @@ impl BoardDoc {
         }
     }
 
+    /// Enable pin-1 silk dots on every placed part that still lacks one,
+    /// using the same JLCPCB silk gates as [`Self::try_enable_pin1_marker`]
+    /// (pad clearance, edge, body, other silk). Best-effort: parts that
+    /// already have a marker, have no pads (e.g. mounting holes), or
+    /// cannot host a legal dot are skipped and listed in the report.
+    /// Successful enables share one undo step when the caller wraps this
+    /// in a single document mutation.
+    pub fn try_enable_pin1_markers_for_all(&mut self, templates: &[FootprintTemplate]) -> Pin1BatchReport {
+        let jobs: Vec<(FootprintId, String, String, bool)> = self
+            .footprints
+            .iter()
+            .map(|fp| (fp.id, fp.reference.clone(), fp.template_name.clone(), fp.pin1_marker.is_some()))
+            .collect();
+        let mut report = Pin1BatchReport::default();
+        for (id, reference, template_name, already) in jobs {
+            if already {
+                report.already.push(reference);
+                continue;
+            }
+            let Some(template) = templates.iter().find(|t| t.name == template_name) else {
+                report.failed.push((reference, format!("template \"{template_name}\" missing from library")));
+                continue;
+            };
+            if template.pads.is_empty() {
+                report.skipped_no_pads.push(reference);
+                continue;
+            }
+            match self.try_enable_pin1_marker(id, template) {
+                Ok(()) => report.enabled.push(reference),
+                Err(e) => report.failed.push((reference, e.to_string())),
+            }
+        }
+        report
+    }
+
     /// Fills `outline` on `layer` for `net` (see `crate::zone_fill::fill_zone`'s
     /// own doc comment for the full board-clip/obstacle-buffer/union/
     /// difference pipeline), adds whatever `Item::Zone` island(s) that
@@ -4008,6 +4073,33 @@ mod tests {
         assert_eq!(board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap_err(), PlacementError::OverSilkDot);
         // Well away from the dot it still places fine.
         board.try_place_footprint(&template, Point::new(-10 * MM, -10 * MM), 0.0).expect("clear of the dot, placement must succeed");
+    }
+
+    #[test]
+    fn pin1_batch_enables_every_padded_part_and_skips_holes() {
+        let mut board = NewBoardParams {
+            width_mm: 80.0,
+            height_mm: 80.0,
+            layer_count: LayerCount::Two,
+            copper_weight: CopperWeight::OneOz,
+            corner_radius_mm: 0.0,
+        }
+        .create();
+        let a = crate::footprint::builtin_templates().into_iter().find(|t| t.name.contains("SOIC")).expect("SOIC builtin");
+        let wire = crate::footprint::builtin_templates().into_iter().find(|t| t.name.contains("Wire pad")).expect("wire pad");
+        let hole = crate::footprint::builtin_templates().into_iter().find(|t| t.name.contains("M3")).expect("M3 hole");
+        board.try_place_footprint(&a, Point::new(-15 * MM, 0), 0.0).unwrap();
+        board.try_place_footprint(&wire, Point::new(15 * MM, 0), 0.0).unwrap();
+        board.try_place_footprint(&hole, Point::new(0, 20 * MM), 0.0).unwrap();
+        let templates = vec![a.clone(), wire.clone(), hole.clone()];
+        let report = board.try_enable_pin1_markers_for_all(&templates);
+        assert_eq!(report.enabled.len(), 2, "SOIC + wire pad: {report:?}");
+        assert_eq!(report.skipped_no_pads.len(), 1, "M3 hole has no pads: {report:?}");
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(board.footprints.iter().filter(|f| f.pin1_marker.is_some()).count(), 2);
+        let again = board.try_enable_pin1_markers_for_all(&templates);
+        assert!(again.enabled.is_empty());
+        assert_eq!(again.already.len(), 2);
     }
 
     #[test]

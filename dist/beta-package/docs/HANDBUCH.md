@@ -285,6 +285,10 @@ board to move. R to rotate, Del to remove."
 - **„Pin-1-Punkt (Silk)"**: Checkbox beim ausgewählten Teil — setzt
   einen Bestückungsdruck-Punkt an Pin 1, der mit dem Bauteil mitwandert
   (wichtig für gepolte Teile wie LEDs).
+- **„Pin-1 auf allen Teilen"**: unter der Parts-Liste — derselbe Punkt
+  per Batch auf jedem Bauteil mit Pads, mit denselben JLCPCB-Silk-
+  Regeln; ohne Pads oder ohne Platz wird übersprungen (eine Zeile
+  Status darunter). Ein Ctrl+Z macht den ganzen Batch rückgängig.
 
 Bereits verlegte Bahnen wandern beim Verschieben **nicht** mit; die
 Netz-Zugehörigkeit bleibt aber erhalten (Ratsnest zeigt die offene

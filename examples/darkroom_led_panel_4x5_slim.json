@@ -1301,7 +1301,10 @@
         38,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C3",
@@ -1331,7 +1334,10 @@
         39,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C5",
@@ -1361,7 +1367,10 @@
         60,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C7",
@@ -1391,7 +1400,10 @@
         61,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C9",
@@ -1421,7 +1433,10 @@
         82,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C11",
@@ -1465,7 +1480,10 @@
         102,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C14",
@@ -1495,7 +1513,10 @@
         84,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C16",
@@ -1525,7 +1546,10 @@
         81,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C18",
@@ -1555,7 +1579,10 @@
         62,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C20",
@@ -1585,7 +1612,10 @@
         59,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C22",
@@ -1615,7 +1645,10 @@
         40,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C24",
@@ -1645,7 +1678,10 @@
         37,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C26",
@@ -1675,7 +1711,10 @@
         18,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C28",
@@ -1705,7 +1744,10 @@
         16,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C30",
@@ -1749,7 +1791,10 @@
         15,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C33",
@@ -1779,7 +1824,10 @@
         19,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C35",
@@ -1809,7 +1857,10 @@
         36,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C37",
@@ -1839,7 +1890,10 @@
         41,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C39",
@@ -1869,7 +1923,10 @@
         58,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C41",
@@ -1899,7 +1956,10 @@
         63,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C43",
@@ -1929,7 +1989,10 @@
         80,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C45",
@@ -1959,7 +2022,10 @@
         85,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C47",
@@ -1989,7 +2055,10 @@
         101,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C49",
@@ -2033,7 +2102,10 @@
         104,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C52",
@@ -2063,7 +2135,10 @@
         100,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C54",
@@ -2093,7 +2168,10 @@
         86,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C56",
@@ -2123,7 +2201,10 @@
         79,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C58",
@@ -2153,7 +2234,10 @@
         64,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C60",
@@ -2183,7 +2267,10 @@
         57,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C62",
@@ -2213,7 +2300,10 @@
         42,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C64",
@@ -2243,7 +2333,10 @@
         35,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C66",
@@ -2273,7 +2366,10 @@
         20,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C68",
@@ -2303,7 +2399,10 @@
         14,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C70",
@@ -2333,7 +2432,10 @@
         2,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C72",
@@ -2363,7 +2465,10 @@
         3,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C74",
@@ -2393,7 +2498,10 @@
         13,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C76",
@@ -2423,7 +2531,10 @@
         21,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C78",
@@ -2453,7 +2564,10 @@
         34,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C80",
@@ -2483,7 +2597,10 @@
         43,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C82",
@@ -2513,7 +2630,10 @@
         56,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C84",
@@ -2543,7 +2663,10 @@
         65,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C86",
@@ -2573,7 +2696,10 @@
         78,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C88",
@@ -2603,7 +2729,10 @@
         87,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C90",
@@ -2633,7 +2762,10 @@
         99,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C92",
@@ -2663,7 +2795,10 @@
         105,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C94",
@@ -2693,7 +2828,10 @@
         106,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C96",
@@ -2723,7 +2861,10 @@
         98,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C98",
@@ -2753,7 +2894,10 @@
         88,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C100",
@@ -2783,7 +2927,10 @@
         77,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C102",
@@ -2813,7 +2960,10 @@
         66,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C104",
@@ -2843,7 +2993,10 @@
         55,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C106",
@@ -2873,7 +3026,10 @@
         44,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C108",
@@ -2903,7 +3059,10 @@
         33,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C110",
@@ -2933,7 +3092,10 @@
         22,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C112",
@@ -2963,7 +3125,10 @@
         12,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C114",
@@ -2993,7 +3158,10 @@
         4,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C116",
@@ -3023,7 +3191,10 @@
         5,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C118",
@@ -3053,7 +3224,10 @@
         11,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C120",
@@ -3083,7 +3257,10 @@
         23,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C122",
@@ -3113,7 +3290,10 @@
         32,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C124",
@@ -3143,7 +3323,10 @@
         45,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C126",
@@ -3173,7 +3356,10 @@
         54,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C128",
@@ -3203,7 +3389,10 @@
         67,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C130",
@@ -3233,7 +3422,10 @@
         76,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C132",
@@ -3263,7 +3455,10 @@
         89,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C134",
@@ -3293,7 +3488,10 @@
         97,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C136",
@@ -3323,7 +3521,10 @@
         107,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C138",
@@ -3353,7 +3554,10 @@
         108,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C140",
@@ -3383,7 +3587,10 @@
         96,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C142",
@@ -3413,7 +3620,10 @@
         90,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C144",
@@ -3443,7 +3653,10 @@
         75,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C146",
@@ -3473,7 +3686,10 @@
         68,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C148",
@@ -3503,7 +3719,10 @@
         53,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C150",
@@ -3533,7 +3752,10 @@
         46,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C152",
@@ -3563,7 +3785,10 @@
         31,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C154",
@@ -3593,7 +3818,10 @@
         24,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C156",
@@ -3623,7 +3851,10 @@
         10,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C158",
@@ -3653,7 +3884,10 @@
         6,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C160",
@@ -3697,7 +3931,10 @@
         9,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C163",
@@ -3727,7 +3964,10 @@
         25,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C165",
@@ -3757,7 +3997,10 @@
         30,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C167",
@@ -3787,7 +4030,10 @@
         47,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C169",
@@ -3817,7 +4063,10 @@
         52,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C171",
@@ -3847,7 +4096,10 @@
         69,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C173",
@@ -3877,7 +4129,10 @@
         74,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C175",
@@ -3907,7 +4162,10 @@
         91,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C177",
@@ -3937,7 +4195,10 @@
         95,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C179",
@@ -3981,7 +4242,10 @@
         94,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C182",
@@ -4011,7 +4275,10 @@
         92,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C184",
@@ -4041,7 +4308,10 @@
         73,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C186",
@@ -4071,7 +4341,10 @@
         70,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C188",
@@ -4101,7 +4374,10 @@
         51,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C190",
@@ -4131,7 +4407,10 @@
         48,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C192",
@@ -4161,7 +4440,10 @@
         29,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C194",
@@ -4191,7 +4473,10 @@
         26,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C196",
@@ -4221,7 +4506,10 @@
         8,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C198",
@@ -4265,7 +4553,10 @@
         28,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C201",
@@ -4295,7 +4586,10 @@
         49,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C203",
@@ -4325,7 +4619,10 @@
         50,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C205",
@@ -4355,7 +4652,10 @@
         71,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C207",
@@ -4385,7 +4685,10 @@
         72,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "C209",
@@ -4473,7 +4776,10 @@
         17,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "U219",
@@ -4489,7 +4795,10 @@
         83,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "U220",
@@ -4505,7 +4814,10 @@
         1,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "U221",
@@ -4521,7 +4833,10 @@
         103,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "U222",
@@ -4537,7 +4852,10 @@
         7,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "U223",
@@ -4553,7 +4871,10 @@
         109,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "U224",
@@ -4569,7 +4890,10 @@
         27,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "U225",
@@ -4585,7 +4909,10 @@
         93,
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": 3357123,
+        "y": 2395663
+      }
     },
     {
       "reference": "W226",
@@ -4598,7 +4925,10 @@
       "pad_nets": [
         111
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": -427051,
+        "y": -1593778
+      }
     },
     {
       "reference": "W227",
@@ -4611,7 +4941,10 @@
       "pad_nets": [
         110
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": -427051,
+        "y": -1593778
+      }
     },
     {
       "reference": "W228",
@@ -4624,7 +4957,10 @@
       "pad_nets": [
         1
       ],
-      "pin1_marker": null
+      "pin1_marker": {
+        "x": -427051,
+        "y": -1593778
+      }
     }
   ],
   "tracks": [
