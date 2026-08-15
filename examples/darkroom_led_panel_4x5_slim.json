@@ -1285,6 +1285,10 @@
         110,
         111
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -2052102,
         "y": 0
@@ -1304,6 +1308,12 @@
         38,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -1320,6 +1330,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1340,6 +1354,12 @@
         39,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1356,6 +1376,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1376,6 +1400,12 @@
         60,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -1392,6 +1422,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1412,6 +1446,12 @@
         61,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1428,6 +1468,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1448,6 +1492,12 @@
         82,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -1465,6 +1515,10 @@
         110,
         111
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -2052102,
         "y": 0
@@ -1481,6 +1535,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1501,6 +1559,12 @@
         102,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1517,6 +1581,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1537,6 +1605,12 @@
         84,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1553,6 +1627,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1573,6 +1651,12 @@
         81,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1589,6 +1673,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1609,6 +1697,12 @@
         62,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -1625,6 +1719,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1645,6 +1743,12 @@
         59,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1661,6 +1765,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1681,6 +1789,12 @@
         40,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -1697,6 +1811,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1717,6 +1835,12 @@
         37,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1733,6 +1857,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1753,6 +1881,12 @@
         18,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1769,6 +1903,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -1789,6 +1927,12 @@
         16,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1806,6 +1950,10 @@
         111,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -700024,
         "y": 1352078
@@ -1822,6 +1970,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1842,6 +1994,12 @@
         15,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -1858,6 +2016,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1878,6 +2040,12 @@
         19,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1894,6 +2062,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1914,6 +2086,12 @@
         36,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -1930,6 +2108,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1950,6 +2132,12 @@
         41,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -1966,6 +2154,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -1986,6 +2178,12 @@
         58,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2002,6 +2200,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2022,6 +2224,12 @@
         63,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2038,6 +2246,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2058,6 +2270,12 @@
         80,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2074,6 +2292,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2094,6 +2316,12 @@
         85,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2110,6 +2338,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2130,6 +2362,12 @@
         101,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2147,6 +2385,10 @@
         110,
         111
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -2052102,
         "y": 0
@@ -2163,6 +2405,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2183,6 +2429,12 @@
         104,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2199,6 +2451,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2219,6 +2475,12 @@
         100,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2235,6 +2497,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2255,6 +2521,12 @@
         86,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2271,6 +2543,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2291,6 +2567,12 @@
         79,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2307,6 +2589,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2327,6 +2613,12 @@
         64,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2343,6 +2635,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2363,6 +2659,12 @@
         57,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2379,6 +2681,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2399,6 +2705,12 @@
         42,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2415,6 +2727,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2435,6 +2751,12 @@
         35,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2451,6 +2773,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2471,6 +2797,12 @@
         20,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2487,6 +2819,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2507,6 +2843,12 @@
         14,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2523,6 +2865,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2543,6 +2889,12 @@
         2,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2559,6 +2911,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -2579,6 +2935,12 @@
         3,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2595,6 +2957,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2615,6 +2981,12 @@
         13,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2631,6 +3003,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2651,6 +3027,12 @@
         21,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2667,6 +3049,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2687,6 +3073,12 @@
         34,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2703,6 +3095,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2723,6 +3119,12 @@
         43,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2739,6 +3141,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2759,6 +3165,12 @@
         56,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2775,6 +3187,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2795,6 +3211,12 @@
         65,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2811,6 +3233,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2831,6 +3257,12 @@
         78,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2847,6 +3279,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2867,6 +3303,12 @@
         87,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2883,6 +3325,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2903,6 +3349,12 @@
         99,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2919,6 +3371,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2939,6 +3395,12 @@
         105,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -2955,6 +3417,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -2975,6 +3441,12 @@
         106,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -2991,6 +3463,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3011,6 +3487,12 @@
         98,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3027,6 +3509,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3047,6 +3533,12 @@
         88,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3063,6 +3555,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3083,6 +3579,12 @@
         77,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3099,6 +3601,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3119,6 +3625,12 @@
         66,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3135,6 +3647,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3155,6 +3671,12 @@
         55,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3171,6 +3693,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3191,6 +3717,12 @@
         44,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3207,6 +3739,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3227,6 +3763,12 @@
         33,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3243,6 +3785,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3263,6 +3809,12 @@
         22,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3279,6 +3831,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3299,6 +3855,12 @@
         12,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3315,6 +3877,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3335,6 +3901,12 @@
         4,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3351,6 +3923,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3371,6 +3947,12 @@
         5,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3387,6 +3969,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3407,6 +3993,12 @@
         11,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3423,6 +4015,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3443,6 +4039,12 @@
         23,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3459,6 +4061,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3479,6 +4085,12 @@
         32,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3495,6 +4107,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3515,6 +4131,12 @@
         45,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3531,6 +4153,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3551,6 +4177,12 @@
         54,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3567,6 +4199,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3587,6 +4223,12 @@
         67,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3603,6 +4245,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3623,6 +4269,12 @@
         76,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3639,6 +4291,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3659,6 +4315,12 @@
         89,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3675,6 +4337,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3695,6 +4361,12 @@
         97,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3711,6 +4383,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3731,6 +4407,12 @@
         107,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3747,6 +4429,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -3767,6 +4453,12 @@
         108,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3783,6 +4475,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3803,6 +4499,12 @@
         96,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3819,6 +4521,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3839,6 +4545,12 @@
         90,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3855,6 +4567,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3875,6 +4591,12 @@
         75,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3891,6 +4613,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3911,6 +4637,12 @@
         68,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3927,6 +4659,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3947,6 +4683,12 @@
         53,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -3963,6 +4705,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -3983,6 +4729,12 @@
         46,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -3999,6 +4751,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4019,6 +4775,12 @@
         31,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4035,6 +4797,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4055,6 +4821,12 @@
         24,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4071,6 +4843,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4091,6 +4867,12 @@
         10,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4107,6 +4889,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4127,6 +4913,12 @@
         6,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4144,6 +4936,10 @@
         111,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -700024,
         "y": -1352078
@@ -4160,6 +4956,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4180,6 +4980,12 @@
         9,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4196,6 +5002,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4216,6 +5026,12 @@
         25,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4232,6 +5048,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4252,6 +5072,12 @@
         30,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4268,6 +5094,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4288,6 +5118,12 @@
         47,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4304,6 +5140,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4324,6 +5164,12 @@
         52,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4340,6 +5186,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4360,6 +5210,12 @@
         69,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4376,6 +5232,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4396,6 +5256,12 @@
         74,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4412,6 +5278,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4432,6 +5302,12 @@
         91,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4448,6 +5324,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4468,6 +5348,12 @@
         95,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4485,6 +5371,10 @@
         110,
         111
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -2052102,
         "y": 0
@@ -4501,6 +5391,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4521,6 +5415,12 @@
         94,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4537,6 +5437,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4557,6 +5461,12 @@
         92,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4573,6 +5483,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4593,6 +5507,12 @@
         73,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4609,6 +5529,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4629,6 +5553,12 @@
         70,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4645,6 +5575,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4665,6 +5599,12 @@
         51,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4681,6 +5621,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4701,6 +5645,12 @@
         48,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4717,6 +5667,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4737,6 +5691,12 @@
         29,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4753,6 +5713,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4773,6 +5737,12 @@
         26,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2110479,
         "y": 2963479
@@ -4789,6 +5759,10 @@
       "pad_nets": [
         111,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -700024,
@@ -4809,6 +5783,12 @@
         8,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4826,6 +5806,10 @@
         111,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -700024,
         "y": -1352078
@@ -4842,6 +5826,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4862,6 +5850,12 @@
         28,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4878,6 +5872,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4898,6 +5896,12 @@
         49,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4914,6 +5918,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4934,6 +5942,12 @@
         50,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4950,6 +5964,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -4970,6 +5988,12 @@
         71,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -4986,6 +6010,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -5006,6 +6034,12 @@
         72,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -5022,6 +6056,10 @@
       "pad_nets": [
         110,
         111
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": -2052102,
@@ -5040,6 +6078,10 @@
         110,
         111
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -2052102,
         "y": 0
@@ -5054,6 +6096,7 @@
       },
       "rotation_deg": 0.0,
       "pad_nets": [],
+      "pad_zone_connections": [],
       "pin1_marker": null
     },
     {
@@ -5065,6 +6108,7 @@
       },
       "rotation_deg": 0.0,
       "pad_nets": [],
+      "pad_zone_connections": [],
       "pin1_marker": null
     },
     {
@@ -5076,6 +6120,7 @@
       },
       "rotation_deg": 0.0,
       "pad_nets": [],
+      "pad_zone_connections": [],
       "pin1_marker": null
     },
     {
@@ -5087,6 +6132,7 @@
       },
       "rotation_deg": 0.0,
       "pad_nets": [],
+      "pad_zone_connections": [],
       "pin1_marker": null
     },
     {
@@ -5102,6 +6148,12 @@
         111,
         17,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": 3605591,
@@ -5122,6 +6174,12 @@
         83,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -5140,6 +6198,12 @@
         111,
         1,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": 3558324,
@@ -5160,6 +6224,12 @@
         103,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -5178,6 +6248,12 @@
         111,
         7,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": 2809874,
@@ -5198,6 +6274,12 @@
         109,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -5216,6 +6298,12 @@
         111,
         27,
         110
+      ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
       ],
       "pin1_marker": {
         "x": 2809874,
@@ -5236,6 +6324,12 @@
         93,
         110
       ],
+      "pad_zone_connections": [
+        "thermal",
+        "thermal",
+        "thermal",
+        "thermal"
+      ],
       "pin1_marker": {
         "x": 2809874,
         "y": 2846590
@@ -5251,6 +6345,9 @@
       "rotation_deg": -90.0,
       "pad_nets": [
         111
+      ],
+      "pad_zone_connections": [
+        "thermal"
       ],
       "pin1_marker": {
         "x": -427051,
@@ -5268,6 +6365,9 @@
       "pad_nets": [
         110
       ],
+      "pad_zone_connections": [
+        "thermal"
+      ],
       "pin1_marker": {
         "x": -427051,
         "y": -1593778
@@ -5283,6 +6383,9 @@
       "rotation_deg": -90.0,
       "pad_nets": [
         1
+      ],
+      "pad_zone_connections": [
+        "thermal"
       ],
       "pin1_marker": {
         "x": -427051,
@@ -17327,12 +18430,176 @@
               "y": -75735568
             },
             {
-              "x": -3236591,
-              "y": -72983798
+              "x": -13800019,
+              "y": -72458052
             },
             {
-              "x": -3300000,
-              "y": -72340000
+              "x": -14004593,
+              "y": -72290162
+            },
+            {
+              "x": -14172483,
+              "y": -72085588
+            },
+            {
+              "x": -14297236,
+              "y": -71852191
+            },
+            {
+              "x": -14374059,
+              "y": -71598940
+            },
+            {
+              "x": -14399999,
+              "y": -71335568
+            },
+            {
+              "x": -14374059,
+              "y": -71072196
+            },
+            {
+              "x": -14297236,
+              "y": -70818945
+            },
+            {
+              "x": -14172483,
+              "y": -70585548
+            },
+            {
+              "x": -14004593,
+              "y": -70380974
+            },
+            {
+              "x": -13800019,
+              "y": -70213084
+            },
+            {
+              "x": -13566622,
+              "y": -70088331
+            },
+            {
+              "x": -13313371,
+              "y": -70011508
+            },
+            {
+              "x": -13049999,
+              "y": -69985568
+            },
+            {
+              "x": -12786627,
+              "y": -70011508
+            },
+            {
+              "x": -12533376,
+              "y": -70088331
+            },
+            {
+              "x": -12299979,
+              "y": -70213084
+            },
+            {
+              "x": -12095405,
+              "y": -70380974
+            },
+            {
+              "x": -11927515,
+              "y": -70585548
+            },
+            {
+              "x": -11802762,
+              "y": -70818945
+            },
+            {
+              "x": -11725939,
+              "y": -71072196
+            },
+            {
+              "x": -11699999,
+              "y": -71335568
+            },
+            {
+              "x": -9390150,
+              "y": -71435568
+            },
+            {
+              "x": -8049999,
+              "y": -71435568
+            },
+            {
+              "x": -8049999,
+              "y": -71235568
+            },
+            {
+              "x": -9390150,
+              "y": -71235568
+            },
+            {
+              "x": -9372138,
+              "y": -71052687
+            },
+            {
+              "x": -9289624,
+              "y": -70780677
+            },
+            {
+              "x": -9155630,
+              "y": -70529991
+            },
+            {
+              "x": -8975304,
+              "y": -70310263
+            },
+            {
+              "x": -8755576,
+              "y": -70129937
+            },
+            {
+              "x": -8504890,
+              "y": -69995943
+            },
+            {
+              "x": -8232880,
+              "y": -69913429
+            },
+            {
+              "x": -8049999,
+              "y": -69895417
+            },
+            {
+              "x": -7849999,
+              "y": -69895417
+            },
+            {
+              "x": -7667118,
+              "y": -69913429
+            },
+            {
+              "x": -7395108,
+              "y": -69995943
+            },
+            {
+              "x": -7144422,
+              "y": -70129937
+            },
+            {
+              "x": -6924694,
+              "y": -70310263
+            },
+            {
+              "x": -6744368,
+              "y": -70529991
+            },
+            {
+              "x": -6610374,
+              "y": -70780677
+            },
+            {
+              "x": -6527860,
+              "y": -71052687
+            },
+            {
+              "x": -6499999,
+              "y": -71335568
             },
             {
               "x": -3236591,
@@ -17459,8 +18726,288 @@
               "y": -72983798
             },
             {
+              "x": -3300000,
+              "y": -72340000
+            },
+            {
+              "x": -3236591,
+              "y": -71696202
+            },
+            {
+              "x": -6499999,
+              "y": -71335568
+            },
+            {
+              "x": -6527860,
+              "y": -71618449
+            },
+            {
+              "x": -6610374,
+              "y": -71890459
+            },
+            {
+              "x": -6744368,
+              "y": -72141145
+            },
+            {
+              "x": -6924694,
+              "y": -72360873
+            },
+            {
+              "x": -7144422,
+              "y": -72541199
+            },
+            {
+              "x": -7395108,
+              "y": -72675193
+            },
+            {
+              "x": -7667118,
+              "y": -72757707
+            },
+            {
+              "x": -7849999,
+              "y": -72775719
+            },
+            {
+              "x": -7849999,
+              "y": -69895417
+            },
+            {
+              "x": -8049999,
+              "y": -69895417
+            },
+            {
+              "x": -8049999,
+              "y": -71235568
+            },
+            {
+              "x": -8049999,
+              "y": -71435568
+            },
+            {
+              "x": -8049999,
+              "y": -72775719
+            },
+            {
+              "x": -8232880,
+              "y": -72757707
+            },
+            {
+              "x": -8504890,
+              "y": -72675193
+            },
+            {
+              "x": -8755576,
+              "y": -72541199
+            },
+            {
+              "x": -8975304,
+              "y": -72360873
+            },
+            {
+              "x": -9155630,
+              "y": -72141145
+            },
+            {
+              "x": -9289624,
+              "y": -71890459
+            },
+            {
+              "x": -9372138,
+              "y": -71618449
+            },
+            {
+              "x": -9390150,
+              "y": -71435568
+            },
+            {
+              "x": -11699999,
+              "y": -71335568
+            },
+            {
+              "x": -11725939,
+              "y": -71598940
+            },
+            {
+              "x": -11802762,
+              "y": -71852191
+            },
+            {
+              "x": -11927515,
+              "y": -72085588
+            },
+            {
+              "x": -12095405,
+              "y": -72290162
+            },
+            {
+              "x": -12299979,
+              "y": -72458052
+            },
+            {
+              "x": -12533376,
+              "y": -72582805
+            },
+            {
+              "x": -12786627,
+              "y": -72659628
+            },
+            {
+              "x": -13049999,
+              "y": -72685568
+            },
+            {
+              "x": -13313371,
+              "y": -72659628
+            },
+            {
+              "x": -13566622,
+              "y": -72582805
+            },
+            {
+              "x": -13800019,
+              "y": -72458052
+            },
+            {
               "x": -16425237,
               "y": -75735568
+            },
+            {
+              "x": 16425237,
+              "y": -75735568
+            },
+            {
+              "x": 14800019,
+              "y": -73458052
+            },
+            {
+              "x": 14566622,
+              "y": -73582805
+            },
+            {
+              "x": 14313371,
+              "y": -73659628
+            },
+            {
+              "x": 14049999,
+              "y": -73685568
+            },
+            {
+              "x": 13786627,
+              "y": -73659628
+            },
+            {
+              "x": 13533376,
+              "y": -73582805
+            },
+            {
+              "x": 13299979,
+              "y": -73458052
+            },
+            {
+              "x": 13095405,
+              "y": -73290162
+            },
+            {
+              "x": 12927515,
+              "y": -73085588
+            },
+            {
+              "x": 12802762,
+              "y": -72852191
+            },
+            {
+              "x": 12725939,
+              "y": -72598940
+            },
+            {
+              "x": 12699999,
+              "y": -72335568
+            },
+            {
+              "x": 12725939,
+              "y": -72072196
+            },
+            {
+              "x": 12802762,
+              "y": -71818945
+            },
+            {
+              "x": 12927515,
+              "y": -71585548
+            },
+            {
+              "x": 13095405,
+              "y": -71380974
+            },
+            {
+              "x": 13299979,
+              "y": -71213084
+            },
+            {
+              "x": 13533376,
+              "y": -71088331
+            },
+            {
+              "x": 13786627,
+              "y": -71011508
+            },
+            {
+              "x": 14049999,
+              "y": -70985568
+            },
+            {
+              "x": 14313371,
+              "y": -71011508
+            },
+            {
+              "x": 14566622,
+              "y": -71088331
+            },
+            {
+              "x": 14800019,
+              "y": -71213084
+            },
+            {
+              "x": 15004593,
+              "y": -71380974
+            },
+            {
+              "x": 15172483,
+              "y": -71585548
+            },
+            {
+              "x": 15297236,
+              "y": -71818945
+            },
+            {
+              "x": 15374059,
+              "y": -72072196
+            },
+            {
+              "x": 15399999,
+              "y": -72335568
+            },
+            {
+              "x": 15374059,
+              "y": -72598940
+            },
+            {
+              "x": 15297236,
+              "y": -72852191
+            },
+            {
+              "x": 15172483,
+              "y": -73085588
+            },
+            {
+              "x": 15004593,
+              "y": -73290162
+            },
+            {
+              "x": 14800019,
+              "y": -73458052
             },
             {
               "x": 16425237,

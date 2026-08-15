@@ -207,9 +207,16 @@ functions e.g. `U10.3 (VDD)`.
 ### 6.1 Built-in parts
 
 Always available under "Place part": "2-pin THT (2.54mm pitch)",
-"4-pin THT header (2.54mm pitch)", "SOIC-8 (1.27mm pitch)", "Wire pad
-(solder, 2mm)", "Mounting hole (M2, NPTH)", "Mounting hole (M2.5,
-NPTH)", "Mounting hole (M3, NPTH)".
+"4-pin THT header (2.54mm pitch)", "SOIC-8 (1.27mm pitch)",
+"Solder pad (SMD, 1.5mm, F.Cu)", "Solder pad (SMD, 1.5mm, B.Cu)",
+"Wire pad (PTH, 1.0mm hole)", "Wire pad (solder, 2mm)" (1.5 mm hole),
+"Wire pad (PTH, 2.0mm hole)" (Solid, for higher current),
+"Mounting hole (M2, NPTH)", "Mounting hole (M2.5, NPTH)",
+"Mounting hole (M3, NPTH)".
+
+PTH wire pads occupy **both** copper layers. On a selected part,
+**"Pour: Thermal / Solid"** chooses spoke relief vs a full flood into a
+same-net plane (F.Cu and B.Cu). "Add part…" can optionally set a drill.
 
 Every mounting hole automatically enforces a **screw-head keep-out**:
 copper (tracks, vias, pads, zone fills) stays out of a circle of the

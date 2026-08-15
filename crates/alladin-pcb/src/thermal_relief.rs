@@ -7,7 +7,10 @@
 //! number are excluded from each other's probes.
 
 use alladin_core::{thermal, Item, LayerId, NetId, Node, PadShape, ZoneConnection};
-use alladin_geom::{circle_segment_collides, segment_polygon_collides, segment_segment_collides, Circle, Point, Segment, Unit};
+use alladin_geom::{
+    circle_segment_collides, segment_polygon_collides, segment_segment_collides, Circle, Point,
+    Segment, Unit,
+};
 
 /// Minimum free spoke directions for a legal Thermal pad.
 pub const MIN_FREE_SPOKE_DIRS: usize = 2;
@@ -65,7 +68,9 @@ fn center_key(p: Point) -> (Unit, Unit) {
 }
 
 fn is_excluded_pad(item: &Item, exclude_centers: &[(Unit, Unit)]) -> bool {
-    let Item::Pad { shape, .. } = item else { return false };
+    let Item::Pad { shape, .. } = item else {
+        return false;
+    };
     let c = shape.center();
     exclude_centers.iter().any(|&(x, y)| x == c.x && y == c.y)
 }
@@ -75,7 +80,8 @@ fn is_excluded_pad(item: &Item, exclude_centers: &[(Unit, Unit)]) -> bool {
 /// always overlaps every spoke corridor root and must not count as a
 /// pour-neck obstacle for this pad.
 fn track_terminates_on_pad(track: &Segment, pad_center: Point) -> bool {
-    (track.a.x == pad_center.x && track.a.y == pad_center.y) || (track.b.x == pad_center.x && track.b.y == pad_center.y)
+    (track.a.x == pad_center.x && track.a.y == pad_center.y)
+        || (track.b.x == pad_center.x && track.b.y == pad_center.y)
 }
 
 /// Whether `item` copper intersects the spoke corridor capsule (`corridor`
@@ -83,8 +89,14 @@ fn track_terminates_on_pad(track: &Segment, pad_center: Point) -> bool {
 /// under consideration (tracks that terminate there are skipped).
 fn copper_hits_corridor(corridor: &Segment, item: &Item, pad_center: Point) -> bool {
     match item {
-        Item::Pad { shape: PadShape::Circle(c), .. } => circle_segment_collides(c, corridor, 0),
-        Item::Pad { shape: PadShape::Polygon { outline, .. }, .. } => segment_polygon_collides(corridor, outline, 0),
+        Item::Pad {
+            shape: PadShape::Circle(c),
+            ..
+        } => circle_segment_collides(c, corridor, 0),
+        Item::Pad {
+            shape: PadShape::Polygon { outline, .. },
+            ..
+        } => segment_polygon_collides(corridor, outline, 0),
         Item::Via { shape, .. } => circle_segment_collides(shape, corridor, 0),
         Item::Track { shape, .. } => {
             if track_terminates_on_pad(shape, pad_center) {
@@ -153,7 +165,17 @@ pub fn free_spoke_directions<'a>(
     // Collect obstacles once — callers often pass node.iter().
     let items: Vec<&Item> = obstacles.collect();
     dirs.into_iter()
-        .filter(|(dx, dy)| spoke_direction_free(shape, *dx, *dy, layer, spoke_width, items.iter().copied(), exclude_centers))
+        .filter(|(dx, dy)| {
+            spoke_direction_free(
+                shape,
+                *dx,
+                *dy,
+                layer,
+                spoke_width,
+                items.iter().copied(),
+                exclude_centers,
+            )
+        })
         .count()
 }
 
@@ -176,7 +198,8 @@ pub fn thermal_pad_is_legal(
     node: &Node,
     exclude_centers: &[(Unit, Unit)],
 ) -> bool {
-    free_spoke_directions_in_node(shape, layer, spoke_width, node, exclude_centers) >= MIN_FREE_SPOKE_DIRS
+    free_spoke_directions_in_node(shape, layer, spoke_width, node, exclude_centers)
+        >= MIN_FREE_SPOKE_DIRS
 }
 
 /// First same-net Thermal on `layer` that fails the ≥2-free-dirs rule, if any.
@@ -188,7 +211,15 @@ pub fn first_illegal_thermal_on_layer(
     exclude_for_center: &dyn Fn(Point) -> Vec<(Unit, Unit)>,
 ) -> Option<Point> {
     for item in node.iter().filter(|item| item_on_layer(item, layer)) {
-        let Item::Pad { shape, zone_connection, net: pad_net, .. } = item else { continue };
+        let Item::Pad {
+            shape,
+            zone_connection,
+            net: pad_net,
+            ..
+        } = item
+        else {
+            continue;
+        };
         if *zone_connection != ZoneConnection::Thermal || *pad_net != Some(net) {
             continue;
         }
@@ -208,14 +239,24 @@ pub fn first_illegal_thermal_anywhere(
     exclude_for_center: &dyn Fn(Point) -> Vec<(Unit, Unit)>,
 ) -> Option<(Point, LayerId)> {
     for item in node.iter() {
-        let Item::Pad { shape, zone_connection, layer, .. } = item else { continue };
+        let Item::Pad {
+            shape,
+            zone_connection,
+            ..
+        } = item
+        else {
+            continue;
+        };
         if *zone_connection != ZoneConnection::Thermal {
             continue;
         }
         let center = shape.center();
         let excludes = exclude_for_center(center);
-        if !thermal_pad_is_legal(shape, *layer, spoke_width, node, &excludes) {
-            return Some((center, *layer));
+        let (a, b) = item.layers();
+        for layer in std::iter::once(a).chain(b) {
+            if !thermal_pad_is_legal(shape, layer, spoke_width, node, &excludes) {
+                return Some((center, layer));
+            }
         }
     }
     None
@@ -240,8 +281,15 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
-        let n = free_spoke_directions_in_node(&shape, LayerId::FCu, thermal::SPOKE_WIDTH, &node, &self_exclude(Point::new(0, 0)));
+        let n = free_spoke_directions_in_node(
+            &shape,
+            LayerId::FCu,
+            thermal::SPOKE_WIDTH,
+            &node,
+            &self_exclude(Point::new(0, 0)),
+        );
         assert_eq!(n, 4);
     }
 
@@ -256,14 +304,22 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         node.add(Item::Pad {
             shape: b,
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
-        let n = free_spoke_directions_in_node(&a, LayerId::FCu, thermal::SPOKE_WIDTH, &node, &self_exclude(Point::new(0, 0)));
+        let n = free_spoke_directions_in_node(
+            &a,
+            LayerId::FCu,
+            thermal::SPOKE_WIDTH,
+            &node,
+            &self_exclude(Point::new(0, 0)),
+        );
         assert!(n < 4, "neighbour should block at least +X; got {n}");
     }
 }

@@ -21,7 +21,7 @@ use alladin_geom::{
     circle_circle_collides, circle_polygon_collides, circle_polygon_collides_indexed,
     circle_segment_collides, polygon_polygon_collides, polygon_polygon_collides_indexed,
     segment_polygon_collides, segment_polygon_collides_indexed, segment_segment_collides, Aabb,
-    Circle, Point, PolygonEdgeIndex, Polygon, Segment, Unit,
+    Circle, Point, Polygon, PolygonEdgeIndex, Segment, Unit,
 };
 use rstar::{RTree, RTreeObject, AABB};
 use serde::{Deserialize, Serialize};
@@ -198,6 +198,12 @@ pub enum Item {
         /// footprint template via `world_items` (parts DB / embedded
         /// snapshot); older templates without the field use Thermal.
         zone_connection: ZoneConnection,
+        /// Plated drill. `Some` means this is PTH: copper and clearance
+        /// exist on **both** layers (the barrel goes through the board).
+        /// `None` is SMD on [`Self::Pad::layer`] only. Gerber still
+        /// takes the drill from the footprint template; this field is
+        /// the in-world fact `layers()` / zone fill / routing use.
+        hole_diameter: Option<Unit>,
     },
     /// A routed track segment (capsule shape).
     Track {
@@ -229,7 +235,7 @@ pub enum Item {
     /// (KiCad's `(zone ... (filled_polygon ...))`) -- a *static*
     /// obstacle Alladin never itself creates or reshapes. `outline` is
     /// exactly the polygon KiCad already filled; Alladin neither
-/// re-fills nor live-updates it as new tracks are routed. Thermal
+    /// re-fills nor live-updates it as new tracks are routed. Thermal
     /// spokes are produced at fill time for [`ZoneConnection::Thermal`]
     /// pads (see `alladin-pcb`'s `zone_fill`); zone-priority between
     /// overlapping pours of different nets remains unmodeled. `net: None`
@@ -257,10 +263,7 @@ pub enum Item {
     /// [`Self::layers`]): a drilled-through hole leaves no board
     /// material for a track to run under on *either* side, regardless
     /// of which layer that track is on.
-    Hole {
-        position: Point,
-        drill: Unit,
-    },
+    Hole { position: Point, drill: Unit },
 }
 
 impl Item {
@@ -274,9 +277,18 @@ impl Item {
 
     pub fn layers(&self) -> (LayerId, Option<LayerId>) {
         match self {
-            Item::Pad { layer, .. } | Item::Track { layer, .. } | Item::Zone { layer, .. } => {
-                (*layer, None)
+            Item::Pad {
+                layer,
+                hole_diameter,
+                ..
+            } => {
+                if hole_diameter.is_some() {
+                    (LayerId::FCu, Some(LayerId::BCu))
+                } else {
+                    (*layer, None)
+                }
             }
+            Item::Track { layer, .. } | Item::Zone { layer, .. } => (*layer, None),
             // Both round, both drilled all the way through the board,
             // both correctly block either copper layer regardless of
             // which one a candidate route is on -- see this variant's
@@ -286,7 +298,9 @@ impl Item {
         }
     }
 
-    fn on_layer(&self, layer: LayerId) -> bool {
+    /// Whether this item occupies `layer` (PTH pads, vias, and NPTH
+    /// holes occupy both copper faces).
+    pub fn on_layer(&self, layer: LayerId) -> bool {
         match self.layers() {
             (a, None) => a == layer,
             (a, Some(b)) => a == layer || b == layer,
@@ -302,7 +316,9 @@ impl Item {
             // The screw-head keep-out (see `hole_keepout_circle`) is
             // what the spatial prefilter has to cover, or exact checks
             // against the enlarged circle would never even be reached.
-            Item::Hole { position, drill } => Aabb::from_circle(&hole_keepout_circle(*position, *drill)),
+            Item::Hole { position, drill } => {
+                Aabb::from_circle(&hole_keepout_circle(*position, *drill))
+            }
         }
     }
 }
@@ -414,7 +430,9 @@ impl RuleResolver for JlcpcbClearance {
                 Self::TRACK_TO_TRACK
             }
             (Item::Zone { .. }, Item::Pad { .. } | Item::Via { .. } | Item::Hole { .. })
-            | (Item::Pad { .. } | Item::Via { .. } | Item::Hole { .. }, Item::Zone { .. }) => Self::PAD_TO_TRACK,
+            | (Item::Pad { .. } | Item::Via { .. } | Item::Hole { .. }, Item::Zone { .. }) => {
+                Self::PAD_TO_TRACK
+            }
             // Remaining combinations are Pad/Via/Hole vs. Pad/Via/Hole,
             // or Zone vs. Zone (never queried in practice -- Alladin
             // only ever routes `Track`/`Via` items, so a `Zone` never
@@ -480,7 +498,9 @@ impl RuleResolver for Jlcpcb2Layer2Oz {
                 Self::TRACK_TO_TRACK
             }
             (Item::Zone { .. }, Item::Pad { .. } | Item::Via { .. } | Item::Hole { .. })
-            | (Item::Pad { .. } | Item::Via { .. } | Item::Hole { .. }, Item::Zone { .. }) => Self::PAD_TO_TRACK,
+            | (Item::Pad { .. } | Item::Via { .. } | Item::Hole { .. }, Item::Zone { .. }) => {
+                Self::PAD_TO_TRACK
+            }
             _ => Self::PAD_TO_PAD,
         }
     }
@@ -819,19 +839,31 @@ impl std::fmt::Display for DfmViolation {
                 write!(f, "via annular ring below JLCPCB's 0.10 mm minimum")
             }
             DfmViolation::ViaDrillExceedsDiameter => {
-                write!(f, "via drill is larger than (or equal to) the via's outer diameter")
+                write!(
+                    f,
+                    "via drill is larger than (or equal to) the via's outer diameter"
+                )
             }
             DfmViolation::SmdPadBelowMin => {
-                write!(f, "SMD pad's smallest dimension below JLCPCB's 0.25 mm minimum")
+                write!(
+                    f,
+                    "SMD pad's smallest dimension below JLCPCB's 0.25 mm minimum"
+                )
             }
             DfmViolation::PthDrillBelowMin => {
                 write!(f, "through-hole pad drill below JLCPCB's 0.15 mm minimum")
             }
             DfmViolation::PthDrillExceedsPad => {
-                write!(f, "through-hole pad drill is larger than (or equal to) the pad's own copper")
+                write!(
+                    f,
+                    "through-hole pad drill is larger than (or equal to) the pad's own copper"
+                )
             }
             DfmViolation::PthAnnularRingBelowMin => {
-                write!(f, "through-hole pad annular ring below JLCPCB's 0.18 mm minimum")
+                write!(
+                    f,
+                    "through-hole pad annular ring below JLCPCB's 0.18 mm minimum"
+                )
             }
             DfmViolation::NpthHoleBelowMin => {
                 write!(f, "non-plated hole below JLCPCB's 0.50 mm minimum")
@@ -891,12 +923,12 @@ pub struct Node {
     /// comment for why this exists and why caching (not just using the
     /// indexed check once) is what actually matters here. `Arc`, not
     /// `Rc`: `Node` must stay `Send` (it's handed wholesale to
-/// `alladin-viewer`'s background router thread), which an `Rc`
-/// inside it would silently break. `RwLock`, not `RefCell`: `Node`
-/// must also stay `Sync` so `&Node` can be shared across parallel
-/// collision/clearance queries -- a `RefCell` here would make that
-/// impossible to even compile. The lock is only ever held briefly
-/// (a `HashMap` lookup or insert), never across a collision check.
+    /// `alladin-viewer`'s background router thread), which an `Rc`
+    /// inside it would silently break. `RwLock`, not `RefCell`: `Node`
+    /// must also stay `Sync` so `&Node` can be shared across parallel
+    /// collision/clearance queries -- a `RefCell` here would make that
+    /// impossible to even compile. The lock is only ever held briefly
+    /// (a `HashMap` lookup or insert), never across a collision check.
     ///
     /// `RwLock` has no blanket `Clone` impl (unlike `RefCell`), so
     /// [`Node`] can no longer `#[derive(Clone)]` -- see the manual
@@ -980,24 +1012,24 @@ impl Node {
         }
     }
 
-/// Every *live* item currently in the world, in no particular order
-/// (removed items are silently skipped). Unfiltered fallback when
-/// [`Node::query_region`] doesn't cover every obstacle a route might
-/// need -- unlike [`Node::query_colliding`], this deliberately does
-/// *not* pre-filter by net/layer, since a path that happens to pass
-/// near an irrelevant item is harmless (the real validity check is
-/// still the exact [`Node::path_is_clear`] call, which does do that
-/// filtering).
+    /// Every *live* item currently in the world, in no particular order
+    /// (removed items are silently skipped). Unfiltered fallback when
+    /// [`Node::query_region`] doesn't cover every obstacle a route might
+    /// need -- unlike [`Node::query_colliding`], this deliberately does
+    /// *not* pre-filter by net/layer, since a path that happens to pass
+    /// near an irrelevant item is harmless (the real validity check is
+    /// still the exact [`Node::path_is_clear`] call, which does do that
+    /// filtering).
     pub fn iter(&self) -> impl Iterator<Item = &Item> + '_ {
         self.iter_with_ids().map(|(_, item)| item)
     }
 
     /// Same as [`Self::iter`], but paired with each item's own
     /// [`ItemId`] -- needed by anything that might later want to
-/// [`Self::remove`]/[`Self::replace`] one of the items it's looking
-/// at (SHOVE-style "is this candidate blocker's net otherwise
-/// untouched by any neighbouring track?" checks are the first real
-/// callers).
+    /// [`Self::remove`]/[`Self::replace`] one of the items it's looking
+    /// at (SHOVE-style "is this candidate blocker's net otherwise
+    /// untouched by any neighbouring track?" checks are the first real
+    /// callers).
     pub fn iter_with_ids(&self) -> impl Iterator<Item = (ItemId, &Item)> + '_ {
         self.items
             .iter()
@@ -1007,12 +1039,12 @@ impl Node {
             .map(|(i, (item, _))| (ItemId(i), item))
     }
 
-/// Every item whose bounding box intersects `region` -- the R-tree
-/// spatial pre-filter for collision/clearance queries that only need
-/// obstacles plausibly relevant to a given corridor, instead of every
-/// item on the whole board. Same non-filtering-by-net/layer caveat as
-/// [`Node::iter`]. Removed items are never returned -- they're gone
-/// from the R-tree itself, not just filtered here.
+    /// Every item whose bounding box intersects `region` -- the R-tree
+    /// spatial pre-filter for collision/clearance queries that only need
+    /// obstacles plausibly relevant to a given corridor, instead of every
+    /// item on the whole board. Same non-filtering-by-net/layer caveat as
+    /// [`Node::iter`]. Removed items are never returned -- they're gone
+    /// from the R-tree itself, not just filtered here.
     pub fn query_region(&self, region: Aabb) -> Vec<&Item> {
         let envelope = aabb_to_envelope(region);
         self.tree
@@ -1111,19 +1143,19 @@ impl Node {
     /// R-tree query and exact per-item collision rule, but returns as
     /// soon as the first collision is found instead of allocating a
     /// `Vec` and scanning every remaining candidate in the search box.
-/// This is the one that actually matters for hot-path performance:
-/// [`Self::path_is_clear`] is called for every candidate clearance
-/// check -- often millions of times for a single net on a real,
-/// densely-populated board -- and the overwhelming majority of those
-/// calls are either answered by the very first nearby item (a genuine
-/// collision) or have to confirm *no* collision by checking every
-/// nearby item anyway, so the only real waste
-/// `query_colliding().is_empty()` was paying for here was the `Vec`
-/// allocation/push overhead on every single call, not the search
-/// itself -- removing it is a real, measured part of what fixed a
-/// routing hang on a real board (see
-/// `alladin_geom::PolygonEdgeIndex`'s doc comment for the other,
-/// larger half of that fix).
+    /// This is the one that actually matters for hot-path performance:
+    /// [`Self::path_is_clear`] is called for every candidate clearance
+    /// check -- often millions of times for a single net on a real,
+    /// densely-populated board -- and the overwhelming majority of those
+    /// calls are either answered by the very first nearby item (a genuine
+    /// collision) or have to confirm *no* collision by checking every
+    /// nearby item anyway, so the only real waste
+    /// `query_colliding().is_empty()` was paying for here was the `Vec`
+    /// allocation/push overhead on every single call, not the search
+    /// itself -- removing it is a real, measured part of what fixed a
+    /// routing hang on a real board (see
+    /// `alladin_geom::PolygonEdgeIndex`'s doc comment for the other,
+    /// larger half of that fix).
     pub fn is_colliding(&self, candidate: &Item, resolver: &dyn RuleResolver) -> bool {
         let search_box = aabb_to_envelope(candidate.aabb().inflate(resolver.max_clearance()));
         self.tree
@@ -1155,7 +1187,12 @@ impl Node {
     /// *new* pour must clear around) never goes through this method at
     /// all, so this skip only ever affects "is `candidate` blocked by an
     /// existing pour", never "does a pour correctly avoid `candidate`".
-    fn item_collides(&self, candidate: &Item, other_id: ItemId, resolver: &dyn RuleResolver) -> bool {
+    fn item_collides(
+        &self,
+        candidate: &Item,
+        other_id: ItemId,
+        resolver: &dyn RuleResolver,
+    ) -> bool {
         let other = &self.items[other_id.0];
 
         if matches!(other, Item::Zone { .. }) {
@@ -1180,38 +1217,59 @@ impl Node {
     /// `items_collide`'s doc comment on its own `Zone` arm for why), so
     /// this only ever needs to handle `candidate` being a `Pad`/`Via`/
     /// `Track`.
-    fn zone_collides(&self, candidate: &Item, zone_id: ItemId, outline: &Polygon, clearance: Unit) -> bool {
+    fn zone_collides(
+        &self,
+        candidate: &Item,
+        zone_id: ItemId,
+        outline: &Polygon,
+        clearance: Unit,
+    ) -> bool {
         let index = self.zone_edge_index(zone_id, outline);
         match candidate {
-            Item::Pad { shape: PadShape::Circle(c), .. } => circle_polygon_collides_indexed(c, &index, clearance),
-            Item::Pad { shape: PadShape::Polygon { outline: pad_outline, .. }, .. } => {
-                polygon_polygon_collides_indexed(pad_outline, &index, clearance)
-            }
+            Item::Pad {
+                shape: PadShape::Circle(c),
+                ..
+            } => circle_polygon_collides_indexed(c, &index, clearance),
+            Item::Pad {
+                shape:
+                    PadShape::Polygon {
+                        outline: pad_outline,
+                        ..
+                    },
+                ..
+            } => polygon_polygon_collides_indexed(pad_outline, &index, clearance),
             Item::Via { shape, .. } => circle_polygon_collides_indexed(shape, &index, clearance),
             Item::Track { shape, .. } => segment_polygon_collides_indexed(shape, &index, clearance),
-            Item::Hole { position, drill } => circle_polygon_collides_indexed(&Circle::new(*position, drill / 2), &index, clearance),
+            Item::Hole { position, drill } => circle_polygon_collides_indexed(
+                &Circle::new(*position, drill / 2),
+                &index,
+                clearance,
+            ),
             Item::Zone { .. } => false,
         }
     }
 
     /// Lazily builds (once) and caches a [`PolygonEdgeIndex`] for the
-/// zone at `zone_id`, keyed by [`ItemId`] rather than the polygon's
-/// own content, so repeat queries against the *same* zone -- exactly
-/// what happens hundreds or thousands of times over during dense
-/// clearance checks -- only ever pay the index's own
-/// `O(vertex count)` build cost once, not once per query (see
-/// [`PolygonEdgeIndex`]'s doc comment for why that distinction is what
-/// actually fixed a real routing hang, not just a constant-factor
-/// speedup). Safe to cache for `Node`'s whole lifetime: zones are never
-/// mutated -- [`Self::replace`]/[`Self::remove`] are only ever used
-/// on `Track`/`Via` items by SHOVE-style relocation -- so a cached
-/// index can never go stale.
+    /// zone at `zone_id`, keyed by [`ItemId`] rather than the polygon's
+    /// own content, so repeat queries against the *same* zone -- exactly
+    /// what happens hundreds or thousands of times over during dense
+    /// clearance checks -- only ever pay the index's own
+    /// `O(vertex count)` build cost once, not once per query (see
+    /// [`PolygonEdgeIndex`]'s doc comment for why that distinction is what
+    /// actually fixed a real routing hang, not just a constant-factor
+    /// speedup). Safe to cache for `Node`'s whole lifetime: zones are never
+    /// mutated -- [`Self::replace`]/[`Self::remove`] are only ever used
+    /// on `Track`/`Via` items by SHOVE-style relocation -- so a cached
+    /// index can never go stale.
     fn zone_edge_index(&self, zone_id: ItemId, outline: &Polygon) -> Arc<PolygonEdgeIndex> {
         if let Some(existing) = self.zone_edge_index_cache.read().unwrap().get(&zone_id) {
             return Arc::clone(existing);
         }
         let index = Arc::new(PolygonEdgeIndex::build(outline));
-        self.zone_edge_index_cache.write().unwrap().insert(zone_id, Arc::clone(&index));
+        self.zone_edge_index_cache
+            .write()
+            .unwrap()
+            .insert(zone_id, Arc::clone(&index));
         index
     }
 
@@ -1244,26 +1302,30 @@ impl Node {
     /// making the whole check a no-op. Pass `None` when `candidate`
     /// hasn't been inserted yet.
     pub fn touches_same_net(&self, candidate: &Item, exclude: Option<ItemId>) -> bool {
-        let Some(net) = candidate.net() else { return false };
+        let Some(net) = candidate.net() else {
+            return false;
+        };
         let (layer_a, layer_a2) = candidate.layers();
         let envelope = aabb_to_envelope(candidate.aabb());
-        self.tree.locate_in_envelope_intersecting(&envelope).any(|indexed| {
-            if Some(indexed.id) == exclude {
-                return false;
-            }
-            let other = &self.items[indexed.id.0];
-            if other.net() != Some(net) {
-                return false;
-            }
-            if !other.on_layer(layer_a) && layer_a2.map_or(true, |l| !other.on_layer(l)) {
-                return false;
-            }
-            if let Item::Zone { outline, .. } = other {
-                self.zone_collides(candidate, indexed.id, outline, 0)
-            } else {
-                items_collide(candidate, other, 0)
-            }
-        })
+        self.tree
+            .locate_in_envelope_intersecting(&envelope)
+            .any(|indexed| {
+                if Some(indexed.id) == exclude {
+                    return false;
+                }
+                let other = &self.items[indexed.id.0];
+                if other.net() != Some(net) {
+                    return false;
+                }
+                if !other.on_layer(layer_a) && layer_a2.map_or(true, |l| !other.on_layer(l)) {
+                    return false;
+                }
+                if let Item::Zone { outline, .. } = other {
+                    self.zone_collides(candidate, indexed.id, outline, 0)
+                } else {
+                    items_collide(candidate, other, 0)
+                }
+            })
     }
 
     /// Groups every live item on `net` into its physically-connected
@@ -1287,7 +1349,11 @@ impl Node {
     /// [`Self::query_colliding`], so the simpler implementation is
     /// worth it.
     pub fn net_copper_components(&self, net: NetId) -> Vec<Vec<ItemId>> {
-        let ids: Vec<ItemId> = self.iter_with_ids().filter(|(_, item)| item.net() == Some(net)).map(|(id, _)| id).collect();
+        let ids: Vec<ItemId> = self
+            .iter_with_ids()
+            .filter(|(_, item)| item.net() == Some(net))
+            .map(|(id, _)| id)
+            .collect();
 
         let mut parent: Vec<usize> = (0..ids.len()).collect();
         fn find(parent: &mut [usize], x: usize) -> usize {
@@ -1305,7 +1371,8 @@ impl Node {
 
         for i in 0..ids.len() {
             for j in (i + 1)..ids.len() {
-                if find(&mut parent, i) != find(&mut parent, j) && self.items_touch(ids[i], ids[j]) {
+                if find(&mut parent, i) != find(&mut parent, j) && self.items_touch(ids[i], ids[j])
+                {
                     union(&mut parent, i, j);
                 }
             }
@@ -1343,9 +1410,14 @@ impl Node {
         }
 
         match (item_a, item_b) {
-            (Item::Zone { outline: outline_a, .. }, Item::Zone { outline: outline_b, .. }) => {
-                polygon_polygon_collides(outline_a, outline_b, 0)
-            }
+            (
+                Item::Zone {
+                    outline: outline_a, ..
+                },
+                Item::Zone {
+                    outline: outline_b, ..
+                },
+            ) => polygon_polygon_collides(outline_a, outline_b, 0),
             (Item::Zone { outline, .. }, _) => self.zone_collides(item_b, b, outline, 0),
             (_, Item::Zone { outline, .. }) => self.zone_collides(item_a, a, outline, 0),
             _ => items_collide(item_a, item_b, 0),
@@ -1398,12 +1470,20 @@ fn hole_keepout_circle(position: Point, drill: Unit) -> Circle {
 
 fn items_collide(a: &Item, b: &Item, clearance: Unit) -> bool {
     match (a, b) {
-        (Item::Pad { shape: s1, .. }, Item::Pad { shape: s2, .. }) => s1.collides_with(s2, clearance),
+        (Item::Pad { shape: s1, .. }, Item::Pad { shape: s2, .. }) => {
+            s1.collides_with(s2, clearance)
+        }
         (Item::Pad { shape: s, .. }, Item::Via { shape: c, .. })
-        | (Item::Via { shape: c, .. }, Item::Pad { shape: s, .. }) => s.collides_with_circle(c, clearance),
-        (Item::Via { shape: c1, .. }, Item::Via { shape: c2, .. }) => circle_circle_collides(c1, c2, clearance),
+        | (Item::Via { shape: c, .. }, Item::Pad { shape: s, .. }) => {
+            s.collides_with_circle(c, clearance)
+        }
+        (Item::Via { shape: c1, .. }, Item::Via { shape: c2, .. }) => {
+            circle_circle_collides(c1, c2, clearance)
+        }
         (Item::Pad { shape: s, .. }, Item::Track { shape: seg, .. })
-        | (Item::Track { shape: seg, .. }, Item::Pad { shape: s, .. }) => s.collides_with_segment(seg, clearance),
+        | (Item::Track { shape: seg, .. }, Item::Pad { shape: s, .. }) => {
+            s.collides_with_segment(seg, clearance)
+        }
         (Item::Via { shape: c, .. }, Item::Track { shape: s, .. })
         | (Item::Track { shape: s, .. }, Item::Via { shape: c, .. }) => {
             circle_segment_collides(c, s, clearance)
@@ -1420,16 +1500,29 @@ fn items_collide(a: &Item, b: &Item, clearance: Unit) -> bool {
         // otherwise the mounting screw's head would sit right on top
         // of live copper.
         (Item::Pad { shape: s, .. }, Item::Hole { position, drill })
-        | (Item::Hole { position, drill }, Item::Pad { shape: s, .. }) => s.collides_with_circle(&hole_keepout_circle(*position, *drill), clearance),
+        | (Item::Hole { position, drill }, Item::Pad { shape: s, .. }) => {
+            s.collides_with_circle(&hole_keepout_circle(*position, *drill), clearance)
+        }
         (Item::Via { shape: c, .. }, Item::Hole { position, drill })
-        | (Item::Hole { position, drill }, Item::Via { shape: c, .. }) => circle_circle_collides(c, &hole_keepout_circle(*position, *drill), clearance),
+        | (Item::Hole { position, drill }, Item::Via { shape: c, .. }) => {
+            circle_circle_collides(c, &hole_keepout_circle(*position, *drill), clearance)
+        }
         (Item::Track { shape: s, .. }, Item::Hole { position, drill })
-        | (Item::Hole { position, drill }, Item::Track { shape: s, .. }) => circle_segment_collides(&hole_keepout_circle(*position, *drill), s, clearance),
+        | (Item::Hole { position, drill }, Item::Track { shape: s, .. }) => {
+            circle_segment_collides(&hole_keepout_circle(*position, *drill), s, clearance)
+        }
         // Hole vs hole is a drill-bit rule, not a screw-head rule --
         // measured wall to wall on the real drills.
-        (Item::Hole { position: p1, drill: d1 }, Item::Hole { position: p2, drill: d2 }) => {
-            circle_circle_collides(&hole_circle(*p1, *d1), &hole_circle(*p2, *d2), clearance)
-        }
+        (
+            Item::Hole {
+                position: p1,
+                drill: d1,
+            },
+            Item::Hole {
+                position: p2,
+                drill: d2,
+            },
+        ) => circle_circle_collides(&hole_circle(*p1, *d1), &hole_circle(*p2, *d2), clearance),
         // Every `Item::Zone` pair is handled by `Node::query_colliding`
         // itself (see `Node::zone_collides`), via a cached
         // `PolygonEdgeIndex` rather than this function's plain,
@@ -1464,18 +1557,21 @@ mod tests {
             net: net1,
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         world.add(Item::Pad {
             shape: PadShape::Circle(Circle::new(Point::new(5 * MM, 0), 400_000)),
             net: net1,
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         world.add(Item::Pad {
             shape: PadShape::Circle(Circle::new(Point::new(2_500_000, 0), 800_000)),
             net: net2,
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         assert!(!world.path_is_clear(
@@ -1510,6 +1606,7 @@ mod tests {
             net: net1,
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         // A same-net track passing right through the pad must not be
@@ -1529,8 +1626,20 @@ mod tests {
     fn net_copper_components_reports_one_group_when_a_track_bridges_two_pads() {
         let mut world = Node::new();
         let net = NetId(1);
-        let pad_a = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
-        let pad_b = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(2 * MM, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        let pad_a = world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)),
+            net: Some(net),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
+        let pad_b = world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(2 * MM, 0), 400_000)),
+            net: Some(net),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
         let track = world.add(Item::Track {
             shape: Segment::new(Point::new(0, 0), Point::new(2 * MM, 0), 200_000),
             net: Some(net),
@@ -1539,7 +1648,11 @@ mod tests {
         });
 
         let components = world.net_copper_components(net);
-        assert_eq!(components.len(), 1, "a track touching both pads must merge them into one component");
+        assert_eq!(
+            components.len(),
+            1,
+            "a track touching both pads must merge them into one component"
+        );
         let mut ids = components[0].clone();
         ids.sort_by_key(|id| id.0);
         let mut expected = vec![pad_a, pad_b, track];
@@ -1551,8 +1664,20 @@ mod tests {
     fn net_copper_components_splits_two_untouched_pads_on_the_same_net() {
         let mut world = Node::new();
         let net = NetId(1);
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(10 * MM, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)),
+            net: Some(net),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
+        world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(10 * MM, 0), 400_000)),
+            net: Some(net),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
 
         let components = world.net_copper_components(net);
         assert_eq!(components.len(), 2, "two same-net pads with nothing physically bridging them must be reported as disconnected");
@@ -1562,14 +1687,24 @@ mod tests {
     fn net_copper_components_bridges_a_fcu_pad_to_a_bcu_zone_island_through_a_via() {
         let mut world = Node::new();
         let net = NetId(1);
-        let pad = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)), net: Some(net), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        let pad = world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 400_000)),
+            net: Some(net),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
         let stub = world.add(Item::Track {
             shape: Segment::new(Point::new(0, 0), Point::new(500_000, 0), 200_000),
             net: Some(net),
             layer: LayerId::FCu,
             class: NetClass::C,
         });
-        let via = world.add(Item::Via { shape: Circle::new(Point::new(500_000, 0), 300_000), drill: 200_000, net: Some(net) });
+        let via = world.add(Item::Via {
+            shape: Circle::new(Point::new(500_000, 0), 300_000),
+            drill: 200_000,
+            net: Some(net),
+        });
         let island = world.add(Item::Zone {
             outline: Polygon::new(vec![
                 Point::new(0, -MM),
@@ -1582,7 +1717,11 @@ mod tests {
         });
 
         let mut components = world.net_copper_components(net);
-        assert_eq!(components.len(), 1, "a via spanning both layers must bridge the F.Cu pad chain to the B.Cu zone island");
+        assert_eq!(
+            components.len(),
+            1,
+            "a via spanning both layers must bridge the F.Cu pad chain to the B.Cu zone island"
+        );
         let mut ids = components.remove(0);
         ids.sort_by_key(|id| id.0);
         let mut expected = vec![pad, stub, via, island];
@@ -1596,7 +1735,12 @@ mod tests {
         let net = NetId(1);
         let far_apart = 50 * MM;
         world.add(Item::Zone {
-            outline: Polygon::new(vec![Point::new(0, 0), Point::new(MM, 0), Point::new(MM, MM), Point::new(0, MM)]),
+            outline: Polygon::new(vec![
+                Point::new(0, 0),
+                Point::new(MM, 0),
+                Point::new(MM, MM),
+                Point::new(0, MM),
+            ]),
             layer: LayerId::BCu,
             net: Some(net),
         });
@@ -1612,7 +1756,11 @@ mod tests {
         });
 
         let components = world.net_copper_components(net);
-        assert_eq!(components.len(), 2, "two zone islands far apart on the same net must not be reported as one component");
+        assert_eq!(
+            components.len(),
+            2,
+            "two zone islands far apart on the same net must not be reported as one component"
+        );
     }
 
     #[test]
@@ -1621,7 +1769,13 @@ mod tests {
         // catches a swapped match arm more directly than the end-to-end
         // tests below.
         let resolver = JlcpcbClearance;
-        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
+        let pad = Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
+            net: None,
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        };
         let via = Item::Via {
             shape: Circle::new(Point::new(0, 0), 500_000),
             drill: 250_000,
@@ -1634,11 +1788,26 @@ mod tests {
             class: NetClass::C,
         };
 
-        assert_eq!(resolver.clearance(&pad, &track), JlcpcbClearance::PAD_TO_TRACK);
-        assert_eq!(resolver.clearance(&track, &pad), JlcpcbClearance::PAD_TO_TRACK);
-        assert_eq!(resolver.clearance(&via, &track), JlcpcbClearance::VIA_TO_TRACK);
-        assert_eq!(resolver.clearance(&track, &via), JlcpcbClearance::VIA_TO_TRACK);
-        assert_eq!(resolver.clearance(&track, &track), JlcpcbClearance::TRACK_TO_TRACK);
+        assert_eq!(
+            resolver.clearance(&pad, &track),
+            JlcpcbClearance::PAD_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&track, &pad),
+            JlcpcbClearance::PAD_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&via, &track),
+            JlcpcbClearance::VIA_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&track, &via),
+            JlcpcbClearance::VIA_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&track, &track),
+            JlcpcbClearance::TRACK_TO_TRACK
+        );
         assert_eq!(resolver.clearance(&pad, &via), JlcpcbClearance::PAD_TO_PAD);
         assert_eq!(resolver.clearance(&pad, &pad), JlcpcbClearance::PAD_TO_PAD);
         assert_eq!(resolver.max_clearance(), JlcpcbClearance::VIA_TO_TRACK);
@@ -1653,7 +1822,13 @@ mod tests {
         // only track-to-track should actually move versus the
         // `2layer_1oz` baseline.
         let resolver = Jlcpcb2Layer2Oz;
-        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
+        let pad = Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
+            net: None,
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        };
         let via = Item::Via {
             shape: Circle::new(Point::new(0, 0), 500_000),
             drill: 250_000,
@@ -1666,12 +1841,21 @@ mod tests {
             class: NetClass::C,
         };
 
-        assert_eq!(resolver.clearance(&pad, &track), JlcpcbClearance::PAD_TO_TRACK);
-        assert_eq!(resolver.clearance(&via, &track), JlcpcbClearance::VIA_TO_TRACK);
+        assert_eq!(
+            resolver.clearance(&pad, &track),
+            JlcpcbClearance::PAD_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&via, &track),
+            JlcpcbClearance::VIA_TO_TRACK
+        );
         assert_eq!(resolver.clearance(&pad, &pad), JlcpcbClearance::PAD_TO_PAD);
 
         assert_eq!(Jlcpcb2Layer2Oz::TRACK_TO_TRACK, 160_000);
-        assert_ne!(Jlcpcb2Layer2Oz::TRACK_TO_TRACK, JlcpcbClearance::TRACK_TO_TRACK);
+        assert_ne!(
+            Jlcpcb2Layer2Oz::TRACK_TO_TRACK,
+            JlcpcbClearance::TRACK_TO_TRACK
+        );
         assert_eq!(resolver.clearance(&track, &track), 160_000);
         assert_eq!(resolver.max_clearance(), JlcpcbClearance::VIA_TO_TRACK);
     }
@@ -1715,19 +1899,34 @@ mod tests {
         // Bare minimum that still clears the annular ring: drill 0.15
         // needs outer >= 0.15 + 2*0.10 = 0.35 mm.
         assert_eq!(JlcpcbDfm::check_via(350_000, 150_000), Ok(()));
-        assert_eq!(JlcpcbDfm::check_via(349_000, 150_000), Err(DfmViolation::ViaAnnularRingBelowMin));
+        assert_eq!(
+            JlcpcbDfm::check_via(349_000, 150_000),
+            Err(DfmViolation::ViaAnnularRingBelowMin)
+        );
     }
 
     #[test]
     fn jlcpcb_dfm_check_track_width_rejects_below_minimum() {
-        assert_eq!(JlcpcbDfm::check_track_width(JlcpcbDfm::MIN_TRACK_WIDTH), Ok(()));
-        assert_eq!(JlcpcbDfm::check_track_width(JlcpcbDfm::MIN_TRACK_WIDTH - 1), Err(DfmViolation::TrackWidthBelowMin));
+        assert_eq!(
+            JlcpcbDfm::check_track_width(JlcpcbDfm::MIN_TRACK_WIDTH),
+            Ok(())
+        );
+        assert_eq!(
+            JlcpcbDfm::check_track_width(JlcpcbDfm::MIN_TRACK_WIDTH - 1),
+            Err(DfmViolation::TrackWidthBelowMin)
+        );
     }
 
     #[test]
     fn jlcpcb_dfm_check_smd_pad_rejects_below_minimum_and_accepts_the_floor() {
-        assert_eq!(JlcpcbDfm::check_smd_pad(JlcpcbDfm::MIN_SMD_PAD_SIZE), Ok(()));
-        assert_eq!(JlcpcbDfm::check_smd_pad(JlcpcbDfm::MIN_SMD_PAD_SIZE - 1), Err(DfmViolation::SmdPadBelowMin));
+        assert_eq!(
+            JlcpcbDfm::check_smd_pad(JlcpcbDfm::MIN_SMD_PAD_SIZE),
+            Ok(())
+        );
+        assert_eq!(
+            JlcpcbDfm::check_smd_pad(JlcpcbDfm::MIN_SMD_PAD_SIZE - 1),
+            Err(DfmViolation::SmdPadBelowMin)
+        );
     }
 
     #[test]
@@ -1735,24 +1934,49 @@ mod tests {
         // A 1.0mm pad over a 0.6mm drill: ring 0.2mm, above the 0.18mm
         // floor -- the smallest commonly-real geometry that passes.
         assert_eq!(JlcpcbDfm::check_pth_pad(1_000_000, 600_000), Ok(()));
-        assert_eq!(JlcpcbDfm::check_pth_pad(1_000_000, JlcpcbDfm::MIN_DRILL_DIAMETER - 1), Err(DfmViolation::PthDrillBelowMin));
-        assert_eq!(JlcpcbDfm::check_pth_pad(600_000, 600_000), Err(DfmViolation::PthDrillExceedsPad));
+        assert_eq!(
+            JlcpcbDfm::check_pth_pad(1_000_000, JlcpcbDfm::MIN_DRILL_DIAMETER - 1),
+            Err(DfmViolation::PthDrillBelowMin)
+        );
+        assert_eq!(
+            JlcpcbDfm::check_pth_pad(600_000, 600_000),
+            Err(DfmViolation::PthDrillExceedsPad)
+        );
         // 0.9mm pad over 0.6mm drill: ring 0.15mm < 0.18mm.
-        assert_eq!(JlcpcbDfm::check_pth_pad(900_000, 600_000), Err(DfmViolation::PthAnnularRingBelowMin));
+        assert_eq!(
+            JlcpcbDfm::check_pth_pad(900_000, 600_000),
+            Err(DfmViolation::PthAnnularRingBelowMin)
+        );
     }
 
     #[test]
     fn jlcpcb_dfm_check_npth_hole_rejects_below_minimum() {
         assert_eq!(JlcpcbDfm::check_npth_hole(JlcpcbDfm::MIN_NPTH_HOLE), Ok(()));
-        assert_eq!(JlcpcbDfm::check_npth_hole(JlcpcbDfm::MIN_NPTH_HOLE - 1), Err(DfmViolation::NpthHoleBelowMin));
+        assert_eq!(
+            JlcpcbDfm::check_npth_hole(JlcpcbDfm::MIN_NPTH_HOLE - 1),
+            Err(DfmViolation::NpthHoleBelowMin)
+        );
     }
 
     #[test]
     fn jlcpcb_dfm_required_hole_to_hole_only_relaxes_for_a_genuinely_shared_net() {
-        assert_eq!(JlcpcbDfm::required_hole_to_hole(Some(3), Some(3)), JlcpcbDfm::HOLE_TO_HOLE_SAME_NET);
-        assert_eq!(JlcpcbDfm::required_hole_to_hole(Some(3), Some(4)), JlcpcbDfm::HOLE_TO_HOLE_DIFFERENT_NET);
-        assert_eq!(JlcpcbDfm::required_hole_to_hole(Some(3), None), JlcpcbDfm::HOLE_TO_HOLE_DIFFERENT_NET, "a net-less NPTH hole never shares a net");
-        assert_eq!(JlcpcbDfm::required_hole_to_hole(None, None), JlcpcbDfm::HOLE_TO_HOLE_DIFFERENT_NET);
+        assert_eq!(
+            JlcpcbDfm::required_hole_to_hole(Some(3), Some(3)),
+            JlcpcbDfm::HOLE_TO_HOLE_SAME_NET
+        );
+        assert_eq!(
+            JlcpcbDfm::required_hole_to_hole(Some(3), Some(4)),
+            JlcpcbDfm::HOLE_TO_HOLE_DIFFERENT_NET
+        );
+        assert_eq!(
+            JlcpcbDfm::required_hole_to_hole(Some(3), None),
+            JlcpcbDfm::HOLE_TO_HOLE_DIFFERENT_NET,
+            "a net-less NPTH hole never shares a net"
+        );
+        assert_eq!(
+            JlcpcbDfm::required_hole_to_hole(None, None),
+            JlcpcbDfm::HOLE_TO_HOLE_DIFFERENT_NET
+        );
     }
 
     #[test]
@@ -1801,12 +2025,22 @@ mod tests {
         let x = 100_000 + gap + 100_000;
 
         assert!(world.path_is_clear(
-            Point::new(x, -MM), Point::new(x, MM), 200_000,
-            Some(NetId(2)), LayerId::FCu, NetClass::C, &JlcpcbClearance,
+            Point::new(x, -MM),
+            Point::new(x, MM),
+            200_000,
+            Some(NetId(2)),
+            LayerId::FCu,
+            NetClass::C,
+            &JlcpcbClearance,
         ));
         assert!(!world.path_is_clear(
-            Point::new(x, -MM), Point::new(x, MM), 200_000,
-            Some(NetId(2)), LayerId::FCu, NetClass::C, &Jlcpcb2Layer2Oz,
+            Point::new(x, -MM),
+            Point::new(x, MM),
+            200_000,
+            Some(NetId(2)),
+            LayerId::FCu,
+            NetClass::C,
+            &Jlcpcb2Layer2Oz,
         ));
     }
 
@@ -1827,6 +2061,7 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         assert!(
             world_pad.path_is_clear(
@@ -1866,8 +2101,13 @@ mod tests {
         // place.
         let fixed = FixedClearance(127_000);
         assert!(!world_pad.path_is_clear(
-            Point::new(pad_radius + gap, -MM), Point::new(pad_radius + gap, MM),
-            0, Some(NetId(2)), LayerId::FCu, NetClass::C, &fixed,
+            Point::new(pad_radius + gap, -MM),
+            Point::new(pad_radius + gap, MM),
+            0,
+            Some(NetId(2)),
+            LayerId::FCu,
+            NetClass::C,
+            &fixed,
         ));
     }
 
@@ -1881,11 +2121,17 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         assert_eq!(world.len(), 1);
         assert!(!world.path_is_clear(
-            Point::new(-1_000_000, 0), Point::new(1_000_000, 0), 0,
-            Some(NetId(2)), LayerId::FCu, NetClass::C, &resolver,
+            Point::new(-1_000_000, 0),
+            Point::new(1_000_000, 0),
+            0,
+            Some(NetId(2)),
+            LayerId::FCu,
+            NetClass::C,
+            &resolver,
         ));
 
         let removed = world.remove(pad_id);
@@ -1896,10 +2142,17 @@ mod tests {
         assert_eq!(world.iter().count(), 0);
         assert_eq!(world.iter_with_ids().count(), 0);
         assert!(world.get(pad_id).is_none());
-        assert!(world.query_region(Aabb::from_circle(&Circle::new(Point::new(0, 0), 10 * MM))).is_empty());
+        assert!(world
+            .query_region(Aabb::from_circle(&Circle::new(Point::new(0, 0), 10 * MM)))
+            .is_empty());
         assert!(world.path_is_clear(
-            Point::new(-1_000_000, 0), Point::new(1_000_000, 0), 0,
-            Some(NetId(2)), LayerId::FCu, NetClass::C, &resolver,
+            Point::new(-1_000_000, 0),
+            Point::new(1_000_000, 0),
+            0,
+            Some(NetId(2)),
+            LayerId::FCu,
+            NetClass::C,
+            &resolver,
         ));
     }
 
@@ -1912,6 +2165,7 @@ mod tests {
             net: None,
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         world.remove(id);
         world.remove(id); // second removal of the same id: caller bug, must panic
@@ -1945,27 +2199,57 @@ mod tests {
             Item::Track { shape, .. } => assert_eq!(shape.a, Point::new(0, 5 * MM)),
             other => panic!("expected a Track, got {other:?}"),
         }
-        assert_eq!(world.len(), 1, "replace must not change the live item count");
+        assert_eq!(
+            world.len(),
+            1,
+            "replace must not change the live item count"
+        );
 
         // The old position is now clear; the new position collides.
         assert!(world.path_is_clear(
-            Point::new(0, 0), Point::new(5 * MM, 0), 250_000,
-            Some(NetId(2)), LayerId::FCu, NetClass::C, &resolver,
+            Point::new(0, 0),
+            Point::new(5 * MM, 0),
+            250_000,
+            Some(NetId(2)),
+            LayerId::FCu,
+            NetClass::C,
+            &resolver,
         ));
         assert!(!world.path_is_clear(
-            Point::new(0, 5 * MM), Point::new(5 * MM, 5 * MM), 250_000,
-            Some(NetId(2)), LayerId::FCu, NetClass::C, &resolver,
+            Point::new(0, 5 * MM),
+            Point::new(5 * MM, 5 * MM),
+            250_000,
+            Some(NetId(2)),
+            LayerId::FCu,
+            NetClass::C,
+            &resolver,
         ));
     }
 
     #[test]
     fn iter_with_ids_pairs_each_item_with_its_own_stable_id() {
         let mut world = Node::new();
-        let a = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 100)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
-        let b = world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(1 * MM, 0), 100)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        let a = world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 100)),
+            net: None,
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
+        let b = world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(1 * MM, 0), 100)),
+            net: None,
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
         world.remove(a);
         let ids: Vec<ItemId> = world.iter_with_ids().map(|(id, _)| id).collect();
-        assert_eq!(ids, vec![b], "the removed item's id must not appear, and the survivor keeps its original id");
+        assert_eq!(
+            ids,
+            vec![b],
+            "the removed item's id must not appear, and the survivor keeps its original id"
+        );
     }
 
     #[test]
@@ -1978,6 +2262,7 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         // Same footprint, but routed on the back copper layer: must be
@@ -2015,8 +2300,18 @@ mod tests {
         // Zone match arms' doc comment).
         let resolver = JlcpcbClearance;
         let zone = square_zone(0.0, 10.0, LayerId::FCu, None);
-        let pad = Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: None, layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
-        let via = Item::Via { shape: Circle::new(Point::new(0, 0), 500_000), drill: 250_000, net: None };
+        let pad = Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
+            net: None,
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        };
+        let via = Item::Via {
+            shape: Circle::new(Point::new(0, 0), 500_000),
+            drill: 250_000,
+            net: None,
+        };
         let track = Item::Track {
             shape: Segment::new(Point::new(0, 0), Point::new(MM, 0), 0),
             net: None,
@@ -2024,12 +2319,30 @@ mod tests {
             class: NetClass::C,
         };
 
-        assert_eq!(resolver.clearance(&zone, &track), JlcpcbClearance::TRACK_TO_TRACK);
-        assert_eq!(resolver.clearance(&track, &zone), JlcpcbClearance::TRACK_TO_TRACK);
-        assert_eq!(resolver.clearance(&zone, &pad), JlcpcbClearance::PAD_TO_TRACK);
-        assert_eq!(resolver.clearance(&pad, &zone), JlcpcbClearance::PAD_TO_TRACK);
-        assert_eq!(resolver.clearance(&zone, &via), JlcpcbClearance::PAD_TO_TRACK);
-        assert_eq!(resolver.clearance(&via, &zone), JlcpcbClearance::PAD_TO_TRACK);
+        assert_eq!(
+            resolver.clearance(&zone, &track),
+            JlcpcbClearance::TRACK_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&track, &zone),
+            JlcpcbClearance::TRACK_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&zone, &pad),
+            JlcpcbClearance::PAD_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&pad, &zone),
+            JlcpcbClearance::PAD_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&zone, &via),
+            JlcpcbClearance::PAD_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&via, &zone),
+            JlcpcbClearance::PAD_TO_TRACK
+        );
     }
 
     #[test]
@@ -2178,7 +2491,8 @@ mod tests {
     }
 
     #[test]
-    fn polygon_pad_correctly_blocks_a_track_that_the_old_inscribed_circle_model_would_have_missed() {
+    fn polygon_pad_correctly_blocks_a_track_that_the_old_inscribed_circle_model_would_have_missed()
+    {
         // The actual reported bug this whole slice fixes: a 4mm x 1mm
         // pad's old collision shape was an *inscribed* circle of radius
         // `min(4mm, 1mm) / 2` = 0.5mm -- much smaller than the pad's
@@ -2193,6 +2507,7 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         assert!(
@@ -2219,6 +2534,7 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let half_width = 100_000; // 0.1mm track
@@ -2260,6 +2576,7 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let neighbor_at_x = |x: Unit| Item::Pad {
@@ -2267,6 +2584,7 @@ mod tests {
             net: Some(NetId(2)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         };
         // First pad's right edge at x=2mm; second pad's own left edge
         // (its own half-width away from its center) placed exactly
@@ -2305,24 +2623,77 @@ mod tests {
             net: Some(NetId(2)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         };
 
-        assert!(!world.is_colliding(&pad_at_x(10 * MM), &resolver), "straddling the zone's own edge: must not collide");
-        assert!(!world.is_colliding(&pad_at_x(5 * MM), &resolver), "sitting squarely inside the zone: must not collide");
+        assert!(
+            !world.is_colliding(&pad_at_x(10 * MM), &resolver),
+            "straddling the zone's own edge: must not collide"
+        );
+        assert!(
+            !world.is_colliding(&pad_at_x(5 * MM), &resolver),
+            "sitting squarely inside the zone: must not collide"
+        );
     }
 
     #[test]
     fn a_mounting_hole_has_no_net_and_blocks_both_copper_layers() {
-        let hole = Item::Hole { position: Point::new(0, 0), drill: 3 * MM / 2 };
+        let hole = Item::Hole {
+            position: Point::new(0, 0),
+            drill: 3 * MM / 2,
+        };
         assert_eq!(hole.net(), None);
         assert_eq!(hole.layers(), (LayerId::FCu, Some(LayerId::BCu)));
+    }
+
+    #[test]
+    fn a_pth_pad_occupies_both_copper_layers_and_blocks_a_back_track() {
+        let pth = Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), MM)),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: Some(MM),
+        };
+        assert_eq!(pth.layers(), (LayerId::FCu, Some(LayerId::BCu)));
+        assert!(pth.on_layer(LayerId::FCu));
+        assert!(pth.on_layer(LayerId::BCu));
+
+        let smd = Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), MM)),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        };
+        assert_eq!(smd.layers(), (LayerId::FCu, None));
+        assert!(!smd.on_layer(LayerId::BCu));
+
+        let mut world = Node::new();
+        let resolver = JlcpcbClearance;
+        world.add(pth);
+        assert!(
+            !world.path_is_clear(
+                Point::new(-5 * MM, 0),
+                Point::new(5 * MM, 0),
+                250_000,
+                Some(NetId(2)),
+                LayerId::BCu,
+                NetClass::C,
+                &resolver
+            ),
+            "a plated through-hole must block a different-net track on B.Cu"
+        );
     }
 
     #[test]
     fn a_track_on_either_copper_layer_is_blocked_by_a_mounting_hole() {
         let mut world = Node::new();
         let resolver = JlcpcbClearance;
-        world.add(Item::Hole { position: Point::new(0, 0), drill: 2 * MM });
+        world.add(Item::Hole {
+            position: Point::new(0, 0),
+            drill: 2 * MM,
+        });
 
         for layer in [LayerId::FCu, LayerId::BCu] {
             assert!(
@@ -2333,40 +2704,79 @@ mod tests {
 
         // Well clear of the hole entirely: unaffected.
         assert!(world.path_is_clear(
-            Point::new(-5 * MM, 10 * MM), Point::new(5 * MM, 10 * MM), 250_000,
-            Some(NetId(1)), LayerId::FCu, NetClass::C, &resolver,
+            Point::new(-5 * MM, 10 * MM),
+            Point::new(5 * MM, 10 * MM),
+            250_000,
+            Some(NetId(1)),
+            LayerId::FCu,
+            NetClass::C,
+            &resolver,
         ));
     }
 
     #[test]
-    fn a_mounting_hole_gets_the_stricter_via_hole_clearance_from_a_track_not_the_looser_pad_clearance() {
+    fn a_mounting_hole_gets_the_stricter_via_hole_clearance_from_a_track_not_the_looser_pad_clearance(
+    ) {
         // Same reasoning `jlcpcb_clearance_is_stricter_for_vias_than_pads_at_the_same_gap`
         // already covers for a real via: a hole's own drill is
         // mechanically drilled exactly like a via's, so it must use
         // `VIA_TO_TRACK`, not the looser `PAD_TO_TRACK`.
         let resolver = JlcpcbClearance;
-        let hole = Item::Hole { position: Point::new(0, 0), drill: MM };
-        let track = Item::Track { shape: Segment::new(Point::new(0, 0), Point::new(MM, 0), 0), net: None, layer: LayerId::FCu, class: NetClass::C };
-        assert_eq!(resolver.clearance(&hole, &track), JlcpcbClearance::VIA_TO_TRACK);
-        assert_eq!(resolver.clearance(&track, &hole), JlcpcbClearance::VIA_TO_TRACK);
+        let hole = Item::Hole {
+            position: Point::new(0, 0),
+            drill: MM,
+        };
+        let track = Item::Track {
+            shape: Segment::new(Point::new(0, 0), Point::new(MM, 0), 0),
+            net: None,
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        };
+        assert_eq!(
+            resolver.clearance(&hole, &track),
+            JlcpcbClearance::VIA_TO_TRACK
+        );
+        assert_eq!(
+            resolver.clearance(&track, &hole),
+            JlcpcbClearance::VIA_TO_TRACK
+        );
     }
 
     #[test]
     fn a_mounting_hole_collides_with_a_pad_via_and_another_hole_at_the_expected_clearance() {
         let resolver = JlcpcbClearance;
         let mut world = Node::new();
-        world.add(Item::Hole { position: Point::new(0, 0), drill: 2 * MM }); // drill radius 1mm, screw-head keep-out radius 2mm
+        world.add(Item::Hole {
+            position: Point::new(0, 0),
+            drill: 2 * MM,
+        }); // drill radius 1mm, screw-head keep-out radius 2mm
 
         // Copper (pads/vias) clears against the screw-head keep-out
         // circle (radius = full drill diameter, see
         // `hole_keepout_circle`), not the bare drill wall.
         let clearance = JlcpcbClearance::PAD_TO_PAD;
         let x_exactly_clear = 2 * MM + clearance + 500_000; // keep-out radius + clearance + pad radius
-        let pad_at = |x: Unit| Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(x, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal };
-        assert!(!world.is_colliding(&pad_at(x_exactly_clear), &resolver), "exactly at PAD_TO_PAD clearance past the keep-out: must not collide");
-        assert!(world.is_colliding(&pad_at(x_exactly_clear - 1), &resolver), "one internal unit closer: must collide");
+        let pad_at = |x: Unit| Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(x, 0), 500_000)),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        };
+        assert!(
+            !world.is_colliding(&pad_at(x_exactly_clear), &resolver),
+            "exactly at PAD_TO_PAD clearance past the keep-out: must not collide"
+        );
+        assert!(
+            world.is_colliding(&pad_at(x_exactly_clear - 1), &resolver),
+            "one internal unit closer: must collide"
+        );
 
-        let via_at = |x: Unit| Item::Via { shape: Circle::new(Point::new(x, 0), 500_000), drill: 250_000, net: Some(NetId(2)) };
+        let via_at = |x: Unit| Item::Via {
+            shape: Circle::new(Point::new(x, 0), 500_000),
+            drill: 250_000,
+            net: Some(NetId(2)),
+        };
         assert!(!world.is_colliding(&via_at(x_exactly_clear), &resolver));
         assert!(world.is_colliding(&via_at(x_exactly_clear - 1), &resolver));
 
@@ -2374,13 +2784,23 @@ mod tests {
         // (radius 1mm + clearance + radius 0.5mm) -- a screw head can't
         // short two platingless holes.
         let hole_exactly_clear = MM + clearance + 500_000;
-        let hole_at = |x: Unit| Item::Hole { position: Point::new(x, 0), drill: MM };
-        assert!(!world.is_colliding(&hole_at(hole_exactly_clear), &resolver), "two holes exactly at PAD_TO_PAD clearance wall-to-wall: must not collide");
-        assert!(world.is_colliding(&hole_at(hole_exactly_clear - 1), &resolver), "two holes one internal unit closer: must collide");
+        let hole_at = |x: Unit| Item::Hole {
+            position: Point::new(x, 0),
+            drill: MM,
+        };
+        assert!(
+            !world.is_colliding(&hole_at(hole_exactly_clear), &resolver),
+            "two holes exactly at PAD_TO_PAD clearance wall-to-wall: must not collide"
+        );
+        assert!(
+            world.is_colliding(&hole_at(hole_exactly_clear - 1), &resolver),
+            "two holes one internal unit closer: must collide"
+        );
     }
 
     #[test]
-    fn a_filled_zone_never_blocks_a_mounting_hole_even_well_inside_the_old_pad_to_track_clearance() {
+    fn a_filled_zone_never_blocks_a_mounting_hole_even_well_inside_the_old_pad_to_track_clearance()
+    {
         // Same "zone fills never block anything" contract as
         // `polygon_pad_never_collides_with_a_zone_even_well_inside_the_old_pad_to_track_clearance`,
         // for `Item::Hole` instead of `Item::Pad`.
@@ -2388,9 +2808,18 @@ mod tests {
         let mut world = Node::new();
         world.add(square_zone(0.0, 10.0, LayerId::FCu, Some(NetId(1)))); // right edge at x=10mm
 
-        let hole_at_x = |x: Unit| Item::Hole { position: Point::new(x, 5 * MM), drill: 2 * MM };
-        assert!(!world.is_colliding(&hole_at_x(10 * MM), &resolver), "straddling the zone's own edge: must not collide");
-        assert!(!world.is_colliding(&hole_at_x(5 * MM), &resolver), "sitting squarely inside the zone: must not collide");
+        let hole_at_x = |x: Unit| Item::Hole {
+            position: Point::new(x, 5 * MM),
+            drill: 2 * MM,
+        };
+        assert!(
+            !world.is_colliding(&hole_at_x(10 * MM), &resolver),
+            "straddling the zone's own edge: must not collide"
+        );
+        assert!(
+            !world.is_colliding(&hole_at_x(5 * MM), &resolver),
+            "sitting squarely inside the zone: must not collide"
+        );
     }
 
     #[test]
@@ -2399,7 +2828,10 @@ mod tests {
         // diameter, 2mm here), not just the 1mm drill radius --
         // otherwise the spatial prefilter would skip exact checks
         // against the enlarged circle entirely.
-        let hole = Item::Hole { position: Point::new(5 * MM, -3 * MM), drill: 2 * MM };
+        let hole = Item::Hole {
+            position: Point::new(5 * MM, -3 * MM),
+            drill: 2 * MM,
+        };
         let bb = hole.aabb();
         assert_eq!(bb.min, Point::new(3 * MM, -5 * MM));
         assert_eq!(bb.max, Point::new(7 * MM, -1 * MM));
@@ -2413,25 +2845,58 @@ mod tests {
         // never even considered a collision candidate), but it doesn't
         // actually touch anything on its own net either.
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
-        let far_via = Item::Via { shape: Circle::new(Point::new(10 * MM, 0), 300_000), drill: 150_000, net: Some(NetId(1)) };
+        world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
+        let far_via = Item::Via {
+            shape: Circle::new(Point::new(10 * MM, 0), 300_000),
+            drill: 150_000,
+            net: Some(NetId(1)),
+        };
         assert!(!world.touches_same_net(&far_via, None));
     }
 
     #[test]
     fn touches_same_net_is_true_for_a_via_overlapping_a_same_net_pad() {
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
-        let touching_via = Item::Via { shape: Circle::new(Point::new(700_000, 0), 300_000), drill: 150_000, net: Some(NetId(1)) };
+        world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
+        let touching_via = Item::Via {
+            shape: Circle::new(Point::new(700_000, 0), 300_000),
+            drill: 150_000,
+            net: Some(NetId(1)),
+        };
         assert!(world.touches_same_net(&touching_via, None));
     }
 
     #[test]
     fn touches_same_net_ignores_an_overlapping_pad_on_a_different_net() {
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(2)), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
-        let via = Item::Via { shape: Circle::new(Point::new(700_000, 0), 300_000), drill: 150_000, net: Some(NetId(1)) };
-        assert!(!world.touches_same_net(&via, None), "different net, however close, must not count as touching");
+        world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
+            net: Some(NetId(2)),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
+        let via = Item::Via {
+            shape: Circle::new(Point::new(700_000, 0), 300_000),
+            drill: 150_000,
+            net: Some(NetId(1)),
+        };
+        assert!(
+            !world.touches_same_net(&via, None),
+            "different net, however close, must not count as touching"
+        );
     }
 
     #[test]
@@ -2440,17 +2905,32 @@ mod tests {
         // dropped inside a GND copper pour.
         let mut world = Node::new();
         world.add(square_zone(0.0, 10.0, LayerId::BCu, Some(NetId(1))));
-        let via = Item::Via { shape: Circle::new(Point::new(5 * MM, 5 * MM), 300_000), drill: 150_000, net: Some(NetId(1)) };
+        let via = Item::Via {
+            shape: Circle::new(Point::new(5 * MM, 5 * MM), 300_000),
+            drill: 150_000,
+            net: Some(NetId(1)),
+        };
         assert!(world.touches_same_net(&via, None));
     }
 
     #[test]
     fn touches_same_net_ignores_a_same_net_item_on_the_wrong_copper_layer() {
         let mut world = Node::new();
-        world.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)), net: Some(NetId(1)), layer: LayerId::BCu, zone_connection: ZoneConnection::Thermal });
+        world.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), 500_000)),
+            net: Some(NetId(1)),
+            layer: LayerId::BCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
         // A track only on F.Cu can never touch a B.Cu-only pad even if
         // it geometrically overlaps -- no shared copper layer.
-        let track = Item::Track { shape: Segment::new(Point::new(0, 0), Point::new(MM, 0), 200_000), net: Some(NetId(1)), layer: LayerId::FCu, class: NetClass::C };
+        let track = Item::Track {
+            shape: Segment::new(Point::new(0, 0), Point::new(MM, 0), 200_000),
+            net: Some(NetId(1)),
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        };
         assert!(!world.touches_same_net(&track, None));
     }
 
@@ -2464,9 +2944,19 @@ mod tests {
         // overlapping" match every time, making the whole check a
         // permanent no-op.
         let mut world = Node::new();
-        let id = world.add(Item::Via { shape: Circle::new(Point::new(0, 0), 300_000), drill: 150_000, net: Some(NetId(1)) });
+        let id = world.add(Item::Via {
+            shape: Circle::new(Point::new(0, 0), 300_000),
+            drill: 150_000,
+            net: Some(NetId(1)),
+        });
         let same_item = world.get(id).unwrap().clone();
-        assert!(world.touches_same_net(&same_item, None), "sanity check: without excluding, it must find itself");
-        assert!(!world.touches_same_net(&same_item, Some(id)), "excluding its own id must leave nothing else to match");
+        assert!(
+            world.touches_same_net(&same_item, None),
+            "sanity check: without excluding, it must find itself"
+        );
+        assert!(
+            !world.touches_same_net(&same_item, Some(id)),
+            "excluding its own id must leave nothing else to match"
+        );
     }
 }

@@ -58,10 +58,13 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use alladin_core::{Item, ItemId, LayerId, NetClass, NetId, Node};
+use alladin_core::{Item, ItemId, LayerId, NetClass, NetId, Node, ZoneConnection};
 use alladin_geom::{Circle, Point, Polygon};
 
-use crate::board_doc::{BoardDoc, CopperWeight, FootprintId, LayerCount, NetRecord, PlacedFootprint, SilkDot, SilkDotId, SilkText, SilkTextId};
+use crate::board_doc::{
+    BoardDoc, CopperWeight, FootprintId, LayerCount, NetRecord, PlacedFootprint, SilkDot,
+    SilkDotId, SilkText, SilkTextId,
+};
 use crate::footprint::{world_assembly_drills, world_courtyard, world_items, FootprintTemplate};
 use crate::parts_transfer::{template_from_snapshot, PartSnapshot};
 
@@ -141,6 +144,10 @@ struct SavedFootprint {
     position: Point,
     rotation_deg: f64,
     pad_nets: Vec<Option<u32>>,
+    /// Per-pad pour join, aligned with `pad_nets`. Empty/missing →
+    /// use the template default (boards saved before this field).
+    #[serde(default)]
+    pad_zone_connections: Vec<Option<ZoneConnection>>,
     /// The footprint-local pin-1 marker offset, if enabled -- see
     /// [`crate::board_doc::PlacedFootprint::pin1_marker`].
     /// `#[serde(default)]` (`None`): a board saved before markers
@@ -294,8 +301,14 @@ impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LoadError::Parse(e) => write!(f, "not a valid Aladin PCB file: {e}"),
-            LoadError::UnsupportedVersion(v) => write!(f, "unsupported file version {v} (this build supports {FORMAT_VERSION})"),
-            LoadError::UnknownTemplate(name) => write!(f, "unknown footprint template \"{name}\" -- was this saved by a newer version?"),
+            LoadError::UnsupportedVersion(v) => write!(
+                f,
+                "unsupported file version {v} (this build supports {FORMAT_VERSION})"
+            ),
+            LoadError::UnknownTemplate(name) => write!(
+                f,
+                "unknown footprint template \"{name}\" -- was this saved by a newer version?"
+            ),
         }
     }
 }
@@ -335,7 +348,14 @@ fn copper_weight_from_u8(value: u8) -> CopperWeight {
 /// (see [`crate::parts_transfer::snapshots_used_on_board`]); pass `&[]`
 /// only for boards that reference builtins alone.
 pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
-    let nets = doc.nets.iter().map(|n| SavedNet { id: n.id.0, name: n.name.clone() }).collect();
+    let nets = doc
+        .nets
+        .iter()
+        .map(|n| SavedNet {
+            id: n.id.0,
+            name: n.name.clone(),
+        })
+        .collect();
 
     let footprints = doc
         .footprints
@@ -349,12 +369,23 @@ pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
                     _ => None,
                 })
                 .collect();
+            let pad_zone_connections = fp
+                .pad_item_ids
+                .iter()
+                .map(|&id| match doc.node.get(id) {
+                    Some(Item::Pad {
+                        zone_connection, ..
+                    }) => Some(*zone_connection),
+                    _ => None,
+                })
+                .collect();
             SavedFootprint {
                 reference: fp.reference.clone(),
                 template_name: fp.template_name.clone(),
                 position: fp.position,
                 rotation_deg: fp.rotation_deg,
                 pad_nets,
+                pad_zone_connections,
                 pin1_marker: fp.pin1_marker,
             }
         })
@@ -364,7 +395,12 @@ pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
         .node
         .iter()
         .filter_map(|item| match item {
-            Item::Track { shape, net, layer, class } => Some(SavedTrack {
+            Item::Track {
+                shape,
+                net,
+                layer,
+                class,
+            } => Some(SavedTrack {
                 from: shape.a,
                 to: shape.b,
                 width: shape.width,
@@ -380,9 +416,12 @@ pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
         .node
         .iter()
         .filter_map(|item| match item {
-            Item::Via { shape, drill, net } => {
-                Some(SavedVia { center: shape.center, diameter: shape.radius * 2, drill: *drill, net: net.map(|NetId(n)| n) })
-            }
+            Item::Via { shape, drill, net } => Some(SavedVia {
+                center: shape.center,
+                diameter: shape.radius * 2,
+                drill: *drill,
+                net: net.map(|NetId(n)| n),
+            }),
             _ => None,
         })
         .collect();
@@ -415,14 +454,24 @@ pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
     // anything left over is a frozen, `ZoneRecord`-less import (see
     // `SavedStaticZoneIsland`'s doc comment) that would otherwise vanish
     // from this exact save with no way to get it back.
-    let tracked_zone_items: HashSet<ItemId> = doc.zones.iter().flat_map(|z| z.item_ids.iter().copied()).collect();
+    let tracked_zone_items: HashSet<ItemId> = doc
+        .zones
+        .iter()
+        .flat_map(|z| z.item_ids.iter().copied())
+        .collect();
     let static_zone_islands = doc
         .node
         .iter_with_ids()
         .filter_map(|(id, item)| match item {
-            Item::Zone { outline, layer, net } if !tracked_zone_items.contains(&id) => {
-                Some(SavedStaticZoneIsland { outline: outline.clone(), layer: (*layer).into(), net: net.map(|NetId(n)| n) })
-            }
+            Item::Zone {
+                outline,
+                layer,
+                net,
+            } if !tracked_zone_items.contains(&id) => Some(SavedStaticZoneIsland {
+                outline: outline.clone(),
+                layer: (*layer).into(),
+                net: net.map(|NetId(n)| n),
+            }),
             _ => None,
         })
         .collect();
@@ -443,7 +492,11 @@ pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
     let silk_dots = doc
         .silk_dots
         .iter()
-        .map(|d| SavedSilkDot { position: d.position, diameter: d.diameter, layer: d.layer.into() })
+        .map(|d| SavedSilkDot {
+            position: d.position,
+            diameter: d.diameter,
+            layer: d.layer.into(),
+        })
         .collect();
 
     let saved = SavedBoard {
@@ -463,7 +516,8 @@ pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
         silk_dots,
         embedded_parts: embedded_parts.to_vec(),
     };
-    serde_json::to_string_pretty(&saved).expect("SavedBoard has no types that can fail to serialize")
+    serde_json::to_string_pretty(&saved)
+        .expect("SavedBoard has no types that can fail to serialize")
 }
 
 /// Parses `json` and rebuilds a [`BoardDoc`] from it -- footprint pads
@@ -472,7 +526,10 @@ pub fn to_json(doc: &BoardDoc, embedded_parts: &[PartSnapshot]) -> String {
 /// board-embedded snapshot (exact geometry at save time), then
 /// `templates` (built-ins + local PartsDb). Returns the embedded
 /// snapshots so the caller can merge any missing ones into PartsDb.
-pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDoc, Vec<PartSnapshot>), LoadError> {
+pub fn from_json(
+    json: &str,
+    templates: &[FootprintTemplate],
+) -> Result<(BoardDoc, Vec<PartSnapshot>), LoadError> {
     let saved: SavedBoard = serde_json::from_str(json).map_err(LoadError::Parse)?;
     if saved.format_version != FORMAT_VERSION {
         return Err(LoadError::UnsupportedVersion(saved.format_version));
@@ -502,17 +559,33 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
         // same "pads only" convention `BoardDoc::insert_footprint_unchecked`
         // uses for its own `pad_nets` parameter.
         let mut pad_nets = sf.pad_nets.iter().chain(std::iter::repeat(&None));
+        let mut pad_zone_connections = sf
+            .pad_zone_connections
+            .iter()
+            .chain(std::iter::repeat(&None));
         let mut pad_item_ids = Vec::new();
         let mut hole_item_ids = Vec::new();
         for item in world_items(template, sf.position, sf.rotation_deg) {
             match item {
-                Item::Pad { shape, layer, zone_connection, .. } => {
+                Item::Pad {
+                    shape,
+                    layer,
+                    zone_connection,
+                    hole_diameter,
+                    ..
+                } => {
                     let &net = pad_nets.next().unwrap_or(&None);
+                    let zone_connection = pad_zone_connections
+                        .next()
+                        .copied()
+                        .flatten()
+                        .unwrap_or(zone_connection);
                     pad_item_ids.push(node.add(Item::Pad {
                         shape,
                         layer,
                         net: net.map(NetId),
                         zone_connection,
+                        hole_diameter,
                     }));
                 }
                 Item::Hole { .. } => {
@@ -549,10 +622,21 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
     }
 
     for sv in saved.vias {
-        node.add(Item::Via { shape: Circle::new(sv.center, sv.diameter / 2), drill: sv.drill, net: sv.net.map(NetId) });
+        node.add(Item::Via {
+            shape: Circle::new(sv.center, sv.diameter / 2),
+            drill: sv.drill,
+            net: sv.net.map(NetId),
+        });
     }
 
-    let nets = saved.nets.into_iter().map(|n| NetRecord { id: NetId(n.id), name: n.name }).collect();
+    let nets = saved
+        .nets
+        .into_iter()
+        .map(|n| NetRecord {
+            id: NetId(n.id),
+            name: n.name,
+        })
+        .collect();
 
     let mut doc = BoardDoc {
         outline: saved.outline,
@@ -584,7 +668,12 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
             .silk_dots
             .into_iter()
             .enumerate()
-            .map(|(index, sd)| SilkDot { id: SilkDotId(index), position: sd.position, diameter: sd.diameter, layer: sd.layer.into() })
+            .map(|(index, sd)| SilkDot {
+                id: SilkDotId(index),
+                position: sd.position,
+                diameter: sd.diameter,
+                layer: sd.layer.into(),
+            })
             .collect(),
         next_silk_dot_serial: 0,
     };
@@ -605,15 +694,27 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
         let net = NetId(sz.net);
         match sz.islands {
             Some(islands) => {
-                let items: Vec<Item> = islands.into_iter().map(|outline| Item::Zone { outline, layer, net: Some(net) }).collect();
+                let items: Vec<Item> = islands
+                    .into_iter()
+                    .map(|outline| Item::Zone {
+                        outline,
+                        layer,
+                        net: Some(net),
+                    })
+                    .collect();
                 let current = doc.node.obstacle_revision();
                 // Any value != current reads as stale; wrapping_sub
                 // keeps that guaranteed even at revision 0.
-                let filled_at_revision = if sz.fill_stale { current.wrapping_sub(1) } else { current };
+                let filled_at_revision = if sz.fill_stale {
+                    current.wrapping_sub(1)
+                } else {
+                    current
+                };
                 doc.insert_new_zone(sz.outline, layer, net, items, filled_at_revision);
             }
             None => {
-                doc.add_zone(sz.outline, layer, net).expect("embedded zone fill");
+                doc.add_zone(sz.outline, layer, net)
+                    .expect("embedded zone fill");
             }
         }
     }
@@ -623,7 +724,11 @@ pub fn from_json(json: &str, templates: &[FootprintTemplate]) -> Result<(BoardDo
     // Restored verbatim into `node` -- no ZoneRecord, matching the
     // frozen-island contract for static pours.
     for szi in saved.static_zone_islands {
-        doc.node.add(Item::Zone { outline: szi.outline, layer: szi.layer.into(), net: szi.net.map(NetId) });
+        doc.node.add(Item::Zone {
+            outline: szi.outline,
+            layer: szi.layer.into(),
+            net: szi.net.map(NetId),
+        });
     }
 
     Ok((doc, saved.embedded_parts))
@@ -639,7 +744,8 @@ mod tests {
     #[test]
     fn round_trips_an_empty_board() {
         let doc = NewBoardParams::default().create();
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a freshly-created board must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a freshly-created board must round-trip");
         assert_eq!(loaded.outline, doc.outline);
         assert_eq!(loaded.layer_count, doc.layer_count);
         assert!(loaded.footprints.is_empty());
@@ -650,10 +756,17 @@ mod tests {
     fn round_trips_a_placed_silk_text() {
         let mut doc = NewBoardParams::default().create();
         let id = doc
-            .try_place_silk_text("HELLO", Point::new(0, 0), 90.0, LayerId::FCu, crate::board_doc::DEFAULT_SILK_TEXT_HEIGHT)
+            .try_place_silk_text(
+                "HELLO",
+                Point::new(0, 0),
+                90.0,
+                LayerId::FCu,
+                crate::board_doc::DEFAULT_SILK_TEXT_HEIGHT,
+            )
             .expect("center of an empty 50x30mm board must be a legal silk placement");
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a board with a placed silk text must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a board with a placed silk text must round-trip");
 
         assert_eq!(loaded.silk_texts.len(), 1);
         let restored = &loaded.silk_texts[0];
@@ -670,21 +783,36 @@ mod tests {
         // `FORMAT_VERSION` bump, see `SavedSilkText`'s own doc
         // comment).
         let empty_board_json = to_json(&NewBoardParams::default().create(), &[]);
-        assert!(!empty_board_json.contains("silk_texts") || from_json(&empty_board_json, &builtin_templates()).unwrap().0.silk_texts.is_empty());
+        assert!(
+            !empty_board_json.contains("silk_texts")
+                || from_json(&empty_board_json, &builtin_templates())
+                    .unwrap()
+                    .0
+                    .silk_texts
+                    .is_empty()
+        );
     }
 
     #[test]
     fn round_trips_a_placed_silk_dot_and_a_pin1_marker() {
         let mut doc = NewBoardParams::default().create();
         let dot_id = doc
-            .try_place_silk_dot(Point::new(5 * MM, 5 * MM), crate::board_doc::DEFAULT_SILK_DOT_DIAMETER, LayerId::BCu)
+            .try_place_silk_dot(
+                Point::new(5 * MM, 5 * MM),
+                crate::board_doc::DEFAULT_SILK_DOT_DIAMETER,
+                LayerId::BCu,
+            )
             .expect("open space on an empty board must be a legal dot placement");
         let template = &builtin_templates()[0];
-        let fp_id = doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        doc.try_enable_pin1_marker(fp_id, template).expect("an empty board has room for a pin-1 dot");
+        let fp_id = doc
+            .try_place_footprint(template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        doc.try_enable_pin1_marker(fp_id, template)
+            .expect("an empty board has room for a pin-1 dot");
         let marker_before = doc.footprints[0].pin1_marker_circle().unwrap();
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("dots and markers must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("dots and markers must round-trip");
 
         assert_eq!(loaded.silk_dots.len(), 1);
         let restored = &loaded.silk_dots[0];
@@ -694,27 +822,43 @@ mod tests {
         assert_eq!(restored.layer, LayerId::BCu);
         // The pin-1 marker survives as the same *world* circle -- the
         // local offset plus the footprint's own restored position.
-        assert_eq!(loaded.footprints[0].pin1_marker_circle().unwrap(), marker_before);
+        assert_eq!(
+            loaded.footprints[0].pin1_marker_circle().unwrap(),
+            marker_before
+        );
 
         // A file saved before dots existed must still load (backward
         // compatibility -- `#[serde(default)]`, no version bump, see
         // `SavedSilkDot`'s own doc comment).
         let empty_board_json = to_json(&NewBoardParams::default().create(), &[]);
-        assert!(from_json(&empty_board_json, &builtin_templates()).unwrap().0.silk_dots.is_empty());
+        assert!(from_json(&empty_board_json, &builtin_templates())
+            .unwrap()
+            .0
+            .silk_dots
+            .is_empty());
     }
 
     #[test]
     fn round_trips_footprints_with_their_nets_and_a_routed_track() {
         let mut doc = NewBoardParams::default().create();
         let template = &builtin_templates()[0];
-        doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        doc.try_place_footprint(template, Point::new(10 * MM, 0), 0.0).unwrap();
+        doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        doc.try_place_footprint(template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let pad_a = doc.footprints[0].pad_item_ids[0];
         let pad_b = doc.footprints[1].pad_item_ids[0];
         let net = doc.connect_pads(pad_a, pad_b).unwrap();
-        doc.add_track_path(&[Point::new(-10 * MM, 0), Point::new(10 * MM, 0)], net, LayerId::FCu, 250_000, NetClass::C);
+        doc.add_track_path(
+            &[Point::new(-10 * MM, 0), Point::new(10 * MM, 0)],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a board with parts/nets/tracks must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a board with parts/nets/tracks must round-trip");
 
         assert_eq!(loaded.footprints.len(), 2);
         assert_eq!(loaded.nets.len(), 1);
@@ -723,29 +867,82 @@ mod tests {
         assert_eq!(loaded.node.get(loaded_pad_a).unwrap().net(), Some(net));
         assert_eq!(loaded.node.get(loaded_pad_b).unwrap().net(), Some(net));
         assert!(
-            loaded.node.iter().any(|item| matches!(item, Item::Track { net: Some(n), .. } if *n == net)),
+            loaded
+                .node
+                .iter()
+                .any(|item| matches!(item, Item::Track { net: Some(n), .. } if *n == net)),
             "the routed track must survive the round trip"
         );
+    }
+
+    #[test]
+    fn round_trips_a_wire_pad_pth_and_an_overridden_pour_connection() {
+        let mut doc = NewBoardParams::default().create();
+        let templates = builtin_templates();
+        let wire = templates
+            .iter()
+            .find(|t| t.name == "Wire pad (solder, 2mm)")
+            .unwrap();
+        let id = doc
+            .try_place_footprint(wire, Point::new(0, 0), 0.0)
+            .unwrap();
+        doc.set_footprint_zone_connection(id, ZoneConnection::Solid)
+            .unwrap();
+
+        let (loaded, _) =
+            from_json(&to_json(&doc, &[]), &templates).expect("wire pad board must round-trip");
+        let pad_id = loaded.footprints[0].pad_item_ids[0];
+        match loaded.node.get(pad_id) {
+            Some(Item::Pad {
+                zone_connection,
+                hole_diameter,
+                ..
+            }) => {
+                assert_eq!(
+                    *zone_connection,
+                    ZoneConnection::Solid,
+                    "Pour: Solid must survive save/load"
+                );
+                assert_eq!(*hole_diameter, Some(1_500_000));
+                assert_eq!(
+                    loaded.node.get(pad_id).unwrap().layers(),
+                    (LayerId::FCu, Some(LayerId::BCu))
+                );
+            }
+            other => panic!("expected a pad, got {other:?}"),
+        }
     }
 
     #[test]
     fn round_trips_a_manually_placed_via() {
         let mut doc = NewBoardParams::default().create();
         let template = &builtin_templates()[0];
-        doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        doc.try_place_footprint(template, Point::new(10 * MM, 0), 0.0).unwrap();
+        doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        doc.try_place_footprint(template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let pad_a = doc.footprints[0].pad_item_ids[0];
         let pad_b = doc.footprints[1].pad_item_ids[0];
         let net = doc.connect_pads(pad_a, pad_b).unwrap();
         let via_center = Point::new(0, 5 * MM);
-        doc.try_add_via(via_center, net, 600_000, 300_000).expect("open space must accept a via");
+        doc.try_add_via(via_center, net, 600_000, 300_000)
+            .expect("open space must accept a via");
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a board with a via must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a board with a via must round-trip");
 
-        let vias: Vec<&Item> = loaded.node.iter().filter(|item| matches!(item, Item::Via { .. })).collect();
+        let vias: Vec<&Item> = loaded
+            .node
+            .iter()
+            .filter(|item| matches!(item, Item::Via { .. }))
+            .collect();
         assert_eq!(vias.len(), 1, "exactly the one saved via must come back");
         match vias[0] {
-            Item::Via { shape, drill, net: via_net } => {
+            Item::Via {
+                shape,
+                drill,
+                net: via_net,
+            } => {
                 assert_eq!(shape.center, via_center);
                 assert_eq!(shape.radius, 300_000);
                 assert_eq!(*drill, 300_000);
@@ -778,9 +975,13 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(!islands_before.is_empty(), "a zone drawn over open board space must fill to at least one island");
+        assert!(
+            !islands_before.is_empty(),
+            "a zone drawn over open board space must fill to at least one island"
+        );
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a board with a zone must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a board with a zone must round-trip");
 
         assert_eq!(loaded.zones.len(), 1);
         assert_eq!(loaded.zones[0].outline, outline);
@@ -794,8 +995,14 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(islands_after, islands_before, "the saved fill islands must come back exactly, with no re-fill on load");
-        assert!(!loaded.zones_are_stale(), "a fill that was fresh at save time must still read as fresh after loading");
+        assert_eq!(
+            islands_after, islands_before,
+            "the saved fill islands must come back exactly, with no re-fill on load"
+        );
+        assert!(
+            !loaded.zones_are_stale(),
+            "a fill that was fresh at save time must still read as fresh after loading"
+        );
     }
 
     #[test]
@@ -816,13 +1023,19 @@ mod tests {
         let json = to_json(&doc, &[]);
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let zone = value["zones"][0].as_object_mut().unwrap();
-        zone.remove("islands").expect("islands must actually be present to prove its removal below matters");
-        zone.remove("fill_stale").expect("fill_stale must actually be present to prove its removal below matters");
+        zone.remove("islands")
+            .expect("islands must actually be present to prove its removal below matters");
+        zone.remove("fill_stale")
+            .expect("fill_stale must actually be present to prove its removal below matters");
         let legacy = serde_json::to_string(&value).unwrap();
 
-        let (loaded, _) = from_json(&legacy, &builtin_templates()).expect("a legacy outline-only zone save must still load");
+        let (loaded, _) = from_json(&legacy, &builtin_templates())
+            .expect("a legacy outline-only zone save must still load");
         assert_eq!(loaded.zones.len(), 1);
-        assert!(!loaded.zones[0].item_ids.is_empty(), "the legacy path must have re-filled the zone from its outline");
+        assert!(
+            !loaded.zones[0].item_ids.is_empty(),
+            "the legacy path must have re-filled the zone from its outline"
+        );
     }
 
     #[test]
@@ -838,10 +1051,20 @@ mod tests {
         doc.add_zone(outline, LayerId::FCu, net).unwrap();
         // Routing a track after the fill bumps `obstacle_revision`, so
         // the zone's copper no longer matches the board it sits on.
-        doc.add_track_path(&[Point::new(-10 * MM, 0), Point::new(10 * MM, 0)], net, LayerId::BCu, 250_000, NetClass::C);
-        assert!(doc.zones_are_stale(), "the un-refilled zone must read as stale before saving for this test to mean anything");
+        doc.add_track_path(
+            &[Point::new(-10 * MM, 0), Point::new(10 * MM, 0)],
+            net,
+            LayerId::BCu,
+            250_000,
+            NetClass::C,
+        );
+        assert!(
+            doc.zones_are_stale(),
+            "the un-refilled zone must read as stale before saving for this test to mean anything"
+        );
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a board with a stale zone must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a board with a stale zone must round-trip");
         assert!(loaded.zones_are_stale(), "staleness must survive the round-trip rather than the reload laundering the fill into looking current");
     }
 
@@ -856,16 +1079,39 @@ mod tests {
             Point::new(20 * MM, 10 * MM),
             Point::new(-20 * MM, 10 * MM),
         ]);
-        doc.node.add(Item::Zone { outline: outline.clone(), layer: LayerId::BCu, net: Some(net) });
-        assert!(doc.zones.is_empty(), "no ZoneRecord must exist -- this is the untracked-import shape, not a user-drawn zone");
+        doc.node.add(Item::Zone {
+            outline: outline.clone(),
+            layer: LayerId::BCu,
+            net: Some(net),
+        });
+        assert!(
+            doc.zones.is_empty(),
+            "no ZoneRecord must exist -- this is the untracked-import shape, not a user-drawn zone"
+        );
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a board with a static zone island must round-trip");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a board with a static zone island must round-trip");
 
-        assert!(loaded.zones.is_empty(), "still no ZoneRecord -- a static island must never grow one on load");
-        let islands: Vec<_> = loaded.node.iter().filter(|item| matches!(item, Item::Zone { .. })).collect();
-        assert_eq!(islands.len(), 1, "the static island itself must survive the round-trip");
+        assert!(
+            loaded.zones.is_empty(),
+            "still no ZoneRecord -- a static island must never grow one on load"
+        );
+        let islands: Vec<_> = loaded
+            .node
+            .iter()
+            .filter(|item| matches!(item, Item::Zone { .. }))
+            .collect();
+        assert_eq!(
+            islands.len(),
+            1,
+            "the static island itself must survive the round-trip"
+        );
         match islands[0] {
-            Item::Zone { outline: loaded_outline, layer, net: loaded_net } => {
+            Item::Zone {
+                outline: loaded_outline,
+                layer,
+                net: loaded_net,
+            } => {
                 assert_eq!(*loaded_outline, outline, "the exact saved polygon must come back unchanged -- there is no outline to refill from");
                 assert_eq!(*layer, LayerId::BCu);
                 assert_eq!(*loaded_net, Some(net));
@@ -875,26 +1121,80 @@ mod tests {
     }
 
     #[test]
-    fn a_static_zone_island_coexists_with_a_tracked_zonerecord_without_either_duplicating_or_swallowing_the_other() {
+    fn a_static_zone_island_coexists_with_a_tracked_zonerecord_without_either_duplicating_or_swallowing_the_other(
+    ) {
         let mut doc = NewBoardParams::default().create();
         let net = doc.create_net();
-        let drawn_outline = Polygon::new(vec![Point::new(-5 * MM, -5 * MM), Point::new(5 * MM, -5 * MM), Point::new(5 * MM, 5 * MM), Point::new(-5 * MM, 5 * MM)]);
+        let drawn_outline = Polygon::new(vec![
+            Point::new(-5 * MM, -5 * MM),
+            Point::new(5 * MM, -5 * MM),
+            Point::new(5 * MM, 5 * MM),
+            Point::new(-5 * MM, 5 * MM),
+        ]);
         doc.add_zone(drawn_outline, LayerId::FCu, net).unwrap();
-        let static_outline = Polygon::new(vec![Point::new(-20 * MM, -10 * MM), Point::new(20 * MM, -10 * MM), Point::new(20 * MM, 10 * MM), Point::new(-20 * MM, 10 * MM)]);
-        doc.node.add(Item::Zone { outline: static_outline, layer: LayerId::BCu, net: Some(net) });
+        let static_outline = Polygon::new(vec![
+            Point::new(-20 * MM, -10 * MM),
+            Point::new(20 * MM, -10 * MM),
+            Point::new(20 * MM, 10 * MM),
+            Point::new(-20 * MM, 10 * MM),
+        ]);
+        doc.node.add(Item::Zone {
+            outline: static_outline,
+            layer: LayerId::BCu,
+            net: Some(net),
+        });
 
         let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).unwrap();
-        assert_eq!(loaded.zones.len(), 1, "exactly the one drawn ZoneRecord, not duplicated by the static island");
-        let front_islands = loaded.node.iter().filter(|item| matches!(item, Item::Zone { layer: LayerId::FCu, .. })).count();
-        let back_islands = loaded.node.iter().filter(|item| matches!(item, Item::Zone { layer: LayerId::BCu, .. })).count();
-        assert!(front_islands >= 1, "the drawn F.Cu zone must still have refilled at least one island");
-        assert_eq!(back_islands, 1, "the static B.Cu island must survive alongside it, exactly once");
+        assert_eq!(
+            loaded.zones.len(),
+            1,
+            "exactly the one drawn ZoneRecord, not duplicated by the static island"
+        );
+        let front_islands = loaded
+            .node
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Item::Zone {
+                        layer: LayerId::FCu,
+                        ..
+                    }
+                )
+            })
+            .count();
+        let back_islands = loaded
+            .node
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Item::Zone {
+                        layer: LayerId::BCu,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert!(
+            front_islands >= 1,
+            "the drawn F.Cu zone must still have refilled at least one island"
+        );
+        assert_eq!(
+            back_islands, 1,
+            "the static B.Cu island must survive alongside it, exactly once"
+        );
     }
 
     #[test]
     fn round_trips_a_2oz_boards_copper_weight() {
-        let doc = NewBoardParams { copper_weight: crate::board_doc::CopperWeight::TwoOz, ..NewBoardParams::default() }.create();
-        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).expect("a 2oz board must round-trip");
+        let doc = NewBoardParams {
+            copper_weight: crate::board_doc::CopperWeight::TwoOz,
+            ..NewBoardParams::default()
+        }
+        .create();
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates())
+            .expect("a 2oz board must round-trip");
         assert_eq!(loaded.copper_weight, crate::board_doc::CopperWeight::TwoOz);
     }
 
@@ -908,10 +1208,15 @@ mod tests {
         let doc = NewBoardParams::default().create();
         let json = to_json(&doc, &[]);
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        value.as_object_mut().unwrap().remove("copper_weight").expect("copper_weight must actually be present to prove its removal below matters");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("copper_weight")
+            .expect("copper_weight must actually be present to prove its removal below matters");
         let without_copper_weight = serde_json::to_string(&value).unwrap();
 
-        let (loaded, _) = from_json(&without_copper_weight, &builtin_templates()).expect("a save missing copper_weight must still load");
+        let (loaded, _) = from_json(&without_copper_weight, &builtin_templates())
+            .expect("a save missing copper_weight must still load");
         assert_eq!(loaded.copper_weight, crate::board_doc::CopperWeight::OneOz);
     }
 
@@ -919,9 +1224,12 @@ mod tests {
     fn preserves_the_counters_so_new_references_and_nets_never_collide_after_a_reload() {
         let mut doc = NewBoardParams::default().create();
         let template = &builtin_templates()[0];
-        let id = doc.try_place_footprint(template, Point::new(0, 0), 0.0).unwrap();
+        let id = doc
+            .try_place_footprint(template, Point::new(0, 0), 0.0)
+            .unwrap();
         doc.remove_footprint(id); // burns a reference number without leaving a footprint behind
-        doc.try_place_footprint(template, Point::new(20 * MM, 0), 0.0).unwrap();
+        doc.try_place_footprint(template, Point::new(20 * MM, 0), 0.0)
+            .unwrap();
 
         let (loaded, _) = from_json(&to_json(&doc, &[]), &builtin_templates()).unwrap();
         assert_eq!(loaded.next_footprint_serial, doc.next_footprint_serial);
@@ -931,16 +1239,25 @@ mod tests {
     #[test]
     fn rejects_a_file_from_an_unsupported_future_format_version() {
         let doc = NewBoardParams::default().create();
-        let json = to_json(&doc, &[]).replace(&format!("\"format_version\": {FORMAT_VERSION}"), "\"format_version\": 99");
+        let json = to_json(&doc, &[]).replace(
+            &format!("\"format_version\": {FORMAT_VERSION}"),
+            "\"format_version\": 99",
+        );
         match from_json(&json, &builtin_templates()).map_err(|e| e.to_string()) {
             Err(message) if message.contains("99") => {}
-            other => panic!("expected an UnsupportedVersion(99) error, got {}", other.is_ok()),
+            other => panic!(
+                "expected an UnsupportedVersion(99) error, got {}",
+                other.is_ok()
+            ),
         }
     }
 
     #[test]
     fn rejects_garbage_input_as_a_parse_error_not_a_panic() {
-        assert!(matches!(from_json("not json", &builtin_templates()), Err(LoadError::Parse(_))));
+        assert!(matches!(
+            from_json("not json", &builtin_templates()),
+            Err(LoadError::Parse(_))
+        ));
     }
 
     #[test]
@@ -948,31 +1265,55 @@ mod tests {
         // A board that placed a database-backed part must still load, as
         // long as the caller passes that part's template in -- it must
         // not be hardwired to `builtin_templates()` internally.
-        let custom = crate::footprint::straight_row_template("My Part".to_string(), "X".to_string(), 2, 2.0, 0.5);
+        let custom = crate::footprint::straight_row_template(
+            "My Part".to_string(),
+            "X".to_string(),
+            2,
+            2.0,
+            0.5,
+        );
         let mut doc = NewBoardParams::default().create();
-        doc.try_place_footprint(&custom, Point::new(0, 0), 0.0).unwrap();
+        doc.try_place_footprint(&custom, Point::new(0, 0), 0.0)
+            .unwrap();
 
         match from_json(&to_json(&doc, &[]), &builtin_templates()) {
             Err(LoadError::UnknownTemplate(name)) => assert_eq!(name, "My Part"),
-            other => panic!("expected UnknownTemplate(\"My Part\"), got is_ok={}", other.is_ok()),
+            other => panic!(
+                "expected UnknownTemplate(\"My Part\"), got is_ok={}",
+                other.is_ok()
+            ),
         }
 
-        let (loaded, _) = from_json(&to_json(&doc, &[]), std::slice::from_ref(&custom)).expect("passing the custom template in must resolve it");
+        let (loaded, _) = from_json(&to_json(&doc, &[]), std::slice::from_ref(&custom))
+            .expect("passing the custom template in must resolve it");
         assert_eq!(loaded.footprints.len(), 1);
     }
 
     #[test]
     fn loads_from_embedded_parts_without_session_template() {
         use crate::parts_transfer::snapshot_from_template;
-        let custom = crate::footprint::straight_row_template("EmbedMe".to_string(), "X".to_string(), 2, 2.0, 0.5);
+        let custom = crate::footprint::straight_row_template(
+            "EmbedMe".to_string(),
+            "X".to_string(),
+            2,
+            2.0,
+            0.5,
+        );
         let mut doc = NewBoardParams::default().create();
-        doc.try_place_footprint(&custom, Point::new(0, 0), 0.0).unwrap();
-        let snap = snapshot_from_template(&custom, Some("C999".into()), "test part".into(), Some("ICs".into()));
+        doc.try_place_footprint(&custom, Point::new(0, 0), 0.0)
+            .unwrap();
+        let snap = snapshot_from_template(
+            &custom,
+            Some("C999".into()),
+            "test part".into(),
+            Some("ICs".into()),
+        );
         let json = to_json(&doc, &[snap]);
         assert!(json.contains("embedded_parts"));
         assert!(json.contains("EmbedMe"));
         // Builtins only — must still load via embed.
-        let (loaded, embedded) = from_json(&json, &builtin_templates()).expect("embed must supply the template");
+        let (loaded, embedded) =
+            from_json(&json, &builtin_templates()).expect("embed must supply the template");
         assert_eq!(loaded.footprints.len(), 1);
         assert_eq!(embedded.len(), 1);
         assert_eq!(embedded[0].lcsc_code.as_deref(), Some("C999"));

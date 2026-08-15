@@ -215,9 +215,17 @@ bekannten Pin-Funktionen z. B. `U10.3 (VDD)`.
 ### 6.1 Eingebaute Bauteile
 
 Unter „Place part" stehen immer bereit: „2-pin THT (2.54mm pitch)",
-„4-pin THT header (2.54mm pitch)", „SOIC-8 (1.27mm pitch)", „Wire pad
-(solder, 2mm)", „Mounting hole (M2, NPTH)", „Mounting hole (M2.5,
-NPTH)", „Mounting hole (M3, NPTH)".
+„4-pin THT header (2.54mm pitch)", „SOIC-8 (1.27mm pitch)",
+„Solder pad (SMD, 1.5mm, F.Cu)", „Solder pad (SMD, 1.5mm, B.Cu)",
+„Wire pad (PTH, 1.0mm hole)", „Wire pad (solder, 2mm)" (1,5 mm Loch),
+„Wire pad (PTH, 2.0mm hole)" (Solid, für höhere Ströme),
+„Mounting hole (M2, NPTH)", „Mounting hole (M2.5, NPTH)",
+„Mounting hole (M3, NPTH)".
+
+PTH-Lötpads sitzen auf **beiden** Kupferlagen. Am ausgewählten Bauteil
+stellt **„Pour: Thermal / Solid"** ein, ob eine Plane mit Speichen oder
+vollflächig anbindet (gilt für F.Cu und B.Cu). „Add part…" kann optional
+eine Bohrung setzen.
 
 Jedes Montageloch erzwingt automatisch einen **Schraubenkopf-Freiraum**:
 Kupfer (Bahnen, Vias, Pads, Zonen-Füllungen) bleibt aus einem Kreis vom

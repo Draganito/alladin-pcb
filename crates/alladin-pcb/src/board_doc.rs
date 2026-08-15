@@ -4,18 +4,21 @@
 //! manual routing.
 
 use alladin_core::{
-    thermal, DfmViolation, Item, ItemId, Jlcpcb2Layer2Oz, JlcpcbClearance, JlcpcbDfm, LayerId, NetClass, NetId, Node,
-    PadShape, RuleResolver, ZoneConnection,
+    thermal, DfmViolation, Item, ItemId, Jlcpcb2Layer2Oz, JlcpcbClearance, JlcpcbDfm, LayerId,
+    NetClass, NetId, Node, PadShape, RuleResolver, ZoneConnection,
 };
 use alladin_geom::{
-    circle_polygon_collides, circle_segment_collides, circle_within_outline, dist_segment_to_segment, polygon_polygon_collides,
-    polygon_within_outline_with_clearance, segment_polygon_collides, segment_within_outline_with_clearance, Aabb, Circle, Point, Polygon,
+    circle_polygon_collides, circle_segment_collides, circle_within_outline,
+    dist_segment_to_segment, polygon_polygon_collides, polygon_within_outline_with_clearance,
+    segment_polygon_collides, segment_within_outline_with_clearance, Aabb, Circle, Point, Polygon,
     Segment, Unit, MM,
 };
 
 use crate::footprint::{world_assembly_drills, world_courtyard, world_items, FootprintTemplate};
 use crate::routing::path_keeps_edge_clearance;
-use crate::thermal_relief::{first_illegal_thermal_anywhere, free_spoke_directions, self_exclude, MIN_FREE_SPOKE_DIRS};
+use crate::thermal_relief::{
+    first_illegal_thermal_anywhere, free_spoke_directions, self_exclude, MIN_FREE_SPOKE_DIRS,
+};
 use crate::zone_fill;
 
 /// Board layer count `alladin-pcb`'s "New board" dialog offers. Only 1/2
@@ -106,7 +109,9 @@ impl std::str::FromStr for CopperWeight {
         match s {
             "1" => Ok(CopperWeight::OneOz),
             "2" => Ok(CopperWeight::TwoOz),
-            other => Err(format!("invalid copper weight \"{other}\" -- must be 1 or 2 (oz)")),
+            other => Err(format!(
+                "invalid copper weight \"{other}\" -- must be 1 or 2 (oz)"
+            )),
         }
     }
 }
@@ -135,7 +140,13 @@ pub struct NewBoardParams {
 
 impl Default for NewBoardParams {
     fn default() -> Self {
-        Self { width_mm: 50.0, height_mm: 30.0, layer_count: LayerCount::Two, copper_weight: CopperWeight::OneOz, corner_radius_mm: 1.0 }
+        Self {
+            width_mm: 50.0,
+            height_mm: 30.0,
+            layer_count: LayerCount::Two,
+            copper_weight: CopperWeight::OneOz,
+            corner_radius_mm: 1.0,
+        }
     }
 }
 
@@ -170,7 +181,11 @@ impl NewBoardParams {
         Self::board_from_outline(outline, self.layer_count, self.copper_weight)
     }
 
-    fn board_from_outline(outline: Polygon, layer_count: LayerCount, copper_weight: CopperWeight) -> BoardDoc {
+    fn board_from_outline(
+        outline: Polygon,
+        layer_count: LayerCount,
+        copper_weight: CopperWeight,
+    ) -> BoardDoc {
         BoardDoc {
             outline: vec![outline],
             layer_count,
@@ -267,7 +282,12 @@ impl PlacedFootprint {
     /// the one shape its rendering, DFM collision, and export all
     /// share, mirroring [`SilkDot::circle`]'s role for free dots.
     pub fn pin1_marker_circle(&self) -> Option<Circle> {
-        self.pin1_marker.map(|offset| Circle::new(offset.rotated(self.rotation_deg).add(self.position), PIN1_MARKER_DIAMETER / 2))
+        self.pin1_marker.map(|offset| {
+            Circle::new(
+                offset.rotated(self.rotation_deg).add(self.position),
+                PIN1_MARKER_DIAMETER / 2,
+            )
+        })
     }
 }
 
@@ -327,7 +347,6 @@ pub struct SilkText {
     pub line_width: Unit,
 }
 
-
 /// [`SilkText::height`]/[`SilkText::line_width`] for every new text a
 /// caller doesn't pick sizes for itself -- height is a plain,
 /// readable-on-a-real-board default (matching common hand-soldering-
@@ -361,11 +380,23 @@ impl SilkText {
     /// [`Self::position`] by [`Self::rotation_deg`] the same way every
     /// other rotated shape in this crate is (see [`Point::rotated`]).
     pub fn stroke_segments(&self) -> Vec<Segment> {
-        let to_world = |(x, y): (f64, f64)| Point::new(x.round() as Unit, y.round() as Unit).rotated(self.rotation_deg).add(self.position);
+        let to_world = |(x, y): (f64, f64)| {
+            Point::new(x.round() as Unit, y.round() as Unit)
+                .rotated(self.rotation_deg)
+                .add(self.position)
+        };
         let mut segments = Vec::new();
-        for polyline in crate::stroke_font::layout_polylines(&self.text, self.height as f64, self.line_width as f64) {
+        for polyline in crate::stroke_font::layout_polylines(
+            &self.text,
+            self.height as f64,
+            self.line_width as f64,
+        ) {
             for pair in polyline.windows(2) {
-                segments.push(Segment::new(to_world(pair[0]), to_world(pair[1]), self.line_width));
+                segments.push(Segment::new(
+                    to_world(pair[0]),
+                    to_world(pair[1]),
+                    self.line_width,
+                ));
             }
         }
         segments
@@ -384,7 +415,11 @@ impl SilkText {
     /// whitespace-only string -- see `stroke_font::layout_bounds`'s
     /// own fallback.
     pub fn bounding_rect(&self) -> Polygon {
-        let (min_x, min_y, max_x, max_y) = crate::stroke_font::layout_bounds(&self.text, self.height as f64, self.line_width as f64);
+        let (min_x, min_y, max_x, max_y) = crate::stroke_font::layout_bounds(
+            &self.text,
+            self.height as f64,
+            self.line_width as f64,
+        );
         let corners = [
             (min_x, min_y),
             (max_x, min_y),
@@ -394,7 +429,11 @@ impl SilkText {
         Polygon::new(
             corners
                 .iter()
-                .map(|&(x, y)| Point::new(x.round() as Unit, y.round() as Unit).rotated(self.rotation_deg).add(self.position))
+                .map(|&(x, y)| {
+                    Point::new(x.round() as Unit, y.round() as Unit)
+                        .rotated(self.rotation_deg)
+                        .add(self.position)
+                })
                 .collect(),
         )
     }
@@ -408,7 +447,10 @@ impl SilkText {
 /// so the two can never drift apart numerically.
 fn stroke_hits_pad(seg: &Segment, shape: &PadShape, margin: Unit) -> bool {
     match shape {
-        PadShape::Circle(c) => dist_segment_to_segment((seg.a, seg.b), (c.center, c.center)) < (c.radius + seg.width / 2 + margin) as f64,
+        PadShape::Circle(c) => {
+            dist_segment_to_segment((seg.a, seg.b), (c.center, c.center))
+                < (c.radius + seg.width / 2 + margin) as f64
+        }
         PadShape::Polygon { outline, .. } => segment_polygon_collides(seg, outline, margin),
     }
 }
@@ -425,16 +467,20 @@ fn pad_shape_hits_circle(shape: &PadShape, circle: &Circle, clearance: Unit) -> 
 }
 
 fn circles_touch(a: &Circle, b: &Circle, clearance: Unit) -> bool {
-    ((a.center.x - b.center.x) as f64).hypot((a.center.y - b.center.y) as f64) < (a.radius + b.radius + clearance) as f64
+    ((a.center.x - b.center.x) as f64).hypot((a.center.y - b.center.y) as f64)
+        < (a.radius + b.radius + clearance) as f64
 }
 
 fn pad_shapes_closer_than(a: &PadShape, b: &PadShape, clearance: Unit) -> bool {
     match (a, b) {
         (PadShape::Circle(c1), PadShape::Circle(c2)) => circles_touch(c1, c2, clearance),
-        (PadShape::Circle(c), PadShape::Polygon { outline, .. }) | (PadShape::Polygon { outline, .. }, PadShape::Circle(c)) => {
+        (PadShape::Circle(c), PadShape::Polygon { outline, .. })
+        | (PadShape::Polygon { outline, .. }, PadShape::Circle(c)) => {
             circle_polygon_collides(c, outline, clearance)
         }
-        (PadShape::Polygon { outline: o1, .. }, PadShape::Polygon { outline: o2, .. }) => polygon_polygon_collides(o1, o2, clearance),
+        (PadShape::Polygon { outline: o1, .. }, PadShape::Polygon { outline: o2, .. }) => {
+            polygon_polygon_collides(o1, o2, clearance)
+        }
     }
 }
 
@@ -455,7 +501,8 @@ fn thermal_keepout_mm(conn: ZoneConnection) -> Unit {
 fn pad_template_reach(pad: &crate::footprint::PadTemplate) -> Unit {
     match pad.shape {
         crate::footprint::PadShapeKind::Circle => pad.radius,
-        crate::footprint::PadShapeKind::Rect { width, height } | crate::footprint::PadShapeKind::Oval { width, height } => {
+        crate::footprint::PadShapeKind::Rect { width, height }
+        | crate::footprint::PadShapeKind::Oval { width, height } => {
             (((width as f64).powi(2) + (height as f64).powi(2)).sqrt() / 2.0).round() as Unit
         }
     }
@@ -514,11 +561,21 @@ impl std::fmt::Display for SilkTextError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SilkTextError::EmptyText => write!(f, "silk text can't be empty"),
-            SilkTextError::TooCloseToPad => write!(f, "too close to a pad on this side -- would print silk over copper"),
-            SilkTextError::OverlapsAnotherText => write!(f, "overlaps another silk text on this side"),
-            SilkTextError::OffBoard => write!(f, "would leave the board, or hug its edge too closely"),
+            SilkTextError::TooCloseToPad => write!(
+                f,
+                "too close to a pad on this side -- would print silk over copper"
+            ),
+            SilkTextError::OverlapsAnotherText => {
+                write!(f, "overlaps another silk text on this side")
+            }
+            SilkTextError::OffBoard => {
+                write!(f, "would leave the board, or hug its edge too closely")
+            }
             SilkTextError::NotFound => write!(f, "no such silk text"),
-            SilkTextError::UnderComponentBody => write!(f, "would print the text underneath a component's body, where it can never be read"),
+            SilkTextError::UnderComponentBody => write!(
+                f,
+                "would print the text underneath a component's body, where it can never be read"
+            ),
             SilkTextError::OverlapsDot => write!(f, "overlaps a silkscreen dot on this side"),
         }
     }
@@ -600,13 +657,30 @@ pub enum SilkDotError {
 impl std::fmt::Display for SilkDotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SilkDotError::TooCloseToPad => write!(f, "too close to a pad on this side -- would print silk over copper"),
-            SilkDotError::OverlapsSilk => write!(f, "overlaps other silkscreen (a text, dot, or pin-1 marker) on this side"),
-            SilkDotError::OffBoard => write!(f, "would leave the board, or hug its edge too closely"),
-            SilkDotError::UnderComponentBody => write!(f, "would print the dot underneath a component's body, where it can never be seen"),
+            SilkDotError::TooCloseToPad => write!(
+                f,
+                "too close to a pad on this side -- would print silk over copper"
+            ),
+            SilkDotError::OverlapsSilk => write!(
+                f,
+                "overlaps other silkscreen (a text, dot, or pin-1 marker) on this side"
+            ),
+            SilkDotError::OffBoard => {
+                write!(f, "would leave the board, or hug its edge too closely")
+            }
+            SilkDotError::UnderComponentBody => write!(
+                f,
+                "would print the dot underneath a component's body, where it can never be seen"
+            ),
             SilkDotError::NotFound => write!(f, "no such silk dot"),
-            SilkDotError::NoRoomNearPin1 => write!(f, "no legal spot for a pin-1 dot anywhere around this part's pad 1"),
-            SilkDotError::OverCopper => write!(f, "would print over a track or via -- silk must stay on empty board"),
+            SilkDotError::NoRoomNearPin1 => write!(
+                f,
+                "no legal spot for a pin-1 dot anywhere around this part's pad 1"
+            ),
+            SilkDotError::OverCopper => write!(
+                f,
+                "would print over a track or via -- silk must stay on empty board"
+            ),
         }
     }
 }
@@ -915,7 +989,9 @@ impl std::fmt::Display for PinStitchingViaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PinStitchingViaError::NotAPad => write!(f, "not a pad"),
-            PinStitchingViaError::NoNet => write!(f, "this pin isn't on a net yet -- connect it first"),
+            PinStitchingViaError::NoNet => {
+                write!(f, "this pin isn't on a net yet -- connect it first")
+            }
             PinStitchingViaError::Via(e) => write!(f, "{e}"),
             PinStitchingViaError::NoRoomForStub => {
                 write!(f, "a via would fit there, but not the short track needed to connect it back to the pin -- move the part and try again")
@@ -949,9 +1025,15 @@ pub enum SetOutlineError {
 impl std::fmt::Display for SetOutlineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SetOutlineError::FootprintOffBoard(id) => write!(f, "footprint {id:?} would fall outside the new outline"),
-            SetOutlineError::TrackOffBoard => write!(f, "an existing track would fall outside the new outline"),
-            SetOutlineError::ViaOffBoard => write!(f, "an existing via would fall outside the new outline"),
+            SetOutlineError::FootprintOffBoard(id) => {
+                write!(f, "footprint {id:?} would fall outside the new outline")
+            }
+            SetOutlineError::TrackOffBoard => {
+                write!(f, "an existing track would fall outside the new outline")
+            }
+            SetOutlineError::ViaOffBoard => {
+                write!(f, "an existing via would fall outside the new outline")
+            }
         }
     }
 }
@@ -994,7 +1076,9 @@ pub enum BatchPlaceError {
     Placement(PlacementError),
     Net(NetError),
     Rename(RenameNetError),
-    UnknownPin { pin: String },
+    UnknownPin {
+        pin: String,
+    },
     EmptyNetName,
     /// Internal consistency failure (placed id missing from `footprints`).
     Internal,
@@ -1006,7 +1090,9 @@ impl std::fmt::Display for BatchPlaceError {
             BatchPlaceError::Placement(e) => write!(f, "{e}"),
             BatchPlaceError::Net(e) => write!(f, "{e}"),
             BatchPlaceError::Rename(e) => write!(f, "{e}"),
-            BatchPlaceError::UnknownPin { pin } => write!(f, "template has no pin numbered \"{pin}\""),
+            BatchPlaceError::UnknownPin { pin } => {
+                write!(f, "template has no pin numbered \"{pin}\"")
+            }
             BatchPlaceError::EmptyNetName => write!(f, "pin net name must not be empty"),
             BatchPlaceError::Internal => write!(f, "internal batch-place inconsistency"),
         }
@@ -1032,7 +1118,10 @@ impl std::fmt::Display for NetError {
         match self {
             NetError::NotAPad => write!(f, "not a pad"),
             NetError::AlreadyOnDifferentNets => {
-                write!(f, "both pins already belong to different nets (merging isn't supported yet)")
+                write!(
+                    f,
+                    "both pins already belong to different nets (merging isn't supported yet)"
+                )
             }
         }
     }
@@ -1218,16 +1307,39 @@ impl BoardDoc {
         // the same way `Self::try_move_footprint`'s own commit loop
         // already carries real nets across a move: look each pad's
         // *current* net up by its existing `ItemId` before checking.
-        let existing_pad_nets: Vec<Option<NetId>> = moving
+        let existing_pad_state: Vec<(Option<NetId>, ZoneConnection)> = moving
             .and_then(|id| self.footprints.iter().find(|f| f.id == id))
-            .map(|f| f.pad_item_ids.iter().map(|&id| self.node.get(id).and_then(Item::net)).collect())
+            .map(|f| {
+                f.pad_item_ids
+                    .iter()
+                    .map(|&id| match self.node.get(id) {
+                        Some(Item::Pad {
+                            net,
+                            zone_connection,
+                            ..
+                        }) => (*net, *zone_connection),
+                        _ => (None, ZoneConnection::Thermal),
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
         let resolver = self.resolver();
         let mut colliding = 0usize;
-        for (index, mut item) in world_items(template, position, rotation_deg).into_iter().enumerate() {
-            if let Item::Pad { net, .. } = &mut item {
-                *net = existing_pad_nets.get(index).copied().flatten();
+        for (index, mut item) in world_items(template, position, rotation_deg)
+            .into_iter()
+            .enumerate()
+        {
+            if let Item::Pad {
+                net,
+                zone_connection,
+                ..
+            } = &mut item
+            {
+                if let Some((old_net, old_zc)) = existing_pad_state.get(index) {
+                    *net = *old_net;
+                    *zone_connection = *old_zc;
+                }
             }
             if let Item::Pad { shape, .. } = &item {
                 // Inflating the pad's own extent by JLCPCB's real
@@ -1245,10 +1357,16 @@ impl BoardDoc {
                 // wouldn't see a rotated rectangular pad's corner
                 // poking past the edge between samples.
                 let on_board = match shape {
-                    PadShape::Circle(c) => circle_within_outline(c.center, c.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &self.outline),
-                    PadShape::Polygon { outline, .. } => {
-                        polygon_within_outline_with_clearance(outline, JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &self.outline)
-                    }
+                    PadShape::Circle(c) => circle_within_outline(
+                        c.center,
+                        c.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+                        &self.outline,
+                    ),
+                    PadShape::Polygon { outline, .. } => polygon_within_outline_with_clearance(
+                        outline,
+                        JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+                        &self.outline,
+                    ),
                 };
                 if !on_board {
                     return Err(PlacementError::OffBoard);
@@ -1270,7 +1388,11 @@ impl BoardDoc {
                 // the "same spirit, not the same number" choice made
                 // for `Item::Hole`'s clearance rules in
                 // `alladin_core::JlcpcbClearance` too.
-                let on_board = circle_within_outline(*position, drill / 2 + JlcpcbDfm::MIN_NPTH_HOLE, &self.outline);
+                let on_board = circle_within_outline(
+                    *position,
+                    drill / 2 + JlcpcbDfm::MIN_NPTH_HOLE,
+                    &self.outline,
+                );
                 if !on_board {
                     return Err(PlacementError::OffBoard);
                 }
@@ -1282,7 +1404,12 @@ impl BoardDoc {
             // exist precisely to recompute it against the board as it
             // looks *now*) -- so `query_colliding` never even hands
             // back a `Zone` hit for this to need filtering out.
-            colliding += self.node.query_colliding(&item, resolver).into_iter().filter(|hit| !exclude_ids.contains(hit)).count();
+            colliding += self
+                .node
+                .query_colliding(&item, resolver)
+                .into_iter()
+                .filter(|hit| !exclude_ids.contains(hit))
+                .count();
         }
 
         if colliding > 0 {
@@ -1291,7 +1418,16 @@ impl BoardDoc {
 
         // Thermal pads need pour-gap keepout and ≥2 free spoke corridors
         // -- see `PlacementError::ThermalKeepout`.
-        if self.thermal_keepout_violated(template, position, rotation_deg, &exclude_ids, &existing_pad_nets, &[]) {
+        let existing_zones: Vec<ZoneConnection> =
+            existing_pad_state.iter().map(|(_, z)| *z).collect();
+        if self.thermal_keepout_violated(
+            template,
+            position,
+            rotation_deg,
+            &exclude_ids,
+            &existing_zones,
+            &[],
+        ) {
             return Err(PlacementError::ThermalKeepout);
         }
 
@@ -1302,9 +1438,15 @@ impl BoardDoc {
         // real stroke-ink shape (via the shared `stroke_hits_pad`),
         // same same-side-only scope.
         for item in world_items(template, position, rotation_deg) {
-            let Item::Pad { shape, layer, .. } = &item else { continue };
+            let Item::Pad { shape, layer, .. } = &item else {
+                continue;
+            };
             for text in self.silk_texts.iter().filter(|t| t.layer == *layer) {
-                if text.stroke_segments().iter().any(|seg| stroke_hits_pad(seg, shape, JlcpcbDfm::SILK_TO_PAD)) {
+                if text
+                    .stroke_segments()
+                    .iter()
+                    .any(|seg| stroke_hits_pad(seg, shape, JlcpcbDfm::SILK_TO_PAD))
+                {
                     return Err(PlacementError::OverSilkText);
                 }
             }
@@ -1312,10 +1454,15 @@ impl BoardDoc {
             // every excluded footprint's own marker rides along with
             // the batch and must not block its own (or a sibling's)
             // destination, or a multi-move would self-collide.
-            let over_dot = self.silk_dot_circles_on(*layer, None, excluding).iter().any(|c| match shape {
-                PadShape::Circle(p) => circles_touch(c, p, JlcpcbDfm::SILK_TO_PAD),
-                PadShape::Polygon { outline, .. } => circle_polygon_collides(c, outline, JlcpcbDfm::SILK_TO_PAD),
-            });
+            let over_dot = self
+                .silk_dot_circles_on(*layer, None, excluding)
+                .iter()
+                .any(|c| match shape {
+                    PadShape::Circle(p) => circles_touch(c, p, JlcpcbDfm::SILK_TO_PAD),
+                    PadShape::Polygon { outline, .. } => {
+                        circle_polygon_collides(c, outline, JlcpcbDfm::SILK_TO_PAD)
+                    }
+                });
             if over_dot {
                 return Err(PlacementError::OverSilkDot);
             }
@@ -1338,9 +1485,17 @@ impl BoardDoc {
         // body spacing for multi-place flows is
         // [`Self::check_matrix_placement`]'s scratch-courtyard pass.
         let candidate_courtyard = world_courtyard(template, position, rotation_deg);
-        let overlaps_another_body = self.footprints.iter().filter(|fp| !excluding.contains(&fp.id)).any(|fp| {
-            polygon_polygon_collides(&candidate_courtyard, &fp.courtyard, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)
-        });
+        let overlaps_another_body = self
+            .footprints
+            .iter()
+            .filter(|fp| !excluding.contains(&fp.id))
+            .any(|fp| {
+                polygon_polygon_collides(
+                    &candidate_courtyard,
+                    &fp.courtyard,
+                    JlcpcbDfm::COMPONENT_BODY_CLEARANCE,
+                )
+            });
         if overlaps_another_body {
             return Err(PlacementError::BodyOverlap);
         }
@@ -1356,7 +1511,11 @@ impl BoardDoc {
             .silk_texts
             .iter()
             .filter(|t| t.layer == LayerId::FCu)
-            .any(|t| t.stroke_segments().iter().any(|seg| segment_polygon_collides(seg, &candidate_courtyard, 0)));
+            .any(|t| {
+                t.stroke_segments()
+                    .iter()
+                    .any(|seg| segment_polygon_collides(seg, &candidate_courtyard, 0))
+            });
         if covers_a_text {
             return Err(PlacementError::OverSilkText);
         }
@@ -1364,8 +1523,10 @@ impl BoardDoc {
         // The body arm for round silk, mirroring `covers_a_text` just
         // above -- a part dropped onto a dot/marker hides it exactly
         // like it would hide a label.
-        let covers_a_dot =
-            self.silk_dot_circles_on(LayerId::FCu, None, excluding).iter().any(|c| circle_polygon_collides(c, &candidate_courtyard, 0));
+        let covers_a_dot = self
+            .silk_dot_circles_on(LayerId::FCu, None, excluding)
+            .iter()
+            .any(|c| circle_polygon_collides(c, &candidate_courtyard, 0));
         if covers_a_dot {
             return Err(PlacementError::OverSilkDot);
         }
@@ -1374,7 +1535,11 @@ impl BoardDoc {
         // `PlacementError::BodyOffBoard`'s own doc comment): the
         // part's real body, not just its pads, must clear the board
         // edge by a full 2.5mm.
-        if !polygon_within_outline_with_clearance(&candidate_courtyard, JlcpcbDfm::COMPONENT_BODY_TO_EDGE, &self.outline) {
+        if !polygon_within_outline_with_clearance(
+            &candidate_courtyard,
+            JlcpcbDfm::COMPONENT_BODY_TO_EDGE,
+            &self.outline,
+        ) {
             return Err(PlacementError::BodyOffBoard);
         }
 
@@ -1407,16 +1572,28 @@ impl BoardDoc {
     /// smaller board is exactly what a stale fill's normal "catch up"
     /// path already does, not a new failure mode to invent here.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn set_outline(&mut self, new_outline: Vec<Polygon>, templates: &[FootprintTemplate]) -> Result<(), SetOutlineError> {
+    pub fn set_outline(
+        &mut self,
+        new_outline: Vec<Polygon>,
+        templates: &[FootprintTemplate],
+    ) -> Result<(), SetOutlineError> {
         for fp in &self.footprints {
-            let Some(template) = templates.iter().find(|t| t.name == fp.template_name) else { continue };
+            let Some(template) = templates.iter().find(|t| t.name == fp.template_name) else {
+                continue;
+            };
             for item in world_items(template, fp.position, fp.rotation_deg) {
                 if let Item::Pad { shape, .. } = &item {
                     let on_board = match shape {
-                        PadShape::Circle(c) => circle_within_outline(c.center, c.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &new_outline),
-                        PadShape::Polygon { outline, .. } => {
-                            polygon_within_outline_with_clearance(outline, JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &new_outline)
-                        }
+                        PadShape::Circle(c) => circle_within_outline(
+                            c.center,
+                            c.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+                            &new_outline,
+                        ),
+                        PadShape::Polygon { outline, .. } => polygon_within_outline_with_clearance(
+                            outline,
+                            JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+                            &new_outline,
+                        ),
                     };
                     if !on_board {
                         return Err(SetOutlineError::FootprintOffBoard(fp.id));
@@ -1426,7 +1603,11 @@ impl BoardDoc {
                     // Same `MIN_NPTH_HOLE`-as-edge-margin choice as
                     // `Self::check_placement`'s own `Item::Hole` arm --
                     // see that arm's doc comment for why.
-                    if !circle_within_outline(*position, drill / 2 + JlcpcbDfm::MIN_NPTH_HOLE, &new_outline) {
+                    if !circle_within_outline(
+                        *position,
+                        drill / 2 + JlcpcbDfm::MIN_NPTH_HOLE,
+                        &new_outline,
+                    ) {
                         return Err(SetOutlineError::FootprintOffBoard(fp.id));
                     }
                 }
@@ -1437,7 +1618,11 @@ impl BoardDoc {
             // strand an already-placed body too close to the *new*
             // edge as it can a pad.
             let courtyard = world_courtyard(template, fp.position, fp.rotation_deg);
-            if !polygon_within_outline_with_clearance(&courtyard, JlcpcbDfm::COMPONENT_BODY_TO_EDGE, &new_outline) {
+            if !polygon_within_outline_with_clearance(
+                &courtyard,
+                JlcpcbDfm::COMPONENT_BODY_TO_EDGE,
+                &new_outline,
+            ) {
                 return Err(SetOutlineError::FootprintOffBoard(fp.id));
             }
         }
@@ -1445,12 +1630,22 @@ impl BoardDoc {
         for item in self.node.iter() {
             match item {
                 Item::Track { shape, .. } => {
-                    if !segment_within_outline_with_clearance(shape.a, shape.b, shape.width, JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &new_outline) {
+                    if !segment_within_outline_with_clearance(
+                        shape.a,
+                        shape.b,
+                        shape.width,
+                        JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+                        &new_outline,
+                    ) {
                         return Err(SetOutlineError::TrackOffBoard);
                     }
                 }
                 Item::Via { shape, .. } => {
-                    if !circle_within_outline(shape.center, shape.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &new_outline) {
+                    if !circle_within_outline(
+                        shape.center,
+                        shape.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+                        &new_outline,
+                    ) {
                         return Err(SetOutlineError::ViaOffBoard);
                     }
                 }
@@ -1488,14 +1683,22 @@ impl BoardDoc {
         // runs for every frame of a move-drag, and a part already on
         // the board must stay movable even if its template predates a
         // rule.
-        if let Some((_, violation)) = crate::footprint::template_dfm_hard_violations(&template.pads, &template.holes).into_iter().next() {
+        if let Some((_, violation)) =
+            crate::footprint::template_dfm_hard_violations(&template.pads, &template.holes)
+                .into_iter()
+                .next()
+        {
             return Err(PlacementError::Dfm(violation));
         }
         // Same new-placements-only reasoning for the drill-spacing rule:
         // an NPTH mounting hole must not land nearer to an existing
         // via/hole than the drill process allows.
         for item in world_items(template, position, rotation_deg) {
-            if let Item::Hole { position: hole_position, drill } = item {
+            if let Item::Hole {
+                position: hole_position,
+                drill,
+            } = item
+            {
                 if self.violates_hole_to_hole(hole_position, drill, None) {
                     return Err(PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
                 }
@@ -1519,7 +1722,10 @@ impl BoardDoc {
         let id = FootprintId(self.next_footprint_serial);
         self.footprints.push(PlacedFootprint {
             id,
-            reference: format!("{}{}", template.reference_prefix, self.next_footprint_serial),
+            reference: format!(
+                "{}{}",
+                template.reference_prefix, self.next_footprint_serial
+            ),
             template_name: template.name.to_string(),
             position,
             rotation_deg,
@@ -1543,13 +1749,22 @@ impl BoardDoc {
     /// symmetric around it by construction). A 1x1 "matrix" degenerates
     /// to the single point `center`, so callers don't need a separate
     /// code path for an ordinary single-part placement.
-    pub fn matrix_positions(rows: u32, cols: u32, pitch_x: Unit, pitch_y: Unit, center: Point) -> Vec<Point> {
+    pub fn matrix_positions(
+        rows: u32,
+        cols: u32,
+        pitch_x: Unit,
+        pitch_y: Unit,
+        center: Point,
+    ) -> Vec<Point> {
         let mut positions = Vec::with_capacity((rows as usize) * (cols as usize));
         for row in 0..rows {
             for col in 0..cols {
                 let dx = (col as f64 - (cols as f64 - 1.0) / 2.0) * pitch_x as f64;
                 let dy = (row as f64 - (rows as f64 - 1.0) / 2.0) * pitch_y as f64;
-                positions.push(Point::new(center.x + dx.round() as Unit, center.y + dy.round() as Unit));
+                positions.push(Point::new(
+                    center.x + dx.round() as Unit,
+                    center.y + dy.round() as Unit,
+                ));
             }
         }
         positions
@@ -1572,7 +1787,12 @@ impl BoardDoc {
     /// unit -- silently placing 140 of 143 LEDs because 3 didn't fit
     /// would leave a confusing, hard-to-notice gap in a regular-looking
     /// grid.
-    pub fn check_matrix_placement(&self, template: &FootprintTemplate, positions: &[Point], rotation_deg: f64) -> Result<(), PlacementError> {
+    pub fn check_matrix_placement(
+        &self,
+        template: &FootprintTemplate,
+        positions: &[Point],
+        rotation_deg: f64,
+    ) -> Result<(), PlacementError> {
         for &position in positions {
             self.check_placement(template, position, rotation_deg, None)?;
         }
@@ -1588,7 +1808,9 @@ impl BoardDoc {
         let mut scratch_courtyards: Vec<Polygon> = Vec::with_capacity(positions.len());
         for &position in positions {
             let courtyard = world_courtyard(template, position, rotation_deg);
-            if scratch_courtyards.iter().any(|other| polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)) {
+            if scratch_courtyards.iter().any(|other| {
+                polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)
+            }) {
                 return Err(PlacementError::BodyOverlap);
             }
             scratch_courtyards.push(courtyard);
@@ -1612,7 +1834,12 @@ impl BoardDoc {
     /// (auto-generated reference designators, sequential and never
     /// reused, exactly like placing the same template one click at a
     /// time would produce).
-    pub fn place_matrix(&mut self, template: &FootprintTemplate, positions: &[Point], rotation_deg: f64) -> Result<Vec<FootprintId>, PlacementError> {
+    pub fn place_matrix(
+        &mut self,
+        template: &FootprintTemplate,
+        positions: &[Point],
+        rotation_deg: f64,
+    ) -> Result<Vec<FootprintId>, PlacementError> {
         self.check_matrix_placement(template, positions, rotation_deg)?;
         let mut ids = Vec::with_capacity(positions.len());
         for &position in positions {
@@ -1638,7 +1865,9 @@ impl BoardDoc {
     ) -> Result<(Point, f64), PlacementError> {
         if moving.is_none() {
             if let Some((_, violation)) =
-                crate::footprint::template_dfm_hard_violations(&template.pads, &template.holes).into_iter().next()
+                crate::footprint::template_dfm_hard_violations(&template.pads, &template.holes)
+                    .into_iter()
+                    .next()
             {
                 return Err(PlacementError::Dfm(violation));
             }
@@ -1646,7 +1875,11 @@ impl BoardDoc {
         let check = |pos: Point, rot: f64| -> Result<(), PlacementError> {
             if moving.is_none() {
                 for item in world_items(template, pos, rot) {
-                    if let Item::Hole { position: hole_position, drill } = item {
+                    if let Item::Hole {
+                        position: hole_position,
+                        drill,
+                    } = item
+                    {
                         if self.violates_hole_to_hole(hole_position, drill, None) {
                             return Err(PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
                         }
@@ -1718,15 +1951,26 @@ impl BoardDoc {
     /// [`Self::check_placement`] against the live board, and no two new
     /// members may collide with each other (scratch pads + courtyards,
     /// same idea as [`Self::check_matrix_placement`]).
-    pub fn check_batch_placement(&self, specs: &[BatchPlaceSpec<'_>]) -> Result<(), PlacementError> {
+    pub fn check_batch_placement(
+        &self,
+        specs: &[BatchPlaceSpec<'_>],
+    ) -> Result<(), PlacementError> {
         for spec in specs {
-            if let Some((_, violation)) =
-                crate::footprint::template_dfm_hard_violations(&spec.template.pads, &spec.template.holes).into_iter().next()
+            if let Some((_, violation)) = crate::footprint::template_dfm_hard_violations(
+                &spec.template.pads,
+                &spec.template.holes,
+            )
+            .into_iter()
+            .next()
             {
                 return Err(PlacementError::Dfm(violation));
             }
             for item in world_items(spec.template, spec.position, spec.rotation_deg) {
-                if let Item::Hole { position: hole_position, drill } = item {
+                if let Item::Hole {
+                    position: hole_position,
+                    drill,
+                } = item
+                {
                     if self.violates_hole_to_hole(hole_position, drill, None) {
                         return Err(PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
                     }
@@ -1740,7 +1984,9 @@ impl BoardDoc {
         let mut scratch_courtyards: Vec<Polygon> = Vec::with_capacity(specs.len());
         for spec in specs {
             let courtyard = world_courtyard(spec.template, spec.position, spec.rotation_deg);
-            if scratch_courtyards.iter().any(|other| polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)) {
+            if scratch_courtyards.iter().any(|other| {
+                polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)
+            }) {
                 return Err(PlacementError::BodyOverlap);
             }
             scratch_courtyards.push(courtyard);
@@ -1770,7 +2016,14 @@ impl BoardDoc {
                 })
                 .cloned()
                 .collect();
-            if self.thermal_keepout_violated(spec.template, spec.position, spec.rotation_deg, &[], &[], &extras) {
+            if self.thermal_keepout_violated(
+                spec.template,
+                spec.position,
+                spec.rotation_deg,
+                &[],
+                &[],
+                &extras,
+            ) {
                 return Err(PlacementError::ThermalKeepout);
             }
         }
@@ -1782,8 +2035,12 @@ impl BoardDoc {
     /// `pins` maps (pin number → net name) are applied after place in
     /// the same call; pin names are validated up front so a bad map
     /// never leaves a half-placed board.
-    pub fn place_batch(&mut self, specs: &[BatchPlaceSpec<'_>]) -> Result<Vec<FootprintId>, BatchPlaceError> {
-        self.check_batch_placement(specs).map_err(BatchPlaceError::Placement)?;
+    pub fn place_batch(
+        &mut self,
+        specs: &[BatchPlaceSpec<'_>],
+    ) -> Result<Vec<FootprintId>, BatchPlaceError> {
+        self.check_batch_placement(specs)
+            .map_err(BatchPlaceError::Placement)?;
         for spec in specs {
             for (pin, net_name) in spec.pins {
                 if net_name.trim().is_empty() {
@@ -1809,7 +2066,12 @@ impl BoardDoc {
             if spec.pins.is_empty() {
                 continue;
             }
-            let reference = self.footprints.iter().find(|f| f.id == id).map(|f| f.reference.clone()).ok_or(BatchPlaceError::Internal)?;
+            let reference = self
+                .footprints
+                .iter()
+                .find(|f| f.id == id)
+                .map(|f| f.reference.clone())
+                .ok_or(BatchPlaceError::Internal)?;
             for (pin, net_name) in spec.pins {
                 self.assign_pin_to_named_net(&templates, &reference, pin, net_name)?;
             }
@@ -1823,7 +2085,13 @@ impl BoardDoc {
     pub fn check_batch_move(&self, specs: &[BatchMoveSpec<'_>]) -> Result<(), PlacementError> {
         let excluding: Vec<FootprintId> = specs.iter().map(|s| s.id).collect();
         for spec in specs {
-            self.check_placement_excluding(spec.template, spec.position, spec.rotation_deg, Some(spec.id), &excluding)?;
+            self.check_placement_excluding(
+                spec.template,
+                spec.position,
+                spec.rotation_deg,
+                Some(spec.id),
+                &excluding,
+            )?;
         }
 
         let resolver = self.resolver();
@@ -1831,7 +2099,9 @@ impl BoardDoc {
         let mut scratch_courtyards: Vec<Polygon> = Vec::with_capacity(specs.len());
         for spec in specs {
             let courtyard = world_courtyard(spec.template, spec.position, spec.rotation_deg);
-            if scratch_courtyards.iter().any(|other| polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)) {
+            if scratch_courtyards.iter().any(|other| {
+                polygon_polygon_collides(&courtyard, other, JlcpcbDfm::COMPONENT_BODY_CLEARANCE)
+            }) {
                 return Err(PlacementError::BodyOverlap);
             }
             scratch_courtyards.push(courtyard);
@@ -1882,14 +2152,20 @@ impl BoardDoc {
     ) -> Result<NetId, BatchPlaceError> {
         let pads = self.find_pads(templates, reference, pin);
         if pads.is_empty() {
-            return Err(BatchPlaceError::UnknownPin { pin: pin.to_string() });
+            return Err(BatchPlaceError::UnknownPin {
+                pin: pin.to_string(),
+            });
         }
         let net = self.ensure_net(net_name).map_err(BatchPlaceError::Rename)?;
         for &pad in &pads {
             let current = self.pad_net(pad).map_err(BatchPlaceError::Net)?;
             match current {
-                Some(existing) if existing != net => return Err(BatchPlaceError::Net(NetError::AlreadyOnDifferentNets)),
-                _ => self.set_pad_net(pad, Some(net)).map_err(BatchPlaceError::Net)?,
+                Some(existing) if existing != net => {
+                    return Err(BatchPlaceError::Net(NetError::AlreadyOnDifferentNets))
+                }
+                _ => self
+                    .set_pad_net(pad, Some(net))
+                    .map_err(BatchPlaceError::Net)?,
             }
         }
         Ok(net)
@@ -1913,9 +2189,21 @@ impl BoardDoc {
         let mut hole_item_ids = Vec::new();
         for item in world_items(template, position, rotation_deg) {
             match item {
-                Item::Pad { shape, layer, zone_connection, .. } => {
+                Item::Pad {
+                    shape,
+                    layer,
+                    zone_connection,
+                    hole_diameter,
+                    ..
+                } => {
                     let &net = pad_nets.next().unwrap_or(&None);
-                    pad_item_ids.push(self.node.add(Item::Pad { shape, layer, net, zone_connection }));
+                    pad_item_ids.push(self.node.add(Item::Pad {
+                        shape,
+                        layer,
+                        net,
+                        zone_connection,
+                        hole_diameter,
+                    }));
                 }
                 Item::Hole { .. } => {
                     hole_item_ids.push(self.node.add(item));
@@ -1959,15 +2247,26 @@ impl BoardDoc {
     fn wires_touching_pads(&self, pad_item_ids: &[ItemId]) -> Vec<ItemId> {
         let mut entry_points = Vec::new();
         for &pad_id in pad_item_ids {
-            let Some(Item::Pad { shape, layer, net, .. }) = self.node.get(pad_id) else { continue };
+            let Some(Item::Pad {
+                shape, layer, net, ..
+            }) = self.node.get(pad_id)
+            else {
+                continue;
+            };
             entry_points.push((shape.center(), *layer, *net));
         }
 
         let mut wires = std::collections::HashSet::new();
         for (item_id, item) in self.node.iter_with_ids() {
             let touches_a_pad = entry_points.iter().any(|&(center, layer, net)| match item {
-                Item::Track { shape, layer: track_layer, .. } => {
-                    item.net() == net && *track_layer == layer && (shape.a == center || shape.b == center)
+                Item::Track {
+                    shape,
+                    layer: track_layer,
+                    ..
+                } => {
+                    item.net() == net
+                        && *track_layer == layer
+                        && (shape.a == center || shape.b == center)
                 }
                 Item::Via { shape, .. } => item.net() == net && shape.center == center,
                 _ => false,
@@ -2025,26 +2324,59 @@ impl BoardDoc {
     ///
     /// # Panics
     /// If `id` doesn't name a currently-placed footprint.
-    pub(crate) fn commit_move_footprint(&mut self, id: FootprintId, template: &FootprintTemplate, new_position: Point, new_rotation_deg: f64) {
-        let index = self.footprints.iter().position(|f| f.id == id).expect("commit_move_footprint: unknown FootprintId");
+    pub(crate) fn commit_move_footprint(
+        &mut self,
+        id: FootprintId,
+        template: &FootprintTemplate,
+        new_position: Point,
+        new_rotation_deg: f64,
+    ) {
+        let index = self
+            .footprints
+            .iter()
+            .position(|f| f.id == id)
+            .expect("commit_move_footprint: unknown FootprintId");
         // `world_items` always emits pads then holes (see its own doc
         // comment), so chaining `pad_item_ids` then `hole_item_ids`
         // lines the two sequences back up 1:1, same order both sides.
-        let item_ids: Vec<ItemId> =
-            self.footprints[index].pad_item_ids.iter().chain(&self.footprints[index].hole_item_ids).copied().collect();
+        let item_ids: Vec<ItemId> = self.footprints[index]
+            .pad_item_ids
+            .iter()
+            .chain(&self.footprints[index].hole_item_ids)
+            .copied()
+            .collect();
         for wire_id in self.wires_touching_pads(&self.footprints[index].pad_item_ids.clone()) {
             self.remove_item(wire_id);
         }
-        for (item_id, mut item) in item_ids.into_iter().zip(world_items(template, new_position, new_rotation_deg)) {
-            if let Item::Pad { net, .. } = &mut item {
-                *net = self.node.get(item_id).and_then(Item::net);
+        for (item_id, mut item) in
+            item_ids
+                .into_iter()
+                .zip(world_items(template, new_position, new_rotation_deg))
+        {
+            if let Item::Pad {
+                net,
+                zone_connection,
+                ..
+            } = &mut item
+            {
+                if let Some(Item::Pad {
+                    net: old_net,
+                    zone_connection: old_zc,
+                    ..
+                }) = self.node.get(item_id)
+                {
+                    *net = *old_net;
+                    *zone_connection = *old_zc;
+                }
             }
             self.node.replace(item_id, item);
         }
         self.footprints[index].position = new_position;
         self.footprints[index].rotation_deg = new_rotation_deg;
-        self.footprints[index].courtyard = world_courtyard(template, new_position, new_rotation_deg);
-        self.footprints[index].assembly_drills = world_assembly_drills(template, new_position, new_rotation_deg);
+        self.footprints[index].courtyard =
+            world_courtyard(template, new_position, new_rotation_deg);
+        self.footprints[index].assembly_drills =
+            world_assembly_drills(template, new_position, new_rotation_deg);
     }
 
     /// Recomputes every placed footprint's [`PlacedFootprint::courtyard`]
@@ -2055,7 +2387,9 @@ impl BoardDoc {
     /// stored (same tolerance as [`Self::find_pad`]).
     pub fn sync_courtyards(&mut self, templates: &[FootprintTemplate]) {
         for fp in &mut self.footprints {
-            let Some(template) = templates.iter().find(|t| t.name == fp.template_name) else { continue };
+            let Some(template) = templates.iter().find(|t| t.name == fp.template_name) else {
+                continue;
+            };
             fp.courtyard = world_courtyard(template, fp.position, fp.rotation_deg);
             fp.assembly_drills = world_assembly_drills(template, fp.position, fp.rotation_deg);
         }
@@ -2068,18 +2402,30 @@ impl BoardDoc {
     /// 0.4 mm etc.) is not a board-level pour-CBC concern; only
     /// same-pin siblings previously skipped that, which still left
     /// dense ICs unplaceable. `extra_obstacles` are other batch
-    /// members not yet in the node. `existing_pad_nets` unused for
-    /// geometry but kept for call-site alignment.
+    /// members not yet in the node. `existing_zone` overlays a moved
+    /// footprint's current pour join (empty = template default).
     fn thermal_keepout_violated(
         &self,
         template: &FootprintTemplate,
         position: Point,
         rotation_deg: f64,
         exclude_ids: &[ItemId],
-        _existing_pad_nets: &[Option<NetId>],
+        existing_zone: &[ZoneConnection],
         extra_obstacles: &[Item],
     ) -> bool {
-        let candidate_items = world_items(template, position, rotation_deg);
+        let mut candidate_items = world_items(template, position, rotation_deg);
+        let mut pad_i = 0usize;
+        for item in &mut candidate_items {
+            if let Item::Pad {
+                zone_connection, ..
+            } = item
+            {
+                if let Some(&zc) = existing_zone.get(pad_i) {
+                    *zone_connection = zc;
+                }
+                pad_i += 1;
+            }
+        }
         let spoke_width = self.thermal_spoke_width();
         // Every pad of this footprint is excluded from spoke probes
         // (self + package neighbours). Holes on the template still count.
@@ -2095,16 +2441,30 @@ impl BoardDoc {
             .collect();
 
         for item in &candidate_items {
-            let Item::Pad { shape: c_shape, zone_connection: c_conn, layer: c_layer, .. } = item else { continue };
+            let Item::Pad {
+                shape: c_shape,
+                zone_connection: c_conn,
+                layer: c_layer,
+                ..
+            } = item
+            else {
+                continue;
+            };
             let c_keep = thermal_keepout_mm(*c_conn);
             for (id, other) in self.node.iter_with_ids() {
                 if exclude_ids.contains(&id) {
                     continue;
                 }
-                let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
+                let Item::Pad {
+                    shape: o_shape,
+                    zone_connection: o_conn,
+                    layer: o_layer,
+                    ..
+                } = other
+                else {
                     continue;
                 };
-                if *o_layer != *c_layer {
+                if !item.on_layer(*o_layer) && !other.on_layer(*c_layer) {
                     continue;
                 }
                 let o_keep = thermal_keepout_mm(*o_conn);
@@ -2120,10 +2480,16 @@ impl BoardDoc {
             // not vs this template's own pads.
             if c_keep > 0 {
                 for other in extra_obstacles {
-                    let Item::Pad { shape: o_shape, zone_connection: o_conn, layer: o_layer, .. } = other else {
+                    let Item::Pad {
+                        shape: o_shape,
+                        zone_connection: o_conn,
+                        layer: o_layer,
+                        ..
+                    } = other
+                    else {
                         continue;
                     };
-                    if *o_layer != *c_layer {
+                    if !item.on_layer(*o_layer) && !other.on_layer(*c_layer) {
                         continue;
                     }
                     let o_keep = thermal_keepout_mm(*o_conn);
@@ -2140,14 +2506,32 @@ impl BoardDoc {
             if *c_conn != ZoneConnection::Thermal {
                 continue;
             }
-            let node_obstacles = self.node.iter_with_ids().filter(|(id, _)| !exclude_ids.contains(id)).map(|(_, item)| item);
+            let node_obstacles = self
+                .node
+                .iter_with_ids()
+                .filter(|(id, _)| !exclude_ids.contains(id))
+                .map(|(_, item)| item);
             // Own-footprint holes (NPTH) still obstruct spokes; pads are
             // skipped via exclude_centers.
-            let own_non_pads = candidate_items.iter().filter(|it| !matches!(it, Item::Pad { .. }));
-            let obstacle_iter = node_obstacles.chain(extra_obstacles.iter()).chain(own_non_pads);
-            let free = free_spoke_directions(c_shape, *c_layer, spoke_width, obstacle_iter, &exclude_centers);
-            if free < MIN_FREE_SPOKE_DIRS {
-                return true;
+            let own_non_pads = candidate_items
+                .iter()
+                .filter(|it| !matches!(it, Item::Pad { .. }));
+            let obstacles: Vec<&Item> = node_obstacles
+                .chain(extra_obstacles.iter())
+                .chain(own_non_pads)
+                .collect();
+            let (la, lb) = item.layers();
+            for layer in std::iter::once(la).chain(lb) {
+                let free = free_spoke_directions(
+                    c_shape,
+                    layer,
+                    spoke_width,
+                    obstacles.iter().copied(),
+                    &exclude_centers,
+                );
+                if free < MIN_FREE_SPOKE_DIRS {
+                    return true;
+                }
             }
         }
         false
@@ -2170,7 +2554,9 @@ impl BoardDoc {
                 })
                 .collect();
             for &pad_id in &fp.pad_item_ids {
-                let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else { continue };
+                let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else {
+                    continue;
+                };
                 let c = shape.center();
                 map.insert((c.x, c.y), all_centers.clone());
             }
@@ -2183,7 +2569,11 @@ impl BoardDoc {
     pub(crate) fn thermals_remain_legal(&self) -> Result<(), PlacementError> {
         let spoke_width = self.thermal_spoke_width();
         let map = self.thermal_exclude_map();
-        let exclude = |center: Point| map.get(&(center.x, center.y)).cloned().unwrap_or_else(|| self_exclude(center));
+        let exclude = |center: Point| {
+            map.get(&(center.x, center.y))
+                .cloned()
+                .unwrap_or_else(|| self_exclude(center))
+        };
         if first_illegal_thermal_anywhere(&self.node, spoke_width, &exclude).is_some() {
             return Err(PlacementError::ThermalKeepout);
         }
@@ -2215,7 +2605,11 @@ impl BoardDoc {
             })
             .collect();
 
-        for fp in self.footprints.iter().filter(|fp| !excluding.contains(&fp.id)) {
+        for fp in self
+            .footprints
+            .iter()
+            .filter(|fp| !excluding.contains(&fp.id))
+        {
             for drill in &fp.assembly_drills {
                 for shape in &candidate_smd_shapes {
                     if pad_shape_hits_circle(shape, drill, clearance) {
@@ -2227,8 +2621,13 @@ impl BoardDoc {
             // that sit on that footprint's own PTH drill centers).
             for drill in &candidate_drills {
                 for &pad_id in &fp.pad_item_ids {
-                    let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else { continue };
-                    let is_pth = fp.assembly_drills.iter().any(|d| d.center.distance(shape.center()) < 1.0);
+                    let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else {
+                        continue;
+                    };
+                    let is_pth = fp
+                        .assembly_drills
+                        .iter()
+                        .any(|d| d.center.distance(shape.center()) < 1.0);
                     if is_pth {
                         continue;
                     }
@@ -2260,7 +2659,11 @@ impl BoardDoc {
                 self.remove_item(wire_id);
             }
             let footprint = self.footprints.remove(index);
-            for item_id in footprint.pad_item_ids.into_iter().chain(footprint.hole_item_ids) {
+            for item_id in footprint
+                .pad_item_ids
+                .into_iter()
+                .chain(footprint.hole_item_ids)
+            {
                 self.node.remove(item_id);
             }
             self.prune_empty_nets();
@@ -2277,14 +2680,20 @@ impl BoardDoc {
     /// is under the cursor".
     pub fn pad_at(&self, point: Point) -> Option<ItemId> {
         self.node.iter_with_ids().find_map(|(id, item)| match item {
-            Item::Pad { shape: PadShape::Circle(c), .. } if c.center.distance(point) <= c.radius as f64 => Some(id),
+            Item::Pad {
+                shape: PadShape::Circle(c),
+                ..
+            } if c.center.distance(point) <= c.radius as f64 => Some(id),
             // A non-round pad's true, possibly rotated outline -- an
             // exact point-in-polygon test, not the bounding circle this
             // used to fall back to, so e.g. clicking just past a
             // rotated rectangular pad's short side (inside its old,
             // larger bounding circle but outside its real copper) no
             // longer selects it.
-            Item::Pad { shape: PadShape::Polygon { outline, .. }, .. } if outline.contains_point(point) => Some(id),
+            Item::Pad {
+                shape: PadShape::Polygon { outline, .. },
+                ..
+            } if outline.contains_point(point) => Some(id),
             _ => None,
         })
     }
@@ -2297,7 +2706,9 @@ impl BoardDoc {
     /// where it was clicked.
     fn hole_at(&self, point: Point) -> Option<ItemId> {
         self.node.iter_with_ids().find_map(|(id, item)| match item {
-            Item::Hole { position, drill } if position.distance(point) <= *drill as f64 / 2.0 => Some(id),
+            Item::Hole { position, drill } if position.distance(point) <= *drill as f64 / 2.0 => {
+                Some(id)
+            }
             _ => None,
         })
     }
@@ -2313,10 +2724,17 @@ impl BoardDoc {
     /// at all) permanently unclickable regardless of tool.
     pub fn footprint_at(&self, point: Point) -> Option<FootprintId> {
         if let Some(pad_id) = self.pad_at(point) {
-            return self.footprints.iter().find(|f| f.pad_item_ids.contains(&pad_id)).map(|f| f.id);
+            return self
+                .footprints
+                .iter()
+                .find(|f| f.pad_item_ids.contains(&pad_id))
+                .map(|f| f.id);
         }
         let hole_id = self.hole_at(point)?;
-        self.footprints.iter().find(|f| f.hole_item_ids.contains(&hole_id)).map(|f| f.id)
+        self.footprints
+            .iter()
+            .find(|f| f.hole_item_ids.contains(&hole_id))
+            .map(|f| f.id)
     }
 
     /// Finds the `ItemId` of pin `pad_number` on the footprint whose
@@ -2330,8 +2748,15 @@ impl BoardDoc {
     /// [`Self::check_placement`] needs a `&FootprintTemplate` --
     /// `BoardDoc` itself deliberately holds no template registry (see
     /// [`PlacedFootprint`]'s doc comment).
-    pub fn find_pad(&self, templates: &[FootprintTemplate], reference: &str, pad_number: &str) -> Option<ItemId> {
-        self.find_pads(templates, reference, pad_number).first().copied()
+    pub fn find_pad(
+        &self,
+        templates: &[FootprintTemplate],
+        reference: &str,
+        pad_number: &str,
+    ) -> Option<ItemId> {
+        self.find_pads(templates, reference, pad_number)
+            .first()
+            .copied()
     }
 
     /// Every pad item of `reference` whose template pad number equals
@@ -2342,7 +2767,12 @@ impl BoardDoc {
     /// (what [`Self::find_pad`] alone would give) leaves the siblings
     /// net-less, which both breaks continuity and blocks same-net
     /// routing right next to them.
-    pub fn find_pads(&self, templates: &[FootprintTemplate], reference: &str, pad_number: &str) -> Vec<ItemId> {
+    pub fn find_pads(
+        &self,
+        templates: &[FootprintTemplate],
+        reference: &str,
+        pad_number: &str,
+    ) -> Vec<ItemId> {
         let Some(footprint) = self.footprints.iter().find(|f| f.reference == reference) else {
             return Vec::new();
         };
@@ -2377,7 +2807,9 @@ impl BoardDoc {
     /// live pad.
     pub(crate) fn pad_endpoint(&self, id: ItemId) -> Option<(Point, LayerId, Option<NetId>)> {
         match self.node.get(id) {
-            Some(Item::Pad { shape, layer, net, .. }) => Some((shape.center(), *layer, *net)),
+            Some(Item::Pad {
+                shape, layer, net, ..
+            }) => Some((shape.center(), *layer, *net)),
             _ => None,
         }
     }
@@ -2395,9 +2827,21 @@ impl BoardDoc {
     /// Commits a routed polyline as one `Item::Track` per leg -- the only
     /// place `alladin-pcb` adds tracks to `self.node`. Prefers
     /// [`Self::try_add_track_path`] when thermal integrity must be gated.
-    pub(crate) fn add_track_path(&mut self, path: &[Point], net: NetId, layer: LayerId, width: Unit, class: NetClass) {
+    pub(crate) fn add_track_path(
+        &mut self,
+        path: &[Point],
+        net: NetId,
+        layer: LayerId,
+        width: Unit,
+        class: NetClass,
+    ) {
         for leg in path.windows(2) {
-            self.node.add(Item::Track { shape: Segment::new(leg[0], leg[1], width), net: Some(net), layer, class });
+            self.node.add(Item::Track {
+                shape: Segment::new(leg[0], leg[1], width),
+                net: Some(net),
+                layer,
+                class,
+            });
         }
     }
 
@@ -2413,11 +2857,16 @@ impl BoardDoc {
         width: Unit,
         class: NetClass,
     ) -> Result<(), PlacementError> {
-        let ids_before: std::collections::HashSet<usize> = self.node.iter_with_ids().map(|(id, _)| id.0).collect();
+        let ids_before: std::collections::HashSet<usize> =
+            self.node.iter_with_ids().map(|(id, _)| id.0).collect();
         self.add_track_path(path, net, layer, width, class);
         if let Err(e) = self.thermals_remain_legal() {
-            let added: Vec<ItemId> =
-                self.node.iter_with_ids().map(|(id, _)| id).filter(|id| !ids_before.contains(&id.0)).collect();
+            let added: Vec<ItemId> = self
+                .node
+                .iter_with_ids()
+                .map(|(id, _)| id)
+                .filter(|id| !ids_before.contains(&id.0))
+                .collect();
             for id in added {
                 self.node.remove(id);
             }
@@ -2440,12 +2889,22 @@ impl BoardDoc {
     /// [`PlacementError::OnTrack`]). Touches nothing on `Err`, same
     /// "trial first, commit only on success" contract as every other
     /// placement primitive in this module.
-    pub fn try_add_via(&mut self, center: Point, net: NetId, diameter: Unit, drill: Unit) -> Result<ItemId, PlacementError> {
+    pub fn try_add_via(
+        &mut self,
+        center: Point,
+        net: NetId,
+        diameter: Unit,
+        drill: Unit,
+    ) -> Result<ItemId, PlacementError> {
         if let Err(v) = JlcpcbDfm::check_via(diameter, drill) {
             return Err(PlacementError::Dfm(v));
         }
         let radius = diameter / 2;
-        if !circle_within_outline(center, radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &self.outline) {
+        if !circle_within_outline(
+            center,
+            radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+            &self.outline,
+        ) {
             return Err(PlacementError::OffBoard);
         }
         if self.violates_hole_to_hole(center, drill, Some(net)) {
@@ -2456,7 +2915,11 @@ impl BoardDoc {
         }
 
         let resolver = self.resolver();
-        let candidate = Item::Via { shape: Circle::new(center, radius), drill, net: Some(net) };
+        let candidate = Item::Via {
+            shape: Circle::new(center, radius),
+            drill,
+            net: Some(net),
+        };
         let colliding = self.node.query_colliding(&candidate, resolver).len();
         if colliding > 0 {
             return Err(PlacementError::Collision(colliding));
@@ -2481,14 +2944,20 @@ impl BoardDoc {
     /// that live in the [`Node`](alladin_core::Node) (vias, NPTH) --
     /// through-hole *pad* drills exist only in templates and are
     /// covered by the board-wide DFM report instead.
-    pub(crate) fn violates_hole_to_hole(&self, center: Point, drill: Unit, net: Option<NetId>) -> bool {
+    pub(crate) fn violates_hole_to_hole(
+        &self,
+        center: Point,
+        drill: Unit,
+        net: Option<NetId>,
+    ) -> bool {
         self.node.iter().any(|item| {
             let (other_center, other_drill, other_net) = match item {
                 Item::Via { shape, drill, net } => (shape.center, *drill, *net),
                 Item::Hole { position, drill } => (*position, *drill, None),
                 _ => return false,
             };
-            let required = JlcpcbDfm::required_hole_to_hole(net.map(|n| n.0), other_net.map(|n| n.0));
+            let required =
+                JlcpcbDfm::required_hole_to_hole(net.map(|n| n.0), other_net.map(|n| n.0));
             let dx = (center.x - other_center.x) as f64;
             let dy = (center.y - other_center.y) as f64;
             dx.hypot(dy) < ((drill + other_drill) / 2 + required) as f64
@@ -2500,15 +2969,42 @@ impl BoardDoc {
     /// either endpoint order (`a->b` == `b->a`: same capsule).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn has_identical_routed_item(&self, candidate: &Item) -> bool {
-        self.node.iter().any(|existing| match (existing, candidate) {
-            (Item::Track { shape: e, net: en, layer: el, .. }, Item::Track { shape: c, net: cn, layer: cl, .. }) => {
-                en == cn && el == cl && e.width == c.width && ((e.a == c.a && e.b == c.b) || (e.a == c.b && e.b == c.a))
-            }
-            (Item::Via { shape: e, drill: ed, net: en }, Item::Via { shape: c, drill: cd, net: cn }) => {
-                en == cn && ed == cd && e.center == c.center && e.radius == c.radius
-            }
-            _ => false,
-        })
+        self.node
+            .iter()
+            .any(|existing| match (existing, candidate) {
+                (
+                    Item::Track {
+                        shape: e,
+                        net: en,
+                        layer: el,
+                        ..
+                    },
+                    Item::Track {
+                        shape: c,
+                        net: cn,
+                        layer: cl,
+                        ..
+                    },
+                ) => {
+                    en == cn
+                        && el == cl
+                        && e.width == c.width
+                        && ((e.a == c.a && e.b == c.b) || (e.a == c.b && e.b == c.a))
+                }
+                (
+                    Item::Via {
+                        shape: e,
+                        drill: ed,
+                        net: en,
+                    },
+                    Item::Via {
+                        shape: c,
+                        drill: cd,
+                        net: cn,
+                    },
+                ) => en == cn && ed == cd && e.center == c.center && e.radius == c.radius,
+                _ => false,
+            })
     }
 
     /// Read-only equivalent of [`Self::try_add_via`]'s placement gates
@@ -2521,7 +3017,11 @@ impl BoardDoc {
     /// this work right now".
     pub(crate) fn via_would_fit(&self, center: Point, net: NetId, diameter: Unit) -> bool {
         let radius = diameter / 2;
-        if !circle_within_outline(center, radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &self.outline) {
+        if !circle_within_outline(
+            center,
+            radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+            &self.outline,
+        ) {
             return false;
         }
         if self.via_too_close_to_any_track(center, diameter) {
@@ -2531,7 +3031,11 @@ impl BoardDoc {
         // `drill` genuinely doesn't matter here -- collision only ever
         // looks at `shape` (the outer copper circle), see `Item::Via::drill`'s
         // own doc comment -- so `0` is a safe placeholder, never a real via.
-        let candidate = Item::Via { shape: Circle::new(center, radius), drill: 0, net: Some(net) };
+        let candidate = Item::Via {
+            shape: Circle::new(center, radius),
+            drill: 0,
+            net: Some(net),
+        };
         !self.node.is_colliding(&candidate, resolver)
     }
 
@@ -2544,8 +3048,14 @@ impl BoardDoc {
     /// the angular sweep, was refused) doesn't need its own,
     /// possibly-drifting copy of this radial-direction math. `None`
     /// only if `pad_id` isn't a live pad.
-    pub(crate) fn pin_stitching_via_candidate(&self, pad_id: ItemId, diameter: Unit) -> Option<Point> {
-        self.pin_stitching_via_candidates(pad_id, diameter).into_iter().next()
+    pub(crate) fn pin_stitching_via_candidate(
+        &self,
+        pad_id: ItemId,
+        diameter: Unit,
+    ) -> Option<Point> {
+        self.pin_stitching_via_candidates(pad_id, diameter)
+            .into_iter()
+            .next()
     }
 
     /// Every via center [`Self::try_add_pin_stitching_via`] is willing
@@ -2574,21 +3084,37 @@ impl BoardDoc {
     /// to be geometrically free.
     ///
     /// Empty only if `pad_id` isn't a live pad.
-    pub(crate) fn pin_stitching_via_candidates(&self, pad_id: ItemId, diameter: Unit) -> Vec<Point> {
+    pub(crate) fn pin_stitching_via_candidates(
+        &self,
+        pad_id: ItemId,
+        diameter: Unit,
+    ) -> Vec<Point> {
         const STEP_DEG: f64 = 15.0;
         const MAX_DEG: f64 = 90.0;
 
-        let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else { return Vec::new() };
+        let Some(Item::Pad { shape, .. }) = self.node.get(pad_id) else {
+            return Vec::new();
+        };
         let pad_center = shape.center();
         let pad_radius = shape.bounding_radius();
 
-        let body_center = self.footprints.iter().find(|f| f.pad_item_ids.contains(&pad_id)).map(|f| {
-            let b = Aabb::from_polygon(&f.courtyard);
-            Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)
-        });
-        let outward = body_center.map(|c| pad_center.sub(c)).filter(|v| v.x != 0 || v.y != 0).unwrap_or(Point::new(1, 0));
+        let body_center = self
+            .footprints
+            .iter()
+            .find(|f| f.pad_item_ids.contains(&pad_id))
+            .map(|f| {
+                let b = Aabb::from_polygon(&f.courtyard);
+                Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)
+            });
+        let outward = body_center
+            .map(|c| pad_center.sub(c))
+            .filter(|v| v.x != 0 || v.y != 0)
+            .unwrap_or(Point::new(1, 0));
         let outward_len = outward.length();
-        let (ux, uy) = (outward.x as f64 / outward_len, outward.y as f64 / outward_len);
+        let (ux, uy) = (
+            outward.x as f64 / outward_len,
+            outward.y as f64 / outward_len,
+        );
 
         let gap = pad_radius + self.pad_to_pad_clearance() + diameter / 2 + 1_000;
 
@@ -2605,7 +3131,10 @@ impl BoardDoc {
             .map(|deg| {
                 let (sin, cos) = deg.to_radians().sin_cos();
                 let (rux, ruy) = (ux * cos - uy * sin, ux * sin + uy * cos);
-                Point::new(pad_center.x + (rux * gap as f64).round() as Unit, pad_center.y + (ruy * gap as f64).round() as Unit)
+                Point::new(
+                    pad_center.x + (rux * gap as f64).round() as Unit,
+                    pad_center.y + (ruy * gap as f64).round() as Unit,
+                )
             })
             .collect()
     }
@@ -2627,8 +3156,16 @@ impl BoardDoc {
     /// connect it a moment later: the GUI's "Place vias" tool
     /// (`app::EditorState::handle_place_via_click`) and the CLI's
     /// `add-via` command.
-    pub fn try_add_stitching_via(&mut self, center: Point, net: NetId, diameter: Unit, drill: Unit) -> Result<ItemId, ViaError> {
-        let id = self.try_add_via(center, net, diameter, drill).map_err(ViaError::Placement)?;
+    pub fn try_add_stitching_via(
+        &mut self,
+        center: Point,
+        net: NetId,
+        diameter: Unit,
+        drill: Unit,
+    ) -> Result<ItemId, ViaError> {
+        let id = self
+            .try_add_via(center, net, diameter, drill)
+            .map_err(ViaError::Placement)?;
         // `exclude: Some(id)` is required, not optional here -- the via
         // is already live in `self.node` at this point (added by the
         // `try_add_via` call above), so without excluding its own id the
@@ -2636,7 +3173,10 @@ impl BoardDoc {
         // net, perfectly overlapping" match every time, making this
         // whole check a no-op. See `Node::touches_same_net`'s doc
         // comment.
-        let placed = self.node.get(id).expect("just-added via must still be live");
+        let placed = self
+            .node
+            .get(id)
+            .expect("just-added via must still be live");
         if !self.node.touches_same_net(placed, Some(id)) {
             self.node.remove(id);
             return Err(ViaError::Dangling);
@@ -2655,7 +3195,11 @@ impl BoardDoc {
         // collision query reports EVERY item within clearance -- then
         // only the pad hits count (touching own-net tracks, vias, and
         // zone fill is what a stitching via is for).
-        let candidate = Item::Via { shape: Circle::new(center, diameter / 2), drill: 0, net: None };
+        let candidate = Item::Via {
+            shape: Circle::new(center, diameter / 2),
+            drill: 0,
+            net: None,
+        };
         self.node
             .query_colliding(&candidate, self.resolver())
             .into_iter()
@@ -2668,7 +3212,11 @@ impl BoardDoc {
     /// [`Self::try_add_via`] / [`PlacementError::OnTrack`]: a drill
     /// through a trace severs that copper.
     pub(crate) fn via_too_close_to_any_track(&self, center: Point, diameter: Unit) -> bool {
-        let candidate = Item::Via { shape: Circle::new(center, diameter / 2), drill: 0, net: None };
+        let candidate = Item::Via {
+            shape: Circle::new(center, diameter / 2),
+            drill: 0,
+            net: None,
+        };
         self.node
             .query_colliding(&candidate, self.resolver())
             .into_iter()
@@ -2722,7 +3270,13 @@ impl BoardDoc {
     /// wants to hear ("the pin's immediate neighbourhood is too
     /// tight", not "attempt number eleven, at 90 degrees, failed for
     /// this unrelated reason").
-    pub fn try_add_pin_stitching_via(&mut self, pad_id: ItemId, diameter: Unit, drill: Unit, stub_width: Unit) -> Result<PinStitchingVia, PinStitchingViaError> {
+    pub fn try_add_pin_stitching_via(
+        &mut self,
+        pad_id: ItemId,
+        diameter: Unit,
+        drill: Unit,
+        stub_width: Unit,
+    ) -> Result<PinStitchingVia, PinStitchingViaError> {
         // The via's own diameter/drill/annular gates live in the
         // `try_add_via` call below; the stub track's width has no such
         // downstream gate (`add_track_path` trusts its caller), so it's
@@ -2730,10 +3284,15 @@ impl BoardDoc {
         if let Err(v) = JlcpcbDfm::check_track_width(stub_width) {
             return Err(PinStitchingViaError::Via(PlacementError::Dfm(v)));
         }
-        let Some(Item::Pad { shape, net, layer, .. }) = self.node.get(pad_id).cloned() else {
+        let Some(Item::Pad {
+            shape, net, layer, ..
+        }) = self.node.get(pad_id).cloned()
+        else {
             return Err(PinStitchingViaError::NotAPad);
         };
-        let Some(net) = net else { return Err(PinStitchingViaError::NoNet) };
+        let Some(net) = net else {
+            return Err(PinStitchingViaError::NoNet);
+        };
         let pad_center = shape.center();
 
         let candidates = self.pin_stitching_via_candidates(pad_id, diameter);
@@ -2758,20 +3317,40 @@ impl BoardDoc {
                 }
             };
 
-            let stub_clear = self.node.path_is_clear(pad_center, via_center, stub_width, Some(net), layer, NetClass::C, resolver)
-                && path_keeps_edge_clearance(&[pad_center, via_center], stub_width, &self.outline);
+            let stub_clear = self.node.path_is_clear(
+                pad_center,
+                via_center,
+                stub_width,
+                Some(net),
+                layer,
+                NetClass::C,
+                resolver,
+            ) && path_keeps_edge_clearance(
+                &[pad_center, via_center],
+                stub_width,
+                &self.outline,
+            );
             if !stub_clear {
                 self.node.remove(via_id);
                 first_err.get_or_insert(PinStitchingViaError::NoRoomForStub);
                 continue;
             }
 
-            if let Err(e) = self.try_add_track_path(&[pad_center, via_center], net, layer, stub_width, NetClass::C) {
+            if let Err(e) = self.try_add_track_path(
+                &[pad_center, via_center],
+                net,
+                layer,
+                stub_width,
+                NetClass::C,
+            ) {
                 self.node.remove(via_id);
                 first_err.get_or_insert(PinStitchingViaError::Via(e));
                 continue;
             }
-            return Ok(PinStitchingVia { via_id, center: via_center });
+            return Ok(PinStitchingVia {
+                via_id,
+                center: via_center,
+            });
         }
         Err(first_err.expect("pin_stitching_via_candidates never returns empty for a pad_id already confirmed live above"))
     }
@@ -2793,28 +3372,41 @@ impl BoardDoc {
     /// check -- needed so moving/rotating a text doesn't spuriously
     /// "collide" with its own, not-yet-updated old position (see
     /// [`Self::try_move_silk_text`]).
-    fn silk_text_fits(&self, candidate: &SilkText, ignore: Option<SilkTextId>) -> Result<(), SilkTextError> {
+    fn silk_text_fits(
+        &self,
+        candidate: &SilkText,
+        ignore: Option<SilkTextId>,
+    ) -> Result<(), SilkTextError> {
         let layer = candidate.layer;
         // Same margin `Self::check_placement` already uses for a
         // pad's own copper-to-edge clearance -- silk ink flush against
         // the cut line is exactly as unmanufacturable as copper would
         // be there, and there is no separate, dedicated "silk to
         // routed edge" JLCPCB constant to reach for instead.
-        if !polygon_within_outline_with_clearance(&candidate.bounding_rect(), JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &self.outline) {
+        if !polygon_within_outline_with_clearance(
+            &candidate.bounding_rect(),
+            JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+            &self.outline,
+        ) {
             return Err(SilkTextError::OffBoard);
         }
 
         let segments = candidate.stroke_segments();
         for item in self.node.iter() {
-            let Item::Pad { shape, layer: pad_layer, .. } = item else { continue };
+            let Item::Pad { shape, .. } = item else {
+                continue;
+            };
             // Only a same-*side* pad's copper can ever actually be
-            // printed over -- a back-side pad sits on the opposite
-            // face of the board from front-side silk, physically
-            // nowhere near the ink.
-            if *pad_layer != layer {
+            // printed over -- a back-side SMD pad sits on the opposite
+            // face. PTH copper exists on both faces, so silk on either
+            // side must clear it.
+            if !item.on_layer(layer) {
                 continue;
             }
-            if segments.iter().any(|seg| stroke_hits_pad(seg, shape, JlcpcbDfm::SILK_TO_PAD)) {
+            if segments
+                .iter()
+                .any(|seg| stroke_hits_pad(seg, shape, JlcpcbDfm::SILK_TO_PAD))
+            {
                 return Err(SilkTextError::TooCloseToPad);
             }
         }
@@ -2825,10 +3417,11 @@ impl BoardDoc {
         // JLCPCB's front-side assembly), so back-side silk is never
         // affected by them.
         if layer == LayerId::FCu {
-            let under_a_body = self
-                .footprints
-                .iter()
-                .any(|fp| segments.iter().any(|seg| segment_polygon_collides(seg, &fp.courtyard, 0)));
+            let under_a_body = self.footprints.iter().any(|fp| {
+                segments
+                    .iter()
+                    .any(|seg| segment_polygon_collides(seg, &fp.courtyard, 0))
+            });
             if under_a_body {
                 return Err(SilkTextError::UnderComponentBody);
             }
@@ -2838,14 +3431,19 @@ impl BoardDoc {
         // the two half-widths combined -- real ink touching real ink,
         // zero extra tolerance (unreadable regardless of any numeric
         // rule, see `SilkTextError::OverlapsAnotherText`).
-        let overlaps_another_text = self.silk_texts.iter().filter(|t| Some(t.id) != ignore && t.layer == layer).any(|t| {
-            let other = t.stroke_segments();
-            segments.iter().any(|seg| {
-                other
-                    .iter()
-                    .any(|o| dist_segment_to_segment((seg.a, seg.b), (o.a, o.b)) < ((seg.width + o.width) / 2) as f64)
-            })
-        });
+        let overlaps_another_text = self
+            .silk_texts
+            .iter()
+            .filter(|t| Some(t.id) != ignore && t.layer == layer)
+            .any(|t| {
+                let other = t.stroke_segments();
+                segments.iter().any(|seg| {
+                    other.iter().any(|o| {
+                        dist_segment_to_segment((seg.a, seg.b), (o.a, o.b))
+                            < ((seg.width + o.width) / 2) as f64
+                    })
+                })
+            });
         if overlaps_another_text {
             return Err(SilkTextError::OverlapsAnotherText);
         }
@@ -2853,9 +3451,10 @@ impl BoardDoc {
         // Round silk (free dots + pin-1 markers) is ink too -- same
         // zero-tolerance touch rule as text-on-text above.
         let overlaps_a_dot = self.silk_dot_circles_on(layer, None, &[]).iter().any(|c| {
-            segments
-                .iter()
-                .any(|seg| dist_segment_to_segment((seg.a, seg.b), (c.center, c.center)) < (seg.width / 2 + c.radius) as f64)
+            segments.iter().any(|seg| {
+                dist_segment_to_segment((seg.a, seg.b), (c.center, c.center))
+                    < (seg.width / 2 + c.radius) as f64
+            })
         });
         if overlaps_a_dot {
             return Err(SilkTextError::OverlapsDot);
@@ -2874,11 +3473,26 @@ impl BoardDoc {
     /// clear) -- pass [`DEFAULT_SILK_TEXT_HEIGHT`] for the common case,
     /// or the GUI's own size-stepper value for a live preview that
     /// tracks it exactly.
-    pub fn check_silk_text_placement(&self, text: &str, position: Point, rotation_deg: f64, layer: LayerId, height: Unit) -> Result<(), SilkTextError> {
+    pub fn check_silk_text_placement(
+        &self,
+        text: &str,
+        position: Point,
+        rotation_deg: f64,
+        layer: LayerId,
+        height: Unit,
+    ) -> Result<(), SilkTextError> {
         if text.trim().is_empty() {
             return Err(SilkTextError::EmptyText);
         }
-        let candidate = SilkText { id: SilkTextId(0), text: text.to_string(), position, rotation_deg, layer, height, line_width: DEFAULT_SILK_LINE_WIDTH };
+        let candidate = SilkText {
+            id: SilkTextId(0),
+            text: text.to_string(),
+            position,
+            rotation_deg,
+            layer,
+            height,
+            line_width: DEFAULT_SILK_LINE_WIDTH,
+        };
         self.silk_text_fits(&candidate, None)
     }
 
@@ -2889,12 +3503,27 @@ impl BoardDoc {
     /// [`DEFAULT_SILK_TEXT_HEIGHT`]). Trial-first, same contract as
     /// every other placement primitive here: on any `Err`, nothing is
     /// added.
-    pub fn try_place_silk_text(&mut self, text: &str, position: Point, rotation_deg: f64, layer: LayerId, height: Unit) -> Result<SilkTextId, SilkTextError> {
+    pub fn try_place_silk_text(
+        &mut self,
+        text: &str,
+        position: Point,
+        rotation_deg: f64,
+        layer: LayerId,
+        height: Unit,
+    ) -> Result<SilkTextId, SilkTextError> {
         if text.trim().is_empty() {
             return Err(SilkTextError::EmptyText);
         }
         let id = SilkTextId(self.next_silk_text_serial);
-        let candidate = SilkText { id, text: text.to_string(), position, rotation_deg, layer, height, line_width: DEFAULT_SILK_LINE_WIDTH };
+        let candidate = SilkText {
+            id,
+            text: text.to_string(),
+            position,
+            rotation_deg,
+            layer,
+            height,
+            line_width: DEFAULT_SILK_LINE_WIDTH,
+        };
         self.silk_text_fits(&candidate, None)?;
         self.next_silk_text_serial += 1;
         self.silk_texts.push(candidate);
@@ -2909,13 +3538,24 @@ impl BoardDoc {
     /// parameter), or moving it even a fraction of a millimetre would
     /// always spuriously collide with its own, not-yet-updated old
     /// rectangle.
-    pub fn try_move_silk_text(&mut self, id: SilkTextId, position: Point, rotation_deg: f64) -> Result<(), SilkTextError> {
-        let Some(existing) = self.silk_texts.iter().find(|t| t.id == id) else { return Err(SilkTextError::NotFound) };
+    pub fn try_move_silk_text(
+        &mut self,
+        id: SilkTextId,
+        position: Point,
+        rotation_deg: f64,
+    ) -> Result<(), SilkTextError> {
+        let Some(existing) = self.silk_texts.iter().find(|t| t.id == id) else {
+            return Err(SilkTextError::NotFound);
+        };
         let mut candidate = existing.clone();
         candidate.position = position;
         candidate.rotation_deg = rotation_deg;
         self.silk_text_fits(&candidate, Some(id))?;
-        let slot = self.silk_texts.iter_mut().find(|t| t.id == id).expect("just found above");
+        let slot = self
+            .silk_texts
+            .iter_mut()
+            .find(|t| t.id == id)
+            .expect("just found above");
         slot.position = position;
         slot.rotation_deg = rotation_deg;
         Ok(())
@@ -2930,8 +3570,15 @@ impl BoardDoc {
     /// from the same-side overlap check exactly like the real commit
     /// does, so hovering back over its own current spot never shows a
     /// false "invalid" preview.
-    pub fn check_silk_text_move(&self, id: SilkTextId, position: Point, rotation_deg: f64) -> Result<(), SilkTextError> {
-        let Some(existing) = self.silk_texts.iter().find(|t| t.id == id) else { return Err(SilkTextError::NotFound) };
+    pub fn check_silk_text_move(
+        &self,
+        id: SilkTextId,
+        position: Point,
+        rotation_deg: f64,
+    ) -> Result<(), SilkTextError> {
+        let Some(existing) = self.silk_texts.iter().find(|t| t.id == id) else {
+            return Err(SilkTextError::NotFound);
+        };
         let mut candidate = existing.clone();
         candidate.position = position;
         candidate.rotation_deg = rotation_deg;
@@ -2945,12 +3592,22 @@ impl BoardDoc {
     /// size would be (a bigger character height grows
     /// [`SilkText::bounding_rect`], which can newly collide with a pad
     /// or another text that the smaller size used to clear).
-    pub fn try_resize_silk_text(&mut self, id: SilkTextId, height: Unit) -> Result<(), SilkTextError> {
-        let Some(existing) = self.silk_texts.iter().find(|t| t.id == id) else { return Err(SilkTextError::NotFound) };
+    pub fn try_resize_silk_text(
+        &mut self,
+        id: SilkTextId,
+        height: Unit,
+    ) -> Result<(), SilkTextError> {
+        let Some(existing) = self.silk_texts.iter().find(|t| t.id == id) else {
+            return Err(SilkTextError::NotFound);
+        };
         let mut candidate = existing.clone();
         candidate.height = height;
         self.silk_text_fits(&candidate, Some(id))?;
-        let slot = self.silk_texts.iter_mut().find(|t| t.id == id).expect("just found above");
+        let slot = self
+            .silk_texts
+            .iter_mut()
+            .find(|t| t.id == id)
+            .expect("just found above");
         slot.height = height;
         Ok(())
     }
@@ -2967,7 +3624,11 @@ impl BoardDoc {
     /// happen at all) -- functionally arbitrary either way, since only
     /// one is ever wanted per click.
     pub fn silk_text_at(&self, point: Point) -> Option<SilkTextId> {
-        self.silk_texts.iter().rev().find(|t| t.bounding_rect().contains_point(point)).map(|t| t.id)
+        self.silk_texts
+            .iter()
+            .rev()
+            .find(|t| t.bounding_rect().contains_point(point))
+            .map(|t| t.id)
     }
 
     /// Deletes a placed [`SilkText`] -- always succeeds if `id` exists
@@ -2988,11 +3649,25 @@ impl BoardDoc {
     /// [`Self::silk_circle_fits`] itself), so no rule ever sees a
     /// different set of dots than another. Markers only exist on the
     /// front side (see [`PlacedFootprint::pin1_marker`]).
-    fn silk_dot_circles_on(&self, layer: LayerId, ignore_dot: Option<SilkDotId>, ignore_markers: &[FootprintId]) -> Vec<Circle> {
-        let mut circles: Vec<Circle> =
-            self.silk_dots.iter().filter(|d| d.layer == layer && Some(d.id) != ignore_dot).map(|d| d.circle()).collect();
+    fn silk_dot_circles_on(
+        &self,
+        layer: LayerId,
+        ignore_dot: Option<SilkDotId>,
+        ignore_markers: &[FootprintId],
+    ) -> Vec<Circle> {
+        let mut circles: Vec<Circle> = self
+            .silk_dots
+            .iter()
+            .filter(|d| d.layer == layer && Some(d.id) != ignore_dot)
+            .map(|d| d.circle())
+            .collect();
         if layer == LayerId::FCu {
-            circles.extend(self.footprints.iter().filter(|fp| !ignore_markers.contains(&fp.id)).filter_map(|fp| fp.pin1_marker_circle()));
+            circles.extend(
+                self.footprints
+                    .iter()
+                    .filter(|fp| !ignore_markers.contains(&fp.id))
+                    .filter_map(|fp| fp.pin1_marker_circle()),
+            );
         }
         circles
     }
@@ -3013,22 +3688,32 @@ impl BoardDoc {
         ignore_dot: Option<SilkDotId>,
         ignore_marker_of: Option<FootprintId>,
     ) -> Result<(), SilkDotError> {
-        if !circle_within_outline(circle.center, circle.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE, &self.outline) {
+        if !circle_within_outline(
+            circle.center,
+            circle.radius + JlcpcbDfm::COPPER_TO_ROUTED_EDGE,
+            &self.outline,
+        ) {
             return Err(SilkDotError::OffBoard);
         }
 
         for item in self.node.iter() {
             match item {
-                Item::Pad { shape, layer: pad_layer, .. } if *pad_layer == layer => {
+                Item::Pad { shape, .. } if item.on_layer(layer) => {
                     let too_close = match shape {
                         PadShape::Circle(p) => circles_touch(circle, p, JlcpcbDfm::SILK_TO_PAD),
-                        PadShape::Polygon { outline, .. } => circle_polygon_collides(circle, outline, JlcpcbDfm::SILK_TO_PAD),
+                        PadShape::Polygon { outline, .. } => {
+                            circle_polygon_collides(circle, outline, JlcpcbDfm::SILK_TO_PAD)
+                        }
                     };
                     if too_close {
                         return Err(SilkDotError::TooCloseToPad);
                     }
                 }
-                Item::Track { shape, layer: track_layer, .. } if *track_layer == layer => {
+                Item::Track {
+                    shape,
+                    layer: track_layer,
+                    ..
+                } if *track_layer == layer => {
                     if circle_segment_collides(circle, shape, JlcpcbDfm::SILK_TO_PAD) {
                         return Err(SilkDotError::OverCopper);
                     }
@@ -3044,21 +3729,38 @@ impl BoardDoc {
             }
         }
 
-        if layer == LayerId::FCu && self.footprints.iter().any(|fp| circle_polygon_collides(circle, &fp.courtyard, 0)) {
+        if layer == LayerId::FCu
+            && self
+                .footprints
+                .iter()
+                .any(|fp| circle_polygon_collides(circle, &fp.courtyard, 0))
+        {
             return Err(SilkDotError::UnderComponentBody);
         }
 
-        let touches_text = self.silk_texts.iter().filter(|t| t.layer == layer).any(|t| {
-            t.stroke_segments()
-                .iter()
-                .any(|seg| dist_segment_to_segment((seg.a, seg.b), (circle.center, circle.center)) < (seg.width / 2 + circle.radius) as f64)
-        });
+        let touches_text = self
+            .silk_texts
+            .iter()
+            .filter(|t| t.layer == layer)
+            .any(|t| {
+                t.stroke_segments().iter().any(|seg| {
+                    dist_segment_to_segment((seg.a, seg.b), (circle.center, circle.center))
+                        < (seg.width / 2 + circle.radius) as f64
+                })
+            });
         if touches_text {
             return Err(SilkDotError::OverlapsSilk);
         }
 
-        let ignore_markers = ignore_marker_of.as_ref().map(std::slice::from_ref).unwrap_or(&[]);
-        if self.silk_dot_circles_on(layer, ignore_dot, ignore_markers).iter().any(|other| circles_touch(circle, other, 0)) {
+        let ignore_markers = ignore_marker_of
+            .as_ref()
+            .map(std::slice::from_ref)
+            .unwrap_or(&[]);
+        if self
+            .silk_dot_circles_on(layer, ignore_dot, ignore_markers)
+            .iter()
+            .any(|other| circles_touch(circle, other, 0))
+        {
             return Err(SilkDotError::OverlapsSilk);
         }
 
@@ -3067,16 +3769,36 @@ impl BoardDoc {
 
     /// Read-only legality check for the GUI's dot-placement ghost --
     /// same check-first split as [`Self::check_silk_text_placement`].
-    pub fn check_silk_dot_placement(&self, position: Point, diameter: Unit, layer: LayerId) -> Result<(), SilkDotError> {
-        let candidate = SilkDot { id: SilkDotId(0), position, diameter: diameter.max(JlcpcbDfm::MIN_SILK_LINE_WIDTH), layer };
+    pub fn check_silk_dot_placement(
+        &self,
+        position: Point,
+        diameter: Unit,
+        layer: LayerId,
+    ) -> Result<(), SilkDotError> {
+        let candidate = SilkDot {
+            id: SilkDotId(0),
+            position,
+            diameter: diameter.max(JlcpcbDfm::MIN_SILK_LINE_WIDTH),
+            layer,
+        };
         self.silk_circle_fits(&candidate.circle(), layer, None, None)
     }
 
     /// Places a new free-standing [`SilkDot`] -- trial-first, nothing
     /// added on `Err`, same contract as [`Self::try_place_silk_text`].
-    pub fn try_place_silk_dot(&mut self, position: Point, diameter: Unit, layer: LayerId) -> Result<SilkDotId, SilkDotError> {
+    pub fn try_place_silk_dot(
+        &mut self,
+        position: Point,
+        diameter: Unit,
+        layer: LayerId,
+    ) -> Result<SilkDotId, SilkDotError> {
         let id = SilkDotId(self.next_silk_dot_serial);
-        let candidate = SilkDot { id, position, diameter: diameter.max(JlcpcbDfm::MIN_SILK_LINE_WIDTH), layer };
+        let candidate = SilkDot {
+            id,
+            position,
+            diameter: diameter.max(JlcpcbDfm::MIN_SILK_LINE_WIDTH),
+            layer,
+        };
         self.silk_circle_fits(&candidate.circle(), layer, None, None)?;
         self.next_silk_dot_serial += 1;
         self.silk_dots.push(candidate);
@@ -3087,7 +3809,9 @@ impl BoardDoc {
     /// live drag preview's per-frame check, excluding the dot's own
     /// current spot exactly like the real commit does.
     pub fn check_silk_dot_move(&self, id: SilkDotId, position: Point) -> Result<(), SilkDotError> {
-        let Some(existing) = self.silk_dots.iter().find(|d| d.id == id) else { return Err(SilkDotError::NotFound) };
+        let Some(existing) = self.silk_dots.iter().find(|d| d.id == id) else {
+            return Err(SilkDotError::NotFound);
+        };
         let candidate = Circle::new(position, existing.diameter / 2);
         self.silk_circle_fits(&candidate, existing.layer, Some(id), None)
     }
@@ -3096,9 +3820,17 @@ impl BoardDoc {
     /// under the same rules as a fresh placement -- its own current
     /// spot excluded from the overlap check, mirroring
     /// [`Self::try_move_silk_text`].
-    pub fn try_move_silk_dot(&mut self, id: SilkDotId, position: Point) -> Result<(), SilkDotError> {
+    pub fn try_move_silk_dot(
+        &mut self,
+        id: SilkDotId,
+        position: Point,
+    ) -> Result<(), SilkDotError> {
         self.check_silk_dot_move(id, position)?;
-        let slot = self.silk_dots.iter_mut().find(|d| d.id == id).expect("checked above");
+        let slot = self
+            .silk_dots
+            .iter_mut()
+            .find(|d| d.id == id)
+            .expect("checked above");
         slot.position = position;
         Ok(())
     }
@@ -3107,12 +3839,22 @@ impl BoardDoc {
     /// the GUI's size stepper for a selected dot, refused if the
     /// bigger dot would newly collide, mirroring
     /// [`Self::try_resize_silk_text`].
-    pub fn try_resize_silk_dot(&mut self, id: SilkDotId, diameter: Unit) -> Result<(), SilkDotError> {
-        let Some(existing) = self.silk_dots.iter().find(|d| d.id == id) else { return Err(SilkDotError::NotFound) };
+    pub fn try_resize_silk_dot(
+        &mut self,
+        id: SilkDotId,
+        diameter: Unit,
+    ) -> Result<(), SilkDotError> {
+        let Some(existing) = self.silk_dots.iter().find(|d| d.id == id) else {
+            return Err(SilkDotError::NotFound);
+        };
         let clamped = diameter.max(JlcpcbDfm::MIN_SILK_LINE_WIDTH);
         let candidate = Circle::new(existing.position, clamped / 2);
         self.silk_circle_fits(&candidate, existing.layer, Some(id), None)?;
-        let slot = self.silk_dots.iter_mut().find(|d| d.id == id).expect("just found above");
+        let slot = self
+            .silk_dots
+            .iter_mut()
+            .find(|d| d.id == id)
+            .expect("just found above");
         slot.diameter = clamped;
         Ok(())
     }
@@ -3127,7 +3869,8 @@ impl BoardDoc {
             .rev()
             .find(|d| {
                 let hit_radius = (d.diameter / 2).max(MM / 4);
-                ((d.position.x - point.x) as f64).hypot((d.position.y - point.y) as f64) < hit_radius as f64
+                ((d.position.x - point.x) as f64).hypot((d.position.y - point.y) as f64)
+                    < hit_radius as f64
             })
             .map(|d| d.id)
     }
@@ -3151,10 +3894,21 @@ impl BoardDoc {
     /// orphaned dot; if nothing within the cap fits, refuse with
     /// [`SilkDotError::NoRoomNearPin1`]. The winning spot is stored as
     /// a footprint-local offset so it rides along with move/rotate.
-    pub fn try_enable_pin1_marker(&mut self, id: FootprintId, template: &FootprintTemplate) -> Result<(), SilkDotError> {
-        let Some(fp_index) = self.footprints.iter().position(|f| f.id == id) else { return Err(SilkDotError::NotFound) };
+    pub fn try_enable_pin1_marker(
+        &mut self,
+        id: FootprintId,
+        template: &FootprintTemplate,
+    ) -> Result<(), SilkDotError> {
+        let Some(fp_index) = self.footprints.iter().position(|f| f.id == id) else {
+            return Err(SilkDotError::NotFound);
+        };
         let fp = &self.footprints[fp_index];
-        let Some(pad1) = template.pads.iter().find(|p| p.number == "1").or_else(|| template.pads.first()) else {
+        let Some(pad1) = template
+            .pads
+            .iter()
+            .find(|p| p.number == "1")
+            .or_else(|| template.pads.first())
+        else {
             return Err(SilkDotError::NoRoomNearPin1);
         };
         let radius = PIN1_MARKER_DIAMETER / 2;
@@ -3174,15 +3928,22 @@ impl BoardDoc {
             (pad1.offset.y as f64).atan2(pad1.offset.x as f64)
         };
         let step_degs = [
-            0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 90.0, -90.0, 120.0, -120.0, 150.0, -150.0, 180.0,
+            0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 90.0, -90.0, 120.0, -120.0,
+            150.0, -150.0, 180.0,
         ];
         for &extra_mm in &ring_extras_mm {
             let dist = base_dist + extra_mm * MM as f64;
             for step_deg in step_degs {
                 let angle = base_angle + (step_deg as f64).to_radians();
-                let local = Point::new(pad1.offset.x + (dist * angle.cos()).round() as Unit, pad1.offset.y + (dist * angle.sin()).round() as Unit);
+                let local = Point::new(
+                    pad1.offset.x + (dist * angle.cos()).round() as Unit,
+                    pad1.offset.y + (dist * angle.sin()).round() as Unit,
+                );
                 let world = Circle::new(local.rotated(fp.rotation_deg).add(fp.position), radius);
-                if self.silk_circle_fits(&world, LayerId::FCu, None, Some(id)).is_ok() {
+                if self
+                    .silk_circle_fits(&world, LayerId::FCu, None, Some(id))
+                    .is_ok()
+                {
                     self.footprints[fp_index].pin1_marker = Some(local);
                     return Ok(());
                 }
@@ -3211,11 +3972,21 @@ impl BoardDoc {
     /// cannot host a legal dot are skipped and listed in the report.
     /// Successful enables share one undo step when the caller wraps this
     /// in a single document mutation.
-    pub fn try_enable_pin1_markers_for_all(&mut self, templates: &[FootprintTemplate]) -> Pin1BatchReport {
+    pub fn try_enable_pin1_markers_for_all(
+        &mut self,
+        templates: &[FootprintTemplate],
+    ) -> Pin1BatchReport {
         let jobs: Vec<(FootprintId, String, String, bool)> = self
             .footprints
             .iter()
-            .map(|fp| (fp.id, fp.reference.clone(), fp.template_name.clone(), fp.pin1_marker.is_some()))
+            .map(|fp| {
+                (
+                    fp.id,
+                    fp.reference.clone(),
+                    fp.template_name.clone(),
+                    fp.pin1_marker.is_some(),
+                )
+            })
             .collect();
         let mut report = Pin1BatchReport::default();
         for (id, reference, template_name, already) in jobs {
@@ -3224,7 +3995,10 @@ impl BoardDoc {
                 continue;
             }
             let Some(template) = templates.iter().find(|t| t.name == template_name) else {
-                report.failed.push((reference, format!("template \"{template_name}\" missing from library")));
+                report.failed.push((
+                    reference,
+                    format!("template \"{template_name}\" missing from library"),
+                ));
                 continue;
             };
             if template.pads.is_empty() {
@@ -3250,7 +4024,12 @@ impl BoardDoc {
     /// later `refill_zone` (once the board around it changes) can still
     /// find it and try again, rather than the user having to redraw it
     /// from scratch.
-    pub fn add_zone(&mut self, outline: Polygon, layer: LayerId, net: NetId) -> Result<ZoneId, zone_fill::FillZoneError> {
+    pub fn add_zone(
+        &mut self,
+        outline: Polygon,
+        layer: LayerId,
+        net: NetId,
+    ) -> Result<ZoneId, zone_fill::FillZoneError> {
         // Read *before* computing the fill -- not that it matters here,
         // since inserting the resulting `Item::Zone`(s) never itself
         // bumps `obstacle_revision` (see that field's own doc comment),
@@ -3262,8 +4041,21 @@ impl BoardDoc {
         let resolver = self.resolver();
         let spoke_width = self.thermal_spoke_width();
         let map = self.thermal_exclude_map();
-        let exclude = |center: Point| map.get(&(center.x, center.y)).cloned().unwrap_or_else(|| self_exclude(center));
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width, &exclude)?;
+        let exclude = |center: Point| {
+            map.get(&(center.x, center.y))
+                .cloned()
+                .unwrap_or_else(|| self_exclude(center))
+        };
+        let items = zone_fill::fill_zone(
+            &outline,
+            layer,
+            net,
+            &self.outline,
+            &self.node,
+            resolver,
+            spoke_width,
+            &exclude,
+        )?;
         Ok(self.insert_new_zone(outline, layer, net, items, filled_at_revision))
     }
 
@@ -3277,11 +4069,25 @@ impl BoardDoc {
     /// `self.node.obstacle_revision()` read from *before* it computed
     /// `items`, exactly like [`Self::add_zone`] reads it above -- not
     /// re-read here, since the live revision may have moved on.
-    pub(crate) fn insert_new_zone(&mut self, outline: Polygon, layer: LayerId, net: NetId, items: Vec<Item>, filled_at_revision: u64) -> ZoneId {
+    pub(crate) fn insert_new_zone(
+        &mut self,
+        outline: Polygon,
+        layer: LayerId,
+        net: NetId,
+        items: Vec<Item>,
+        filled_at_revision: u64,
+    ) -> ZoneId {
         self.next_zone_serial += 1;
         let id = ZoneId(self.next_zone_serial);
         let item_ids = items.into_iter().map(|item| self.node.add(item)).collect();
-        self.zones.push(ZoneRecord { id, outline, layer, net, item_ids, filled_at_revision });
+        self.zones.push(ZoneRecord {
+            id,
+            outline,
+            layer,
+            net,
+            item_ids,
+            filled_at_revision,
+        });
         id
     }
 
@@ -3291,7 +4097,9 @@ impl BoardDoc {
     /// a fresh fill so the pour never treats its own previous islands as
     /// obstacles. A no-op if `id` doesn't name a currently-recorded zone.
     pub(crate) fn clear_zone_fill(&mut self, id: ZoneId) {
-        let Some(index) = self.zones.iter().position(|z| z.id == id) else { return };
+        let Some(index) = self.zones.iter().position(|z| z.id == id) else {
+            return;
+        };
         for item_id in std::mem::take(&mut self.zones[index].item_ids) {
             self.node.remove(item_id);
         }
@@ -3303,8 +4111,15 @@ impl BoardDoc {
     /// exists. `items` must be exactly what `zone_fill::fill_zone`
     /// returned for `id`'s own recorded `outline`/`layer`/`net`. A
     /// no-op if `id` no longer names a live zone.
-    pub(crate) fn insert_zone_refill(&mut self, id: ZoneId, items: Vec<Item>, filled_at_revision: u64) {
-        let Some(index) = self.zones.iter().position(|z| z.id == id) else { return };
+    pub(crate) fn insert_zone_refill(
+        &mut self,
+        id: ZoneId,
+        items: Vec<Item>,
+        filled_at_revision: u64,
+    ) {
+        let Some(index) = self.zones.iter().position(|z| z.id == id) else {
+            return;
+        };
         self.zones[index].item_ids = items.into_iter().map(|item| self.node.add(item)).collect();
         self.zones[index].filled_at_revision = filled_at_revision;
     }
@@ -3318,15 +4133,34 @@ impl BoardDoc {
     /// `self.node` first, so a shrinking pour never leaves stale copper
     /// behind. A no-op if `id` doesn't name a currently-recorded zone.
     pub fn refill_zone(&mut self, id: ZoneId) -> Result<(), zone_fill::FillZoneError> {
-        let Some(index) = self.zones.iter().position(|z| z.id == id) else { return Ok(()) };
-        let (outline, layer, net) = (self.zones[index].outline.clone(), self.zones[index].layer, self.zones[index].net);
+        let Some(index) = self.zones.iter().position(|z| z.id == id) else {
+            return Ok(());
+        };
+        let (outline, layer, net) = (
+            self.zones[index].outline.clone(),
+            self.zones[index].layer,
+            self.zones[index].net,
+        );
         let resolver = self.resolver();
         let spoke_width = self.thermal_spoke_width();
         let map = self.thermal_exclude_map();
-        let exclude = |center: Point| map.get(&(center.x, center.y)).cloned().unwrap_or_else(|| self_exclude(center));
+        let exclude = |center: Point| {
+            map.get(&(center.x, center.y))
+                .cloned()
+                .unwrap_or_else(|| self_exclude(center))
+        };
         // Validate/compute before clearing so a refused fill leaves prior
         // copper (zones stay stale with an error rather than going empty).
-        let items = zone_fill::fill_zone(&outline, layer, net, &self.outline, &self.node, resolver, spoke_width, &exclude)?;
+        let items = zone_fill::fill_zone(
+            &outline,
+            layer,
+            net,
+            &self.outline,
+            &self.node,
+            resolver,
+            spoke_width,
+            &exclude,
+        )?;
         self.clear_zone_fill(id);
         let filled_at_revision = self.node.obstacle_revision();
         self.insert_zone_refill(id, items, filled_at_revision);
@@ -3368,7 +4202,9 @@ impl BoardDoc {
     /// stop tracking it) but generically useful beyond that. A no-op if
     /// `id` doesn't name a currently-recorded zone.
     pub fn remove_zone(&mut self, id: ZoneId) {
-        let Some(index) = self.zones.iter().position(|z| z.id == id) else { return };
+        let Some(index) = self.zones.iter().position(|z| z.id == id) else {
+            return;
+        };
         let record = self.zones.remove(index);
         for item_id in record.item_ids {
             self.node.remove(item_id);
@@ -3377,12 +4213,65 @@ impl BoardDoc {
 
     fn set_pad_net(&mut self, id: ItemId, net: Option<NetId>) -> Result<(), NetError> {
         match self.node.get(id).cloned() {
-            Some(Item::Pad { shape, layer, zone_connection, .. }) => {
-                self.node.replace(id, Item::Pad { shape, net, layer, zone_connection });
+            Some(Item::Pad {
+                shape,
+                layer,
+                zone_connection,
+                hole_diameter,
+                ..
+            }) => {
+                self.node.replace(
+                    id,
+                    Item::Pad {
+                        shape,
+                        net,
+                        layer,
+                        zone_connection,
+                        hole_diameter,
+                    },
+                );
                 Ok(())
             }
             _ => Err(NetError::NotAPad),
         }
+    }
+
+    /// Sets every pad of `id` to `conn` (one Ctrl+Z). Used by the
+    /// selected-footprint "Pour connection" control so a wire pad can
+    /// switch Thermal ↔ Solid without a second footprint.
+    pub fn set_footprint_zone_connection(
+        &mut self,
+        id: FootprintId,
+        conn: ZoneConnection,
+    ) -> Result<(), NetError> {
+        let Some(fp) = self.footprints.iter().find(|f| f.id == id) else {
+            return Err(NetError::NotAPad);
+        };
+        let pad_ids = fp.pad_item_ids.clone();
+        for pad_id in pad_ids {
+            match self.node.get(pad_id).cloned() {
+                Some(Item::Pad {
+                    shape,
+                    layer,
+                    net,
+                    hole_diameter,
+                    ..
+                }) => {
+                    self.node.replace(
+                        pad_id,
+                        Item::Pad {
+                            shape,
+                            net,
+                            layer,
+                            zone_connection: conn,
+                            hole_diameter,
+                        },
+                    );
+                }
+                _ => return Err(NetError::NotAPad),
+            }
+        }
+        Ok(())
     }
 
     /// Creates a brand new, still-empty net (no pads assigned yet) with
@@ -3394,7 +4283,10 @@ impl BoardDoc {
     pub fn create_net(&mut self) -> NetId {
         self.next_net_serial += 1;
         let id = NetId(self.next_net_serial);
-        self.nets.push(NetRecord { id, name: format!("Net{}", self.next_net_serial) });
+        self.nets.push(NetRecord {
+            id,
+            name: format!("Net{}", self.next_net_serial),
+        });
         id
     }
 
@@ -3426,7 +4318,11 @@ impl BoardDoc {
         if self.nets.iter().any(|n| n.id != net && n.name == trimmed) {
             return Err(RenameNetError::NameAlreadyUsed);
         }
-        let record = self.nets.iter_mut().find(|n| n.id == net).ok_or(RenameNetError::NotFound)?;
+        let record = self
+            .nets
+            .iter_mut()
+            .find(|n| n.id == net)
+            .ok_or(RenameNetError::NotFound)?;
         record.name = trimmed.to_string();
         Ok(())
     }
@@ -3439,14 +4335,21 @@ impl BoardDoc {
     /// of them, not only pads. A UI pin-*count* display wants
     /// [`Self::pad_count_on_net`] instead.
     pub fn pads_on_net(&self, id: NetId) -> Vec<ItemId> {
-        self.node.iter_with_ids().filter(|(_, item)| item.net() == Some(id)).map(|(item_id, _)| item_id).collect()
+        self.node
+            .iter_with_ids()
+            .filter(|(_, item)| item.net() == Some(id))
+            .map(|(item_id, _)| item_id)
+            .collect()
     }
 
     /// How many actual `Item::Pad`s (not tracks/vias/zones -- see
     /// [`Self::pads_on_net`]'s doc comment) sit on `id` -- what a "N
     /// pin(s)" UI label should count.
     pub fn pad_count_on_net(&self, id: NetId) -> usize {
-        self.node.iter().filter(|item| matches!(item, Item::Pad { .. }) && item.net() == Some(id)).count()
+        self.node
+            .iter()
+            .filter(|item| matches!(item, Item::Pad { .. }) && item.net() == Some(id))
+            .count()
     }
 
     /// Direct pin-to-net assignment (no schematic): joins pads `a` and
@@ -3502,7 +4405,9 @@ impl BoardDoc {
         let stale_copper: Vec<ItemId> = self
             .node
             .iter_with_ids()
-            .filter(|(_, item)| matches!(item, Item::Track { .. } | Item::Via { .. }) && item.net() == Some(id))
+            .filter(|(_, item)| {
+                matches!(item, Item::Track { .. } | Item::Via { .. }) && item.net() == Some(id)
+            })
             .map(|(item_id, _)| item_id)
             .collect();
         for item_id in stale_copper {
@@ -3523,7 +4428,12 @@ impl BoardDoc {
     /// centerline.
     pub fn track_at(&self, point: Point, tolerance: Unit) -> Option<ItemId> {
         self.node.iter_with_ids().find_map(|(id, item)| match item {
-            Item::Track { shape, .. } if alladin_geom::dist_point_to_line(point, shape.a, shape.b) <= (shape.width / 2 + tolerance) as f64 => Some(id),
+            Item::Track { shape, .. }
+                if alladin_geom::dist_point_to_line(point, shape.a, shape.b)
+                    <= (shape.width / 2 + tolerance) as f64 =>
+            {
+                Some(id)
+            }
             _ => None,
         })
     }
@@ -3533,7 +4443,11 @@ impl BoardDoc {
     /// [`Self::track_at`], for the same "delete this one via" gesture.
     pub fn via_at(&self, point: Point, tolerance: Unit) -> Option<ItemId> {
         self.node.iter_with_ids().find_map(|(id, item)| match item {
-            Item::Via { shape, .. } if shape.center.distance(point) <= (shape.radius + tolerance) as f64 => Some(id),
+            Item::Via { shape, .. }
+                if shape.center.distance(point) <= (shape.radius + tolerance) as f64 =>
+            {
+                Some(id)
+            }
             _ => None,
         })
     }
@@ -3610,8 +4524,12 @@ impl BoardDoc {
                 continue;
             }
             let own_touches: Vec<(Point, LayerId)> = match self.node.get(current) {
-                Some(Item::Track { shape, layer, .. }) => vec![(shape.a, *layer), (shape.b, *layer)],
-                Some(Item::Via { shape, .. }) => vec![(shape.center, LayerId::FCu), (shape.center, LayerId::BCu)],
+                Some(Item::Track { shape, layer, .. }) => {
+                    vec![(shape.a, *layer), (shape.b, *layer)]
+                }
+                Some(Item::Via { shape, .. }) => {
+                    vec![(shape.center, LayerId::FCu), (shape.center, LayerId::BCu)]
+                }
                 _ => Vec::new(),
             };
             for &(point, layer) in &own_touches {
@@ -3688,11 +4606,21 @@ mod tests {
 
     #[test]
     fn create_builds_a_single_outline_polygon_around_the_origin() {
-        let params = NewBoardParams { width_mm: 40.0, height_mm: 20.0, layer_count: LayerCount::Two, copper_weight: CopperWeight::OneOz, corner_radius_mm: 0.5 };
+        let params = NewBoardParams {
+            width_mm: 40.0,
+            height_mm: 20.0,
+            layer_count: LayerCount::Two,
+            copper_weight: CopperWeight::OneOz,
+            corner_radius_mm: 0.5,
+        };
         let doc = params.create();
         assert_eq!(doc.outline.len(), 1);
         assert!(doc.outline[0].contains_point(alladin_geom::Point::new(0, 0)));
-        assert_eq!(doc.node.iter().count(), 0, "a freshly created board must start with no items");
+        assert_eq!(
+            doc.node.iter().count(),
+            0,
+            "a freshly created board must start with no items"
+        );
     }
 
     #[test]
@@ -3718,15 +4646,36 @@ mod tests {
 
     #[test]
     fn pad_to_pad_clearance_matches_each_profiles_own_constant() {
-        let one_oz = NewBoardParams { width_mm: 40.0, height_mm: 40.0, layer_count: LayerCount::Two, copper_weight: CopperWeight::OneOz, corner_radius_mm: 0.0 }.create();
+        let one_oz = NewBoardParams {
+            width_mm: 40.0,
+            height_mm: 40.0,
+            layer_count: LayerCount::Two,
+            copper_weight: CopperWeight::OneOz,
+            corner_radius_mm: 0.0,
+        }
+        .create();
         assert_eq!(one_oz.pad_to_pad_clearance(), JlcpcbClearance::PAD_TO_PAD);
 
-        let two_oz = NewBoardParams { width_mm: 40.0, height_mm: 40.0, layer_count: LayerCount::Two, copper_weight: CopperWeight::TwoOz, corner_radius_mm: 0.0 }.create();
+        let two_oz = NewBoardParams {
+            width_mm: 40.0,
+            height_mm: 40.0,
+            layer_count: LayerCount::Two,
+            copper_weight: CopperWeight::TwoOz,
+            corner_radius_mm: 0.0,
+        }
+        .create();
         assert_eq!(two_oz.pad_to_pad_clearance(), Jlcpcb2Layer2Oz::PAD_TO_PAD, "must go through resolver()-style copper-weight dispatch, not a hardcoded single profile");
     }
 
     fn test_board() -> BoardDoc {
-        NewBoardParams { width_mm: 40.0, height_mm: 40.0, layer_count: LayerCount::Two, copper_weight: CopperWeight::OneOz, corner_radius_mm: 0.0 }.create()
+        NewBoardParams {
+            width_mm: 40.0,
+            height_mm: 40.0,
+            layer_count: LayerCount::Two,
+            copper_weight: CopperWeight::OneOz,
+            corner_radius_mm: 0.0,
+        }
+        .create()
     }
 
     fn two_pin_template() -> crate::footprint::FootprintTemplate {
@@ -3742,20 +4691,35 @@ mod tests {
         for pad in &mut template.pads {
             pad.number = "41".into();
         }
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let reference = board.footprints[0].reference.clone();
         let templates = vec![template];
         let pads = board.find_pads(&templates, &reference, "41");
         assert_eq!(pads.len(), 2, "both same-numbered pads must resolve");
-        assert_eq!(board.find_pad(&templates, &reference, "41"), Some(pads[0]), "find_pad stays the first of them");
-        assert!(board.find_pads(&templates, &reference, "1").is_empty(), "renumbered pads must not answer to their old numbers");
+        assert_eq!(
+            board.find_pad(&templates, &reference, "41"),
+            Some(pads[0]),
+            "find_pad stays the first of them"
+        );
+        assert!(
+            board.find_pads(&templates, &reference, "1").is_empty(),
+            "renumbered pads must not answer to their old numbers"
+        );
     }
 
     #[test]
     fn try_place_silk_text_succeeds_in_open_space_and_is_recorded() {
         let mut board = test_board();
         let id = board
-            .try_place_silk_text("HELLO", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT)
+            .try_place_silk_text(
+                "HELLO",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
             .expect("center of an empty board must be legal");
         assert_eq!(board.silk_texts.len(), 1);
         assert_eq!(board.silk_texts[0].id, id);
@@ -3765,15 +4729,41 @@ mod tests {
     #[test]
     fn try_place_silk_text_rejects_empty_or_whitespace_only_text() {
         let mut board = test_board();
-        assert_eq!(board.try_place_silk_text("", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT), Err(SilkTextError::EmptyText));
-        assert_eq!(board.try_place_silk_text("   ", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT), Err(SilkTextError::EmptyText));
+        assert_eq!(
+            board.try_place_silk_text(
+                "",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT
+            ),
+            Err(SilkTextError::EmptyText)
+        );
+        assert_eq!(
+            board.try_place_silk_text(
+                "   ",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT
+            ),
+            Err(SilkTextError::EmptyText)
+        );
         assert!(board.silk_texts.is_empty());
     }
 
     #[test]
     fn try_place_silk_text_rejects_off_board() {
         let mut board = test_board();
-        let err = board.try_place_silk_text("X", Point::new(1_000 * MM, 1_000 * MM), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap_err();
+        let err = board
+            .try_place_silk_text(
+                "X",
+                Point::new(1_000 * MM, 1_000 * MM),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap_err();
         assert_eq!(err, SilkTextError::OffBoard);
         assert!(board.silk_texts.is_empty());
     }
@@ -3782,12 +4772,22 @@ mod tests {
     fn try_place_silk_text_rejects_printing_over_a_same_side_pad() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         // Template's own pad sits at world x = +1.27mm on `FCu` (see
         // `try_place_footprint_succeeds_in_open_space_...`'s sibling
         // tests for this same template's real geometry) -- centering
         // text right on top of it must collide.
-        let err = board.try_place_silk_text("X", Point::new((1.27 * MM as f64) as Unit, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap_err();
+        let err = board
+            .try_place_silk_text(
+                "X",
+                Point::new((1.27 * MM as f64) as Unit, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap_err();
         assert_eq!(err, SilkTextError::TooCloseToPad);
     }
 
@@ -3795,30 +4795,72 @@ mod tests {
     fn try_place_silk_text_ignores_a_pad_on_the_opposite_side() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         // Same world position as the previous test's colliding case,
         // but on `BCu` -- the pad is physically on the opposite face
         // of the board, so back-side silk must be unaffected by it.
         board
-            .try_place_silk_text("X", Point::new((1.27 * MM as f64) as Unit, 0), 0.0, LayerId::BCu, DEFAULT_SILK_TEXT_HEIGHT)
+            .try_place_silk_text(
+                "X",
+                Point::new((1.27 * MM as f64) as Unit, 0),
+                0.0,
+                LayerId::BCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
             .expect("a front-side pad must not block back-side silk");
     }
 
     #[test]
     fn try_place_silk_text_rejects_overlapping_another_text_on_the_same_side() {
         let mut board = test_board();
-        board.try_place_silk_text("FIRST", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
-        let err = board.try_place_silk_text("SECOND", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap_err();
+        board
+            .try_place_silk_text(
+                "FIRST",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
+        let err = board
+            .try_place_silk_text(
+                "SECOND",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap_err();
         assert_eq!(err, SilkTextError::OverlapsAnotherText);
-        assert_eq!(board.silk_texts.len(), 1, "the rejected second text must not be added");
+        assert_eq!(
+            board.silk_texts.len(),
+            1,
+            "the rejected second text must not be added"
+        );
     }
 
     #[test]
     fn try_place_silk_text_allows_the_same_spot_on_the_opposite_side() {
         let mut board = test_board();
-        board.try_place_silk_text("FIRST", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
         board
-            .try_place_silk_text("SECOND", Point::new(0, 0), 0.0, LayerId::BCu, DEFAULT_SILK_TEXT_HEIGHT)
+            .try_place_silk_text(
+                "FIRST",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
+        board
+            .try_place_silk_text(
+                "SECOND",
+                Point::new(0, 0),
+                0.0,
+                LayerId::BCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
             .expect("front and back silk never overlap each other physically");
         assert_eq!(board.silk_texts.len(), 2);
     }
@@ -3835,9 +4877,17 @@ mod tests {
         // host text is 2mm tall so its space is genuinely wider than
         // the 1mm dot's own cell -- merely *touching* cells still
         // count as overlapping.
-        board.try_place_silk_text("A B", Point::new(0, 0), 0.0, LayerId::FCu, mm_to_unit(2.0)).unwrap();
         board
-            .try_place_silk_text(".", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT)
+            .try_place_silk_text("A B", Point::new(0, 0), 0.0, LayerId::FCu, mm_to_unit(2.0))
+            .unwrap();
+        board
+            .try_place_silk_text(
+                ".",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
             .expect("a dot in the blank gap between \"A\" and \"B\" overlaps no real ink");
         assert_eq!(board.silk_texts.len(), 2);
     }
@@ -3846,11 +4896,21 @@ mod tests {
     fn try_place_silk_text_rejects_printing_under_a_component_body() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         // Dead center between the template's two pads: clears both
         // pads' own `SILK_TO_PAD` margin, but sits squarely under the
         // part's body/courtyard -- unreadable on the real board.
-        let err = board.try_place_silk_text("X", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap_err();
+        let err = board
+            .try_place_silk_text(
+                "X",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap_err();
         assert_eq!(err, SilkTextError::UnderComponentBody);
         assert!(board.silk_texts.is_empty());
     }
@@ -3858,16 +4918,28 @@ mod tests {
     #[test]
     fn try_place_footprint_rejects_landing_on_existing_silk_text() {
         let mut board = test_board();
-        board.try_place_silk_text("LABEL", Point::new(5 * MM, 5 * MM), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
+        board
+            .try_place_silk_text(
+                "LABEL",
+                Point::new(5 * MM, 5 * MM),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
         let template = two_pin_template();
         // The exact mirror of `try_place_silk_text_rejects_printing_over_a_same_side_pad`:
         // the outcome must not depend on whether the part or the text
         // came first.
-        let err = board.try_place_footprint(&template, Point::new(5 * MM, 5 * MM), 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, Point::new(5 * MM, 5 * MM), 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::OverSilkText);
         assert!(board.footprints.is_empty());
         // Well away from the text, the same part still places fine.
-        board.try_place_footprint(&template, Point::new(-10 * MM, -10 * MM), 0.0).expect("clear of the text, placement must succeed");
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, -10 * MM), 0.0)
+            .expect("clear of the text, placement must succeed");
     }
 
     #[test]
@@ -3887,36 +4959,72 @@ mod tests {
         // band around the anchor's x must be entirely stroke-free.
         let gap_half_width = DEFAULT_SILK_TEXT_HEIGHT / 8;
         assert!(
-            !segments.iter().any(|s| s.a.x.min(s.b.x) < gap_half_width && s.a.x.max(s.b.x) > -gap_half_width),
+            !segments
+                .iter()
+                .any(|s| s.a.x.min(s.b.x) < gap_half_width && s.a.x.max(s.b.x) > -gap_half_width),
             "the blank space in \"a g\" must contain no stroke at all"
         );
         // Only the right half (the "g") may reach below the baseline
         // -- its descender is its own, not the "a"'s.
-        let lowest_left = segments.iter().filter(|s| s.a.x < 0).map(|s| s.a.y.max(s.b.y)).max().unwrap();
-        let lowest_right = segments.iter().filter(|s| s.a.x > 0).map(|s| s.a.y.max(s.b.y)).max().unwrap();
-        assert!(lowest_right > lowest_left, "only the \"g\"'s own strokes may reach below the \"a\"'s baseline");
+        let lowest_left = segments
+            .iter()
+            .filter(|s| s.a.x < 0)
+            .map(|s| s.a.y.max(s.b.y))
+            .max()
+            .unwrap();
+        let lowest_right = segments
+            .iter()
+            .filter(|s| s.a.x > 0)
+            .map(|s| s.a.y.max(s.b.y))
+            .max()
+            .unwrap();
+        assert!(
+            lowest_right > lowest_left,
+            "only the \"g\"'s own strokes may reach below the \"a\"'s baseline"
+        );
     }
 
     #[test]
     fn try_move_silk_text_can_move_back_onto_its_own_current_spot() {
         let mut board = test_board();
-        let id = board.try_place_silk_text("X", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
+        let id = board
+            .try_place_silk_text(
+                "X",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
         // Must not spuriously "collide" with its own, not-yet-updated
         // rectangle -- see `silk_text_fits`'s `ignore` parameter.
-        board.try_move_silk_text(id, Point::new(0, 0), 90.0).expect("a text must be able to rotate in place");
+        board
+            .try_move_silk_text(id, Point::new(0, 0), 90.0)
+            .expect("a text must be able to rotate in place");
         assert_eq!(board.silk_texts[0].rotation_deg, 90.0);
     }
 
     #[test]
     fn try_move_silk_text_reports_not_found_for_an_unknown_id() {
         let mut board = test_board();
-        assert_eq!(board.try_move_silk_text(SilkTextId(999), Point::new(0, 0), 0.0), Err(SilkTextError::NotFound));
+        assert_eq!(
+            board.try_move_silk_text(SilkTextId(999), Point::new(0, 0), 0.0),
+            Err(SilkTextError::NotFound)
+        );
     }
 
     #[test]
     fn remove_silk_text_removes_an_existing_one_and_reports_false_for_an_unknown_id() {
         let mut board = test_board();
-        let id = board.try_place_silk_text("X", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
+        let id = board
+            .try_place_silk_text(
+                "X",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
         assert!(!board.remove_silk_text(SilkTextId(999)));
         assert!(board.remove_silk_text(id));
         assert!(board.silk_texts.is_empty());
@@ -3925,8 +5033,20 @@ mod tests {
     #[test]
     fn silk_text_at_finds_a_placed_text_by_a_point_inside_its_bounding_rect_but_not_far_away() {
         let mut board = test_board();
-        let id = board.try_place_silk_text("HELLO", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
-        assert_eq!(board.silk_text_at(Point::new(0, 0)), Some(id), "dead center must always be inside its own bounding rect");
+        let id = board
+            .try_place_silk_text(
+                "HELLO",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
+        assert_eq!(
+            board.silk_text_at(Point::new(0, 0)),
+            Some(id),
+            "dead center must always be inside its own bounding rect"
+        );
         assert_eq!(board.silk_text_at(Point::new(19 * MM, 19 * MM)), None);
     }
 
@@ -3943,7 +5063,10 @@ mod tests {
         };
         let top = no_descender.bounding_rect().points[0].y;
         let bottom = no_descender.bounding_rect().points[2].y;
-        assert!(top < 0 && bottom > 0, "the anchor must sit inside the ink box (KiCad centers its text on the anchor)");
+        assert!(
+            top < 0 && bottom > 0,
+            "the anchor must sit inside the ink box (KiCad centers its text on the anchor)"
+        );
         // Real Hershey ink: roughly one cap height tall plus the
         // stroke width's own padding -- nowhere near the old
         // guessed-rectangle's fixed proportions.
@@ -3953,15 +5076,25 @@ mod tests {
             "a no-descender string's ink box must be cap height plus stroke padding, got {ink_height}"
         );
 
-        let with_descender = SilkText { text: "HELLg".to_string(), ..no_descender };
+        let with_descender = SilkText {
+            text: "HELLg".to_string(),
+            ..no_descender
+        };
         let top2 = with_descender.bounding_rect().points[0].y;
         let bottom2 = with_descender.bounding_rect().points[2].y;
-        assert_eq!(top2, top, "the *top* edge must be unaffected by a descender -- only the bottom grows");
-        assert!(bottom2 > bottom, "a real \"g\" must push the bottom edge further down than a descender-free string's");
+        assert_eq!(
+            top2, top,
+            "the *top* edge must be unaffected by a descender -- only the bottom grows"
+        );
+        assert!(
+            bottom2 > bottom,
+            "a real \"g\" must push the bottom edge further down than a descender-free string's"
+        );
     }
 
     #[test]
-    fn bounding_rect_is_narrower_for_a_string_of_narrow_characters_than_the_same_count_of_normal_ones() {
+    fn bounding_rect_is_narrower_for_a_string_of_narrow_characters_than_the_same_count_of_normal_ones(
+    ) {
         let narrow = SilkText {
             id: SilkTextId(0),
             text: "iiii".to_string(),
@@ -3971,28 +5104,50 @@ mod tests {
             height: DEFAULT_SILK_TEXT_HEIGHT,
             line_width: DEFAULT_SILK_LINE_WIDTH,
         };
-        let normal = SilkText { text: "abcd".to_string(), ..narrow };
-        let wide = SilkText { text: "MMMM".to_string(), ..narrow };
+        let normal = SilkText {
+            text: "abcd".to_string(),
+            ..narrow
+        };
+        let wide = SilkText {
+            text: "MMMM".to_string(),
+            ..narrow
+        };
         let half_width = |t: &SilkText| t.bounding_rect().points[1].x;
-        assert!(half_width(&narrow) < half_width(&normal), "narrow marks like \"iiii\" must claim less width than ordinary letters");
-        assert!(half_width(&wide) > half_width(&normal), "genuinely wide glyphs like \"MMMM\" must claim more width than ordinary letters");
+        assert!(
+            half_width(&narrow) < half_width(&normal),
+            "narrow marks like \"iiii\" must claim less width than ordinary letters"
+        );
+        assert!(
+            half_width(&wide) > half_width(&normal),
+            "genuinely wide glyphs like \"MMMM\" must claim more width than ordinary letters"
+        );
     }
 
     #[test]
     fn try_resize_silk_text_grows_the_bounding_rect_and_can_newly_collide_with_a_pad() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         // A "T" directly above the template's pad at (+1.27mm, 0) --
         // same geometry as `check_silk_text_placement_can_reject_a_bigger_size...`:
         // the stem's bottom tip points straight at the pad, clearing
         // its `SILK_TO_PAD` margin (and the part's own body) at 1.0mm
         // and 1.5mm, but reaching inside it once grown to 3.0mm.
         let id = board
-            .try_place_silk_text("T", Point::new((1.27 * MM as f64) as Unit, (-1.6 * MM as f64) as Unit), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT)
+            .try_place_silk_text(
+                "T",
+                Point::new((1.27 * MM as f64) as Unit, (-1.6 * MM as f64) as Unit),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
             .expect("must clear the pad at the default size");
 
-        board.try_resize_silk_text(id, mm_to_unit(1.5)).expect("a modest resize must still clear the pad");
+        board
+            .try_resize_silk_text(id, mm_to_unit(1.5))
+            .expect("a modest resize must still clear the pad");
         assert_eq!(board.silk_texts[0].height, mm_to_unit(1.5));
 
         let err = board.try_resize_silk_text(id, mm_to_unit(3.0)).unwrap_err();
@@ -4004,18 +5159,35 @@ mod tests {
     #[test]
     fn try_resize_silk_text_reports_not_found_for_an_unknown_id() {
         let mut board = test_board();
-        assert_eq!(board.try_resize_silk_text(SilkTextId(999), mm_to_unit(2.0)), Err(SilkTextError::NotFound));
+        assert_eq!(
+            board.try_resize_silk_text(SilkTextId(999), mm_to_unit(2.0)),
+            Err(SilkTextError::NotFound)
+        );
     }
 
     #[test]
-    fn check_silk_text_move_ignores_the_texts_own_current_position_but_still_checks_other_collisions() {
+    fn check_silk_text_move_ignores_the_texts_own_current_position_but_still_checks_other_collisions(
+    ) {
         let mut board = test_board();
-        let id = board.try_place_silk_text("X", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
+        let id = board
+            .try_place_silk_text(
+                "X",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
         // Must not spuriously "collide" with its own current rectangle,
         // exactly like `try_move_silk_text` itself.
-        assert!(board.check_silk_text_move(id, Point::new(0, 0), 0.0).is_ok());
+        assert!(board
+            .check_silk_text_move(id, Point::new(0, 0), 0.0)
+            .is_ok());
         // But a real off-board destination must still be refused.
-        assert_eq!(board.check_silk_text_move(id, Point::new(1_000 * MM, 1_000 * MM), 0.0), Err(SilkTextError::OffBoard));
+        assert_eq!(
+            board.check_silk_text_move(id, Point::new(1_000 * MM, 1_000 * MM), 0.0),
+            Err(SilkTextError::OffBoard)
+        );
         // A read-only check must never actually move anything.
         assert_eq!(board.silk_texts[0].position, Point::new(0, 0));
     }
@@ -4024,50 +5196,84 @@ mod tests {
     fn check_silk_text_placement_can_reject_a_bigger_size_that_a_smaller_one_would_accept() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         // A "T" directly above the template's pad at (+1.27mm, 0):
         // its stem's bottom tip points straight at the pad -- well
         // clear of the `SILK_TO_PAD` margin (and the part's own body)
         // at 1.0mm, but a 3.0mm-tall "T"'s stem reaches down to
         // within that margin of the pad's copper.
         let position = Point::new((1.27 * MM as f64) as Unit, (-1.6 * MM as f64) as Unit);
-        assert!(board.check_silk_text_placement("T", position, 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).is_ok());
-        assert_eq!(board.check_silk_text_placement("T", position, 0.0, LayerId::FCu, mm_to_unit(3.0)), Err(SilkTextError::TooCloseToPad));
+        assert!(board
+            .check_silk_text_placement("T", position, 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT)
+            .is_ok());
+        assert_eq!(
+            board.check_silk_text_placement("T", position, 0.0, LayerId::FCu, mm_to_unit(3.0)),
+            Err(SilkTextError::TooCloseToPad)
+        );
     }
 
     #[test]
     fn silk_dot_place_move_resize_hit_test_and_remove_round_trip() {
         let mut board = test_board();
-        let id = board.try_place_silk_dot(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu).expect("center of an empty board must be legal");
+        let id = board
+            .try_place_silk_dot(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu)
+            .expect("center of an empty board must be legal");
         assert_eq!(board.silk_dots.len(), 1);
-        assert_eq!(board.silk_dot_at(Point::new(100_000, 0)), Some(id), "a click within the (floored) hit radius must select the dot");
-        board.try_move_silk_dot(id, Point::new(5 * MM, 5 * MM)).expect("moving into open space must succeed");
+        assert_eq!(
+            board.silk_dot_at(Point::new(100_000, 0)),
+            Some(id),
+            "a click within the (floored) hit radius must select the dot"
+        );
+        board
+            .try_move_silk_dot(id, Point::new(5 * MM, 5 * MM))
+            .expect("moving into open space must succeed");
         assert_eq!(board.silk_dots[0].position, Point::new(5 * MM, 5 * MM));
-        board.try_resize_silk_dot(id, mm_to_unit(1.0)).expect("growing in open space must succeed");
+        board
+            .try_resize_silk_dot(id, mm_to_unit(1.0))
+            .expect("growing in open space must succeed");
         assert_eq!(board.silk_dots[0].diameter, mm_to_unit(1.0));
         assert!(board.remove_silk_dot(id));
         assert!(board.silk_dots.is_empty());
-        assert!(!board.remove_silk_dot(id), "removing an already-removed dot must report false");
+        assert!(
+            !board.remove_silk_dot(id),
+            "removing an already-removed dot must report false"
+        );
     }
 
     #[test]
     fn silk_dot_placement_rejects_pad_proximity_off_board_and_opposite_side_is_independent() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         // Right on top of a pad: silk over copper, refused.
         assert_eq!(
-            board.check_silk_dot_placement(Point::new((1.27 * MM as f64) as Unit, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu),
+            board.check_silk_dot_placement(
+                Point::new((1.27 * MM as f64) as Unit, 0),
+                DEFAULT_SILK_DOT_DIAMETER,
+                LayerId::FCu
+            ),
             Err(SilkDotError::TooCloseToPad)
         );
         // Same spot on the *back* silk: the pad and body are front-side
         // only, so this must be legal.
         board
-            .check_silk_dot_placement(Point::new((1.27 * MM as f64) as Unit, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::BCu)
+            .check_silk_dot_placement(
+                Point::new((1.27 * MM as f64) as Unit, 0),
+                DEFAULT_SILK_DOT_DIAMETER,
+                LayerId::BCu,
+            )
             .expect("the back side has no pads/body here");
         // Hugging the board edge (40mm board -> outline at +20mm).
         assert_eq!(
-            board.check_silk_dot_placement(Point::new(20 * MM, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu),
+            board.check_silk_dot_placement(
+                Point::new(20 * MM, 0),
+                DEFAULT_SILK_DOT_DIAMETER,
+                LayerId::FCu
+            ),
             Err(SilkDotError::OffBoard)
         );
     }
@@ -4075,29 +5281,62 @@ mod tests {
     #[test]
     fn silk_dot_and_silk_text_refuse_to_overlap_in_both_directions() {
         let mut board = test_board();
-        board.try_place_silk_text("HELLO", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).unwrap();
+        board
+            .try_place_silk_text(
+                "HELLO",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT,
+            )
+            .unwrap();
         // A dot dropped into the middle of the text's ink.
-        assert_eq!(board.check_silk_dot_placement(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu), Err(SilkDotError::OverlapsSilk));
+        assert_eq!(
+            board.check_silk_dot_placement(
+                Point::new(0, 0),
+                DEFAULT_SILK_DOT_DIAMETER,
+                LayerId::FCu
+            ),
+            Err(SilkDotError::OverlapsSilk)
+        );
         // And the reverse: text over an existing dot, on a fresh board
         // so only the dot can be the reason.
         let mut board = test_board();
-        board.try_place_silk_dot(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu).unwrap();
+        board
+            .try_place_silk_dot(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu)
+            .unwrap();
         assert_eq!(
-            board.check_silk_text_placement("HELLO", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT),
+            board.check_silk_text_placement(
+                "HELLO",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT
+            ),
             Err(SilkTextError::OverlapsDot)
         );
     }
 
     #[test]
-    fn footprint_placement_refuses_to_land_on_a_dot_but_the_dots_own_footprint_move_ignores_its_marker() {
+    fn footprint_placement_refuses_to_land_on_a_dot_but_the_dots_own_footprint_move_ignores_its_marker(
+    ) {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_silk_dot(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu).unwrap();
+        board
+            .try_place_silk_dot(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu)
+            .unwrap();
         // Dropping the part right on the dot: refused, same
         // order-independence contract as `OverSilkText`.
-        assert_eq!(board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap_err(), PlacementError::OverSilkDot);
+        assert_eq!(
+            board
+                .try_place_footprint(&template, Point::new(0, 0), 0.0)
+                .unwrap_err(),
+            PlacementError::OverSilkDot
+        );
         // Well away from the dot it still places fine.
-        board.try_place_footprint(&template, Point::new(-10 * MM, -10 * MM), 0.0).expect("clear of the dot, placement must succeed");
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, -10 * MM), 0.0)
+            .expect("clear of the dot, placement must succeed");
     }
 
     #[test]
@@ -4105,14 +5344,28 @@ mod tests {
         let mut board = test_board();
         let net = board.create_net();
         let w = 250_000; // 0.25mm default class-C width
-        board.add_track_path(&[Point::new(-5 * MM, 0), Point::new(5 * MM, 0)], net, LayerId::FCu, w, NetClass::C);
+        board.add_track_path(
+            &[Point::new(-5 * MM, 0), Point::new(5 * MM, 0)],
+            net,
+            LayerId::FCu,
+            w,
+            NetClass::C,
+        );
         assert_eq!(
-            board.check_silk_dot_placement(Point::new(0, 0), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu),
+            board.check_silk_dot_placement(
+                Point::new(0, 0),
+                DEFAULT_SILK_DOT_DIAMETER,
+                LayerId::FCu
+            ),
             Err(SilkDotError::OverCopper)
         );
         // Clear of the track must still be fine.
         board
-            .check_silk_dot_placement(Point::new(0, 3 * MM), DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu)
+            .check_silk_dot_placement(
+                Point::new(0, 3 * MM),
+                DEFAULT_SILK_DOT_DIAMETER,
+                LayerId::FCu,
+            )
             .expect("empty copper area must accept a silk dot");
     }
 
@@ -4127,7 +5380,9 @@ mod tests {
         }
         .create();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let net = board.create_net();
         // Flood the first pin-1 ring with a copper box so only a farther
         // (or alternate-angle) empty spot can win — or refuse.
@@ -4166,18 +5421,44 @@ mod tests {
             corner_radius_mm: 0.0,
         }
         .create();
-        let a = crate::footprint::builtin_templates().into_iter().find(|t| t.name.contains("SOIC")).expect("SOIC builtin");
-        let wire = crate::footprint::builtin_templates().into_iter().find(|t| t.name.contains("Wire pad")).expect("wire pad");
-        let hole = crate::footprint::builtin_templates().into_iter().find(|t| t.name.contains("M3")).expect("M3 hole");
-        board.try_place_footprint(&a, Point::new(-15 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&wire, Point::new(15 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&hole, Point::new(0, 20 * MM), 0.0).unwrap();
+        let a = crate::footprint::builtin_templates()
+            .into_iter()
+            .find(|t| t.name.contains("SOIC"))
+            .expect("SOIC builtin");
+        let wire = crate::footprint::builtin_templates()
+            .into_iter()
+            .find(|t| t.name.contains("Wire pad"))
+            .expect("wire pad");
+        let hole = crate::footprint::builtin_templates()
+            .into_iter()
+            .find(|t| t.name.contains("M3"))
+            .expect("M3 hole");
+        board
+            .try_place_footprint(&a, Point::new(-15 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&wire, Point::new(15 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&hole, Point::new(0, 20 * MM), 0.0)
+            .unwrap();
         let templates = vec![a.clone(), wire.clone(), hole.clone()];
         let report = board.try_enable_pin1_markers_for_all(&templates);
         assert_eq!(report.enabled.len(), 2, "SOIC + wire pad: {report:?}");
-        assert_eq!(report.skipped_no_pads.len(), 1, "M3 hole has no pads: {report:?}");
+        assert_eq!(
+            report.skipped_no_pads.len(),
+            1,
+            "M3 hole has no pads: {report:?}"
+        );
         assert!(report.failed.is_empty(), "{report:?}");
-        assert_eq!(board.footprints.iter().filter(|f| f.pin1_marker.is_some()).count(), 2);
+        assert_eq!(
+            board
+                .footprints
+                .iter()
+                .filter(|f| f.pin1_marker.is_some())
+                .count(),
+            2
+        );
         let again = board.try_enable_pin1_markers_for_all(&templates);
         assert!(again.enabled.is_empty());
         assert_eq!(again.already.len(), 2);
@@ -4187,26 +5468,47 @@ mod tests {
     fn pin1_marker_enables_next_to_pad_1_rides_along_with_a_move_and_disables_cleanly() {
         let mut board = test_board();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
-        board.try_enable_pin1_marker(id, &template).expect("an empty 40mm board has room for a pin-1 dot");
-        let first = board.footprints[0].pin1_marker_circle().expect("marker must be set");
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
+        board
+            .try_enable_pin1_marker(id, &template)
+            .expect("an empty 40mm board has room for a pin-1 dot");
+        let first = board.footprints[0]
+            .pin1_marker_circle()
+            .expect("marker must be set");
         // The committed spot must itself be DFM-legal against the
         // part's own pads (the sweep clears pad reach + SILK_TO_PAD).
         for item in board.node.iter() {
-            if let Item::Pad { shape, layer: LayerId::FCu, .. } = item {
+            if let Item::Pad {
+                shape,
+                layer: LayerId::FCu,
+                ..
+            } = item
+            {
                 let too_close = match shape {
                     PadShape::Circle(p) => circles_touch(&first, p, JlcpcbDfm::SILK_TO_PAD),
-                    PadShape::Polygon { outline, .. } => circle_polygon_collides(&first, outline, JlcpcbDfm::SILK_TO_PAD),
+                    PadShape::Polygon { outline, .. } => {
+                        circle_polygon_collides(&first, outline, JlcpcbDfm::SILK_TO_PAD)
+                    }
                 };
-                assert!(!too_close, "the marker must clear every pad by the full SILK_TO_PAD margin");
+                assert!(
+                    !too_close,
+                    "the marker must clear every pad by the full SILK_TO_PAD margin"
+                );
             }
         }
         // Moving the part carries the marker along rigidly.
-        board.try_move_footprint(id, &template, Point::new(5 * MM, 5 * MM), 0.0).expect("open space");
+        board
+            .try_move_footprint(id, &template, Point::new(5 * MM, 5 * MM), 0.0)
+            .expect("open space");
         let moved = board.footprints[0].pin1_marker_circle().unwrap();
         assert_eq!(moved.center, first.center.add(Point::new(5 * MM, 5 * MM)));
         // And the marker is real silk: a dot may not be placed on it.
-        assert_eq!(board.check_silk_dot_placement(moved.center, DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu), Err(SilkDotError::OverlapsSilk));
+        assert_eq!(
+            board.check_silk_dot_placement(moved.center, DEFAULT_SILK_DOT_DIAMETER, LayerId::FCu),
+            Err(SilkDotError::OverlapsSilk)
+        );
         assert!(board.disable_pin1_marker(id));
         assert!(board.footprints[0].pin1_marker.is_none());
     }
@@ -4215,10 +5517,24 @@ mod tests {
     fn check_silk_text_placement_is_read_only_and_also_rejects_empty_text() {
         let board = test_board();
         assert_eq!(
-            board.check_silk_text_placement("", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT),
+            board.check_silk_text_placement(
+                "",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT
+            ),
             Err(SilkTextError::EmptyText)
         );
-        assert!(board.check_silk_text_placement("X", Point::new(0, 0), 0.0, LayerId::FCu, DEFAULT_SILK_TEXT_HEIGHT).is_ok());
+        assert!(board
+            .check_silk_text_placement(
+                "X",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                DEFAULT_SILK_TEXT_HEIGHT
+            )
+            .is_ok());
         // A read-only check must never actually place anything.
         assert!(board.silk_texts.is_empty());
     }
@@ -4227,7 +5543,9 @@ mod tests {
     fn try_place_footprint_succeeds_in_open_space_and_adds_its_pads_to_the_node() {
         let mut board = test_board();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).expect("open space must succeed");
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .expect("open space must succeed");
 
         assert_eq!(board.node.iter().count(), template.pads.len());
         let placed = board.footprints.iter().find(|f| f.id == id).unwrap();
@@ -4241,14 +5559,21 @@ mod tests {
         let template = two_pin_template();
         let far_away = Point::new(1_000 * MM, 1_000 * MM);
 
-        let err = board.try_place_footprint(&template, far_away, 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, far_away, 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::OffBoard);
-        assert_eq!(board.node.iter().count(), 0, "a rejected placement must not add anything");
+        assert_eq!(
+            board.node.iter().count(),
+            0,
+            "a rejected placement must not add anything"
+        );
         assert!(board.footprints.is_empty());
     }
 
     #[test]
-    fn try_place_footprint_rejects_a_pad_too_close_to_the_board_edge_even_though_it_is_technically_on_board() {
+    fn try_place_footprint_rejects_a_pad_too_close_to_the_board_edge_even_though_it_is_technically_on_board(
+    ) {
         // 40mm board -> outline at x = ±20mm. Positioned so the far pad
         // (template offset +1.27mm, radius 0.45mm) sits only 0.05mm
         // from the edge -- comfortably *on*-board (would pass a bare
@@ -4263,7 +5588,9 @@ mod tests {
         let far_pad_center_x = 20 * MM - gap_from_edge - mm_to_unit(0.45);
         let position = Point::new(far_pad_center_x - mm_to_unit(1.27), 0);
 
-        let err = board.try_place_footprint(&template, position, 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, position, 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::OffBoard);
         assert!(board.footprints.is_empty());
     }
@@ -4285,23 +5612,36 @@ mod tests {
         let far_pad_center_x = 20 * MM - gap_from_edge - mm_to_unit(0.45);
         let position = Point::new(far_pad_center_x - mm_to_unit(1.27), 0);
 
-        board.try_place_footprint(&template, position, 0.0).expect("a well-cleared edge placement must succeed");
+        board
+            .try_place_footprint(&template, position, 0.0)
+            .expect("a well-cleared edge placement must succeed");
     }
 
     fn mounting_hole_template() -> crate::footprint::FootprintTemplate {
-        crate::footprint::builtin_templates().into_iter().find(|t| t.name.starts_with("Mounting hole (M3")).unwrap()
+        crate::footprint::builtin_templates()
+            .into_iter()
+            .find(|t| t.name.starts_with("Mounting hole (M3"))
+            .unwrap()
     }
 
     #[test]
     fn try_place_footprint_splits_pads_and_holes_into_their_own_id_lists() {
         let mut board = test_board();
         let template = mounting_hole_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).expect("open space must succeed");
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .expect("open space must succeed");
 
         let placed = board.footprints.iter().find(|f| f.id == id).unwrap();
-        assert!(placed.pad_item_ids.is_empty(), "a pure mounting hole has no pads");
+        assert!(
+            placed.pad_item_ids.is_empty(),
+            "a pure mounting hole has no pads"
+        );
         assert_eq!(placed.hole_item_ids.len(), 1);
-        assert!(matches!(board.node.get(placed.hole_item_ids[0]), Some(Item::Hole { .. })));
+        assert!(matches!(
+            board.node.get(placed.hole_item_ids[0]),
+            Some(Item::Hole { .. })
+        ));
     }
 
     #[test]
@@ -4317,7 +5657,9 @@ mod tests {
         let gap_from_edge = 100_000; // 0.1mm -- less than the 0.5mm minimum
         let position = Point::new(20 * MM - gap_from_edge - drill_radius, 0);
 
-        let err = board.try_place_footprint(&template, position, 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, position, 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::OffBoard);
         assert!(board.footprints.is_empty());
     }
@@ -4341,13 +5683,20 @@ mod tests {
                 // fail the spoke-corridor gate (same-footprint hole counts).
                 zone_connection: ZoneConnection::Solid,
             }],
-            holes: vec![crate::footprint::HoleTemplate { offset: Point::new(mm_to_unit(1.0), 0), drill: mm_to_unit(2.2) }],
+            holes: vec![crate::footprint::HoleTemplate {
+                offset: Point::new(mm_to_unit(1.0), 0),
+                drill: mm_to_unit(2.2),
+            }],
             exclude_from_bom: true,
             explicit_courtyard: None,
         };
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let new_position = Point::new(5 * MM, 5 * MM);
-        board.try_move_footprint(id, &template, new_position, 0.0).expect("open space must succeed");
+        board
+            .try_move_footprint(id, &template, new_position, 0.0)
+            .expect("open space must succeed");
 
         let placed = board.footprints.iter().find(|f| f.id == id).unwrap();
         let pad_center = match board.node.get(placed.pad_item_ids[0]).unwrap() {
@@ -4358,19 +5707,31 @@ mod tests {
             Item::Hole { position, .. } => *position,
             _ => panic!("expected a hole"),
         };
-        assert_eq!(pad_center, Point::new(new_position.x - mm_to_unit(1.0), new_position.y));
-        assert_eq!(hole_position, Point::new(new_position.x + mm_to_unit(1.0), new_position.y));
+        assert_eq!(
+            pad_center,
+            Point::new(new_position.x - mm_to_unit(1.0), new_position.y)
+        );
+        assert_eq!(
+            hole_position,
+            Point::new(new_position.x + mm_to_unit(1.0), new_position.y)
+        );
     }
 
     #[test]
     fn remove_footprint_removes_both_its_pads_and_its_holes_from_the_node() {
         let mut board = test_board();
         let template = mounting_hole_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         assert_eq!(board.node.iter().count(), 1);
 
         board.remove_footprint(id);
-        assert_eq!(board.node.iter().count(), 0, "removing a mounting hole footprint must remove its hole too");
+        assert_eq!(
+            board.node.iter().count(),
+            0,
+            "removing a mounting hole footprint must remove its hole too"
+        );
         assert!(board.footprints.is_empty());
     }
 
@@ -4380,16 +5741,31 @@ mod tests {
         assert_eq!(positions.len(), 6);
         let sum_x: Unit = positions.iter().map(|p| p.x).sum();
         let sum_y: Unit = positions.iter().map(|p| p.y).sum();
-        assert_eq!(sum_x, 0, "an even column count must average out exactly to the center on x");
-        assert_eq!(sum_y, 0, "an even row count must average out exactly to the center on y");
-        assert!(positions.contains(&Point::new(-2 * MM, -1_500_000)), "leftmost column, top row");
-        assert!(positions.contains(&Point::new(2 * MM, 1_500_000)), "rightmost column, bottom row");
+        assert_eq!(
+            sum_x, 0,
+            "an even column count must average out exactly to the center on x"
+        );
+        assert_eq!(
+            sum_y, 0,
+            "an even row count must average out exactly to the center on y"
+        );
+        assert!(
+            positions.contains(&Point::new(-2 * MM, -1_500_000)),
+            "leftmost column, top row"
+        );
+        assert!(
+            positions.contains(&Point::new(2 * MM, 1_500_000)),
+            "rightmost column, bottom row"
+        );
     }
 
     #[test]
     fn matrix_positions_degenerates_to_a_single_point_for_a_1x1_matrix() {
         let center = Point::new(5 * MM, -3 * MM);
-        assert_eq!(BoardDoc::matrix_positions(1, 1, 10 * MM, 10 * MM, center), vec![center]);
+        assert_eq!(
+            BoardDoc::matrix_positions(1, 1, 10 * MM, 10 * MM, center),
+            vec![center]
+        );
     }
 
     #[test]
@@ -4397,7 +5773,9 @@ mod tests {
         let board = test_board();
         let template = two_pin_template();
         let positions = BoardDoc::matrix_positions(2, 2, 10 * MM, 10 * MM, Point::new(0, 0));
-        board.check_matrix_placement(&template, &positions, 0.0).expect("a well-spaced grid in open space must be legal");
+        board
+            .check_matrix_placement(&template, &positions, 0.0)
+            .expect("a well-spaced grid in open space must be legal");
     }
 
     #[test]
@@ -4416,13 +5794,18 @@ mod tests {
     }
 
     #[test]
-    fn check_matrix_placement_rejects_the_whole_grid_when_any_single_cell_collides_with_an_existing_part() {
+    fn check_matrix_placement_rejects_the_whole_grid_when_any_single_cell_collides_with_an_existing_part(
+    ) {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap(); // occupies the grid's center cell
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap(); // occupies the grid's center cell
 
         let positions = BoardDoc::matrix_positions(1, 3, 10 * MM, 10 * MM, Point::new(0, 0));
-        assert!(board.check_matrix_placement(&template, &positions, 0.0).is_err());
+        assert!(board
+            .check_matrix_placement(&template, &positions, 0.0)
+            .is_err());
     }
 
     #[test]
@@ -4430,11 +5813,17 @@ mod tests {
         let mut board = test_board();
         let template = two_pin_template();
         let positions = BoardDoc::matrix_positions(2, 2, 10 * MM, 10 * MM, Point::new(0, 0));
-        let ids = board.place_matrix(&template, &positions, 0.0).expect("a well-spaced grid in open space must commit");
+        let ids = board
+            .place_matrix(&template, &positions, 0.0)
+            .expect("a well-spaced grid in open space must commit");
 
         assert_eq!(ids.len(), 4);
         assert_eq!(board.footprints.len(), 4);
-        let mut references: Vec<&str> = board.footprints.iter().map(|f| f.reference.as_str()).collect();
+        let mut references: Vec<&str> = board
+            .footprints
+            .iter()
+            .map(|f| f.reference.as_str())
+            .collect();
         references.sort();
         assert_eq!(references, vec!["P1", "P2", "P3", "P4"]);
         assert_eq!(board.node.iter().count(), 4 * template.pads.len());
@@ -4444,13 +5833,19 @@ mod tests {
     fn place_matrix_commits_nothing_when_the_grid_is_rejected() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let footprints_before = board.footprints.len();
         let node_items_before = board.node.iter().count();
 
         let positions = BoardDoc::matrix_positions(1, 3, 10 * MM, 10 * MM, Point::new(0, 0));
         assert!(board.place_matrix(&template, &positions, 0.0).is_err());
-        assert_eq!(board.footprints.len(), footprints_before, "a rejected matrix must not partially commit");
+        assert_eq!(
+            board.footprints.len(),
+            footprints_before,
+            "a rejected matrix must not partially commit"
+        );
         assert_eq!(board.node.iter().count(), node_items_before);
     }
 
@@ -4469,12 +5864,23 @@ mod tests {
     fn find_nearest_legal_placement_searches_when_requested_pose_collides() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let (pos, _) = board
-            .find_nearest_legal_placement(&template, Point::new(0, 0), 0.0, None, Some(8 * MM), Some(MM / 2))
+            .find_nearest_legal_placement(
+                &template,
+                Point::new(0, 0),
+                0.0,
+                None,
+                Some(8 * MM),
+                Some(MM / 2),
+            )
             .expect("ring search must find a free spot");
         assert_ne!(pos, Point::new(0, 0));
-        board.try_place_footprint(&template, pos, 0.0).expect("suggested pose must actually place");
+        board
+            .try_place_footprint(&template, pos, 0.0)
+            .expect("suggested pose must actually place");
     }
 
     #[test]
@@ -4484,8 +5890,18 @@ mod tests {
         let pins_a = vec![("1".into(), "3V3".into()), ("2".into(), "GND".into())];
         let pins_b = vec![("1".into(), "3V3".into()), ("2".into(), "GND".into())];
         let specs = [
-            BatchPlaceSpec { template: &template, position: Point::new(-8 * MM, 0), rotation_deg: 0.0, pins: &pins_a },
-            BatchPlaceSpec { template: &template, position: Point::new(8 * MM, 0), rotation_deg: 0.0, pins: &pins_b },
+            BatchPlaceSpec {
+                template: &template,
+                position: Point::new(-8 * MM, 0),
+                rotation_deg: 0.0,
+                pins: &pins_a,
+            },
+            BatchPlaceSpec {
+                template: &template,
+                position: Point::new(8 * MM, 0),
+                rotation_deg: 0.0,
+                pins: &pins_b,
+            },
         ];
         let ids = board.place_batch(&specs).expect("batch must place");
         assert_eq!(ids.len(), 2);
@@ -4503,8 +5919,18 @@ mod tests {
         let template = two_pin_template();
         let empty: [(String, String); 0] = [];
         let specs = [
-            BatchPlaceSpec { template: &template, position: Point::new(0, 0), rotation_deg: 0.0, pins: &empty },
-            BatchPlaceSpec { template: &template, position: Point::new(0, 0), rotation_deg: 0.0, pins: &empty },
+            BatchPlaceSpec {
+                template: &template,
+                position: Point::new(0, 0),
+                rotation_deg: 0.0,
+                pins: &empty,
+            },
+            BatchPlaceSpec {
+                template: &template,
+                position: Point::new(0, 0),
+                rotation_deg: 0.0,
+                pins: &empty,
+            },
         ];
         assert!(board.place_batch(&specs).is_err());
         assert!(board.footprints.is_empty());
@@ -4517,14 +5943,34 @@ mod tests {
         let empty: [(String, String); 0] = [];
         let ids = board
             .place_batch(&[
-                BatchPlaceSpec { template: &template, position: Point::new(-8 * MM, 0), rotation_deg: 0.0, pins: &empty },
-                BatchPlaceSpec { template: &template, position: Point::new(8 * MM, 0), rotation_deg: 0.0, pins: &empty },
+                BatchPlaceSpec {
+                    template: &template,
+                    position: Point::new(-8 * MM, 0),
+                    rotation_deg: 0.0,
+                    pins: &empty,
+                },
+                BatchPlaceSpec {
+                    template: &template,
+                    position: Point::new(8 * MM, 0),
+                    rotation_deg: 0.0,
+                    pins: &empty,
+                },
             ])
             .unwrap();
         board
             .move_batch(&[
-                BatchMoveSpec { id: ids[0], template: &template, position: Point::new(-8 * MM, 5 * MM), rotation_deg: 0.0 },
-                BatchMoveSpec { id: ids[1], template: &template, position: Point::new(8 * MM, 5 * MM), rotation_deg: 90.0 },
+                BatchMoveSpec {
+                    id: ids[0],
+                    template: &template,
+                    position: Point::new(-8 * MM, 5 * MM),
+                    rotation_deg: 0.0,
+                },
+                BatchMoveSpec {
+                    id: ids[1],
+                    template: &template,
+                    position: Point::new(8 * MM, 5 * MM),
+                    rotation_deg: 90.0,
+                },
             ])
             .expect("batch move");
         assert_eq!(board.footprints[0].position, Point::new(-8 * MM, 5 * MM));
@@ -4536,11 +5982,19 @@ mod tests {
     fn try_place_footprint_rejects_overlapping_a_previously_placed_one() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).expect("first placement must succeed");
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .expect("first placement must succeed");
 
-        let err = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap_err();
         assert!(matches!(err, PlacementError::Collision(_)));
-        assert_eq!(board.footprints.len(), 1, "the second, rejected placement must not be recorded");
+        assert_eq!(
+            board.footprints.len(),
+            1,
+            "the second, rejected placement must not be recorded"
+        );
     }
 
     /// A single tiny pad (so it can never *itself* collide with a
@@ -4565,7 +6019,11 @@ mod tests {
             }],
             holes: Vec::new(),
             exclude_from_bom: false,
-            explicit_courtyard: Some(crate::footprint::Courtyard { center: Point::new(0, 0), width: mm_to_unit(4.0), height: mm_to_unit(4.0) }),
+            explicit_courtyard: Some(crate::footprint::Courtyard {
+                center: Point::new(0, 0),
+                width: mm_to_unit(4.0),
+                height: mm_to_unit(4.0),
+            }),
         }
     }
 
@@ -4573,25 +6031,37 @@ mod tests {
     fn try_place_footprint_rejects_a_body_overlap_even_though_the_pads_themselves_stay_clear() {
         let mut board = test_board();
         let template = wide_courtyard_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).expect("first placement must succeed");
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .expect("first placement must succeed");
 
         // 3mm apart: the two tiny (0.2mm-radius) pads are nowhere near
         // each other, but the two 4mm-wide courtyards (half-width
         // 2mm each) overlap by a full 1mm.
-        let err = board.try_place_footprint(&template, Point::new(mm_to_unit(3.0), 0), 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, Point::new(mm_to_unit(3.0), 0), 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::BodyOverlap);
-        assert_eq!(board.footprints.len(), 1, "the rejected placement must not be recorded");
+        assert_eq!(
+            board.footprints.len(),
+            1,
+            "the rejected placement must not be recorded"
+        );
     }
 
     #[test]
     fn try_place_footprint_accepts_two_bodies_placed_clear_of_each_other() {
         let mut board = test_board();
         let template = wide_courtyard_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).expect("first placement must succeed");
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .expect("first placement must succeed");
 
         // 5mm apart: comfortably clears two 4mm-wide (half-width 2mm)
         // courtyards plus the 0.3mm assembly body clearance.
-        board.try_place_footprint(&template, Point::new(mm_to_unit(5.0), 0), 0.0).expect("well-separated bodies must not be rejected");
+        board
+            .try_place_footprint(&template, Point::new(mm_to_unit(5.0), 0), 0.0)
+            .expect("well-separated bodies must not be rejected");
         assert_eq!(board.footprints.len(), 2);
     }
 
@@ -4622,8 +6092,12 @@ mod tests {
                 height: mm_to_unit(1.0),
             }),
         };
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
-        let err = board.try_place_footprint(&template, Point::new(mm_to_unit(1.25), 0), 0.0).unwrap_err();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
+        let err = board
+            .try_place_footprint(&template, Point::new(mm_to_unit(1.25), 0), 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::BodyOverlap);
     }
 
@@ -4652,9 +6126,13 @@ mod tests {
                 height: mm_to_unit(1.0),
             }),
         };
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         // gap = 1.35 - 0.5 - 0.5 = 0.35mm > 0.3mm
-        board.try_place_footprint(&template, Point::new(mm_to_unit(1.35), 0), 0.0).expect("0.35mm body gap must clear 0.3mm floor");
+        board
+            .try_place_footprint(&template, Point::new(mm_to_unit(1.35), 0), 0.0)
+            .expect("0.35mm body gap must clear 0.3mm floor");
     }
 
     #[test]
@@ -4695,11 +6173,15 @@ mod tests {
             exclude_from_bom: false,
             explicit_courtyard: None,
         };
-        board.try_place_footprint(&th, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&th, Point::new(0, 0), 0.0)
+            .unwrap();
         // Keep-out needs: 1.0 (keep-out radius) + 0.15 (clearance) +
         // 0.2 (pad radius) = 1.35mm. At 0.92mm the pad sits inside the
         // screw-head circle -- refused as a copper collision.
-        let err = board.try_place_footprint(&smd, Point::new(mm_to_unit(0.92), 0), 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&smd, Point::new(mm_to_unit(0.92), 0), 0.0)
+            .unwrap_err();
         assert!(matches!(err, PlacementError::Collision(_)), "got {err}");
         // Just past the keep-out + clearance it places cleanly.
         board
@@ -4721,9 +6203,14 @@ mod tests {
         let template = wide_courtyard_template();
         let position = Point::new(mm_to_unit(17.0), 0);
 
-        let err = board.try_place_footprint(&template, position, 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, position, 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::BodyOffBoard);
-        assert!(board.footprints.is_empty(), "the rejected placement must not be recorded");
+        assert!(
+            board.footprints.is_empty(),
+            "the rejected placement must not be recorded"
+        );
     }
 
     #[test]
@@ -4735,11 +6222,14 @@ mod tests {
         let template = wide_courtyard_template();
         let position = Point::new(mm_to_unit(15.0), 0);
 
-        board.try_place_footprint(&template, position, 0.0).expect("a body well clear of the edge must be accepted");
+        board
+            .try_place_footprint(&template, position, 0.0)
+            .expect("a body well clear of the edge must be accepted");
     }
 
     #[test]
-    fn set_outline_refuses_and_touches_nothing_when_a_placed_body_would_end_up_too_close_to_a_shrunk_edge() {
+    fn set_outline_refuses_and_touches_nothing_when_a_placed_body_would_end_up_too_close_to_a_shrunk_edge(
+    ) {
         // A body that comfortably clears the *original* 40mm board's
         // edge (see the "accepts" test above) is stranded within the
         // 2.5mm assembly margin once the board is shrunk to 32mm
@@ -4751,12 +6241,22 @@ mod tests {
         let position = Point::new(mm_to_unit(15.0), 0);
         board.try_place_footprint(&template, position, 0.0).unwrap();
 
-        let smaller = vec![Polygon::rounded_rect(mm_to_unit(32.0), mm_to_unit(32.0), 0, 12)];
+        let smaller = vec![Polygon::rounded_rect(
+            mm_to_unit(32.0),
+            mm_to_unit(32.0),
+            0,
+            12,
+        )];
         let err = board.set_outline(smaller, &[template]).unwrap_err();
         assert!(matches!(err, SetOutlineError::FootprintOffBoard(_)));
         assert_eq!(
             board.outline,
-            vec![Polygon::rounded_rect(mm_to_unit(40.0), mm_to_unit(40.0), 0, 12)],
+            vec![Polygon::rounded_rect(
+                mm_to_unit(40.0),
+                mm_to_unit(40.0),
+                0,
+                12
+            )],
             "a refused outline change must leave the board's own outline untouched"
         );
     }
@@ -4765,13 +6265,23 @@ mod tests {
     fn try_move_footprint_rejects_a_body_overlap_and_leaves_position_unchanged() {
         let mut board = test_board();
         let template = wide_courtyard_template();
-        let moving = board.try_place_footprint(&template, Point::new(mm_to_unit(-5.0), 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(mm_to_unit(-5.0), 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
 
-        let err = board.try_move_footprint(moving, &template, Point::new(mm_to_unit(3.0), 0), 0.0).unwrap_err();
+        let err = board
+            .try_move_footprint(moving, &template, Point::new(mm_to_unit(3.0), 0), 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::BodyOverlap);
         let placed = board.footprints.iter().find(|f| f.id == moving).unwrap();
-        assert_eq!(placed.position, Point::new(mm_to_unit(-5.0), 0), "a rejected move must leave the footprint exactly where it was");
+        assert_eq!(
+            placed.position,
+            Point::new(mm_to_unit(-5.0), 0),
+            "a rejected move must leave the footprint exactly where it was"
+        );
     }
 
     #[test]
@@ -4784,7 +6294,9 @@ mod tests {
         // batch -- must be caught even though neither cell collides
         // with anything already on the board.
         let positions = vec![Point::new(0, 0), Point::new(mm_to_unit(3.0), 0)];
-        let err = board.check_matrix_placement(&template, &positions, 0.0).unwrap_err();
+        let err = board
+            .check_matrix_placement(&template, &positions, 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::BodyOverlap);
     }
 
@@ -4792,16 +6304,25 @@ mod tests {
     fn try_move_footprint_to_a_clear_spot_succeeds_and_updates_pad_positions() {
         let mut board = test_board();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
 
         let new_position = Point::new(5 * MM, 5 * MM);
-        board.try_move_footprint(id, &template, new_position, 0.0).expect("moving to open space must succeed");
+        board
+            .try_move_footprint(id, &template, new_position, 0.0)
+            .expect("moving to open space must succeed");
 
         let placed = board.footprints.iter().find(|f| f.id == id).unwrap();
         assert_eq!(placed.position, new_position);
         for &pad_id in &placed.pad_item_ids {
-            let Item::Pad { shape, .. } = board.node.get(pad_id).unwrap() else { panic!("expected a pad") };
-            assert!(shape.center().distance(new_position) < (3 * MM) as f64, "pad should have moved along with the footprint");
+            let Item::Pad { shape, .. } = board.node.get(pad_id).unwrap() else {
+                panic!("expected a pad")
+            };
+            assert!(
+                shape.center().distance(new_position) < (3 * MM) as f64,
+                "pad should have moved along with the footprint"
+            );
         }
     }
 
@@ -4811,22 +6332,36 @@ mod tests {
         // must not be refused as "colliding with itself".
         let mut board = test_board();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
 
-        board.try_move_footprint(id, &template, Point::new(0, 0), 0.0).expect("moving onto its own spot must succeed");
+        board
+            .try_move_footprint(id, &template, Point::new(0, 0), 0.0)
+            .expect("moving onto its own spot must succeed");
     }
 
     #[test]
     fn try_move_footprint_into_another_footprint_is_rejected_and_leaves_position_unchanged() {
         let mut board = test_board();
         let template = two_pin_template();
-        let a = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        let a = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
 
-        let err = board.try_move_footprint(a, &template, Point::new(10 * MM, 0), 0.0).unwrap_err();
+        let err = board
+            .try_move_footprint(a, &template, Point::new(10 * MM, 0), 0.0)
+            .unwrap_err();
         assert!(matches!(err, PlacementError::Collision(_)));
         let placed = board.footprints.iter().find(|f| f.id == a).unwrap();
-        assert_eq!(placed.position, Point::new(-10 * MM, 0), "a rejected move must leave the footprint where it was");
+        assert_eq!(
+            placed.position,
+            Point::new(-10 * MM, 0),
+            "a rejected move must leave the footprint where it was"
+        );
     }
 
     #[test]
@@ -4839,25 +6374,50 @@ mod tests {
         // every single drag.
         let mut board = test_board();
         let template = two_pin_template();
-        let moving = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
-        let net = board.connect_pads(a, b).expect("connecting two unassigned pads must succeed");
+        let net = board
+            .connect_pads(a, b)
+            .expect("connecting two unassigned pads must succeed");
         assert_eq!(board.pads_on_net(net).len(), 2);
 
         let new_position = Point::new(-10 * MM, 15 * MM);
-        board.try_move_footprint(moving, &template, new_position, 90.0).expect("moving to open space must succeed");
+        board
+            .try_move_footprint(moving, &template, new_position, 90.0)
+            .expect("moving to open space must succeed");
 
-        assert_eq!(board.pads_on_net(net).len(), 2, "both pads must still share the net after the move");
-        let Item::Pad { net: moved_pad_net, .. } = board.node.get(a).unwrap() else { panic!("expected a pad") };
-        assert_eq!(*moved_pad_net, Some(net), "the moved footprint's own pad must keep its net assignment");
+        assert_eq!(
+            board.pads_on_net(net).len(),
+            2,
+            "both pads must still share the net after the move"
+        );
+        let Item::Pad {
+            net: moved_pad_net, ..
+        } = board.node.get(a).unwrap()
+        else {
+            panic!("expected a pad")
+        };
+        assert_eq!(
+            *moved_pad_net,
+            Some(net),
+            "the moved footprint's own pad must keep its net assignment"
+        );
         let placed = board.footprints.iter().find(|f| f.id == moving).unwrap();
-        assert_eq!(placed.position, new_position, "the move itself must still have taken effect");
+        assert_eq!(
+            placed.position, new_position,
+            "the move itself must still have taken effect"
+        );
     }
 
     #[test]
-    fn try_move_footprint_does_not_collide_with_a_same_net_solid_plane_it_is_already_sitting_under() {
+    fn try_move_footprint_does_not_collide_with_a_same_net_solid_plane_it_is_already_sitting_under()
+    {
         // Regression test: `check_placement`'s candidate pads used to
         // always carry `net: None` (straight from `world_items`, which
         // has no way to know a *placed* footprint's real, already-
@@ -4869,31 +6429,50 @@ mod tests {
         // to move anywhere at all, not even back onto its own spot.
         let mut board = test_board();
         let template = two_pin_template();
-        let moving = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
-        let net = board.connect_pads(a, b).expect("connecting two unassigned pads must succeed");
+        let net = board
+            .connect_pads(a, b)
+            .expect("connecting two unassigned pads must succeed");
         // `two_pin_template` has a *second* pin too -- join it onto the
         // same net so the plane below covers the whole footprint, not
         // just one of its two pads (an actually-unconnected second pad
         // would then legitimately collide with a different-net plane,
         // which isn't the bug this test is about).
-        board.connect_pads(pad_ids_of(&board, 0)[1], b).expect("extending the net to the footprint's other pad must succeed");
+        board
+            .connect_pads(pad_ids_of(&board, 0)[1], b)
+            .expect("extending the net to the footprint's other pad must succeed");
 
         // A solid plane covering the *entire* board on that same net --
         // exactly what the GUI's "Solid F.Cu/B.Cu plane" checkbox
         // produces.
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
-        assert!(board.node.iter().any(|item| matches!(item, Item::Zone { .. })), "the plane must have actually filled");
+        board
+            .add_zone(board_outline[0].clone(), LayerId::FCu, net)
+            .unwrap();
+        assert!(
+            board
+                .node
+                .iter()
+                .any(|item| matches!(item, Item::Zone { .. })),
+            "the plane must have actually filled"
+        );
 
         let new_position = Point::new(-10 * MM, 15 * MM);
-        board.try_move_footprint(moving, &template, new_position, 0.0).expect("moving a same-net pad under its own plane must succeed");
+        board
+            .try_move_footprint(moving, &template, new_position, 0.0)
+            .expect("moving a same-net pad under its own plane must succeed");
     }
 
     #[test]
-    fn try_move_footprint_is_not_blocked_by_a_different_net_solid_plane_it_has_no_net_yet_to_match() {
+    fn try_move_footprint_is_not_blocked_by_a_different_net_solid_plane_it_has_no_net_yet_to_match()
+    {
         // A copper pour is never a placement/move obstacle (see
         // `check_placement`'s own comment on that filter) -- otherwise
         // a full-board plane on net A would permanently freeze every
@@ -4902,19 +6481,35 @@ mod tests {
         // be nowhere left on the whole board it could ever move to.
         let mut board = test_board();
         let template = two_pin_template();
-        let moving = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        let other = board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
-        let net = board.connect_pads(pad_ids_of(&board, 1)[0], pad_ids_of(&board, 1)[1]).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        let other = board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
+        let net = board
+            .connect_pads(pad_ids_of(&board, 1)[0], pad_ids_of(&board, 1)[1])
+            .unwrap();
         let _ = other;
 
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
-        assert!(board.node.iter().any(|item| matches!(item, Item::Zone { .. })), "the plane must have actually filled");
+        board
+            .add_zone(board_outline[0].clone(), LayerId::FCu, net)
+            .unwrap();
+        assert!(
+            board
+                .node
+                .iter()
+                .any(|item| matches!(item, Item::Zone { .. })),
+            "the plane must have actually filled"
+        );
 
         // `moving`'s own two pads are still net-less -- neither one
         // shares the plane's net.
         let new_position = Point::new(-10 * MM, 15 * MM);
-        board.try_move_footprint(moving, &template, new_position, 0.0).expect("a copper pour of an unrelated net must never block a move");
+        board
+            .try_move_footprint(moving, &template, new_position, 0.0)
+            .expect("a copper pour of an unrelated net must never block a move");
     }
 
     #[test]
@@ -4930,45 +6525,77 @@ mod tests {
         // as a side effect of geometry recomputation.
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        let net = board.connect_pads(pad_ids_of(&board, 0)[0], pad_ids_of(&board, 0)[1]).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        let net = board
+            .connect_pads(pad_ids_of(&board, 0)[0], pad_ids_of(&board, 0)[1])
+            .unwrap();
 
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
+        board
+            .add_zone(board_outline[0].clone(), LayerId::FCu, net)
+            .unwrap();
 
         // The new, still-unconnected part, placed squarely on top of
         // the just-poured plane.
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let new_pads = pad_ids_of(&board, 1);
         for &pad in &new_pads {
-            assert_eq!(board.pad_net(pad), Ok(None), "a freshly placed pad must start net-less");
+            assert_eq!(
+                board.pad_net(pad),
+                Ok(None),
+                "a freshly placed pad must start net-less"
+            );
         }
 
         board.refill_all_zones().unwrap();
 
         for &pad in &new_pads {
-            assert_eq!(board.pad_net(pad), Ok(None), "refilling zones must never wire an unrelated pad onto the plane's net");
+            assert_eq!(
+                board.pad_net(pad),
+                Ok(None),
+                "refilling zones must never wire an unrelated pad onto the plane's net"
+            );
         }
     }
 
     #[test]
-    fn zones_are_stale_flags_a_fill_that_predates_a_later_footprint_move_and_clears_once_refilled() {
+    fn zones_are_stale_flags_a_fill_that_predates_a_later_footprint_move_and_clears_once_refilled()
+    {
         let mut board = test_board();
         let template = two_pin_template();
-        let moving = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 0)[1];
         let net = board.connect_pads(a, b).unwrap();
 
         let board_outline = board.outline.clone();
-        board.add_zone(board_outline[0].clone(), LayerId::FCu, net).unwrap();
-        assert!(!board.zones_are_stale(), "a zone must never be stale immediately after its own fill");
+        board
+            .add_zone(board_outline[0].clone(), LayerId::FCu, net)
+            .unwrap();
+        assert!(
+            !board.zones_are_stale(),
+            "a zone must never be stale immediately after its own fill"
+        );
 
-        board.try_move_footprint(moving, &template, Point::new(-10 * MM, 10 * MM), 0.0).expect("moving under its own same-net plane must succeed");
-        assert!(board.zones_are_stale(), "the plane's fill still reflects the footprint's old position, not its new one");
+        board
+            .try_move_footprint(moving, &template, Point::new(-10 * MM, 10 * MM), 0.0)
+            .expect("moving under its own same-net plane must succeed");
+        assert!(
+            board.zones_are_stale(),
+            "the plane's fill still reflects the footprint's old position, not its new one"
+        );
 
         board.refill_all_zones().unwrap();
-        assert!(!board.zones_are_stale(), "refilling must catch every zone back up to the board's current state");
+        assert!(
+            !board.zones_are_stale(),
+            "refilling must catch every zone back up to the board's current state"
+        );
     }
 
     #[test]
@@ -4983,42 +6610,85 @@ mod tests {
         // must never leave behind.
         let mut board = test_board();
         let template = two_pin_template();
-        let moving = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let net = board.connect_pads(a, b).unwrap();
         let (a_center, b_center) = (board.pad_center(a).unwrap(), board.pad_center(b).unwrap());
-        board.node.add(Item::Track { shape: Segment::new(a_center, b_center, 250_000), net: Some(net), layer: LayerId::FCu, class: NetClass::C });
-        assert_eq!(board.node.iter().filter(|item| matches!(item, Item::Track { .. })).count(), 1);
+        board.node.add(Item::Track {
+            shape: Segment::new(a_center, b_center, 250_000),
+            net: Some(net),
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        });
+        assert_eq!(
+            board
+                .node
+                .iter()
+                .filter(|item| matches!(item, Item::Track { .. }))
+                .count(),
+            1
+        );
 
-        board.try_move_footprint(moving, &template, Point::new(-10 * MM, 15 * MM), 0.0).expect("open space must accept the move");
+        board
+            .try_move_footprint(moving, &template, Point::new(-10 * MM, 15 * MM), 0.0)
+            .expect("open space must accept the move");
 
         assert_eq!(
-            board.node.iter().filter(|item| matches!(item, Item::Track { .. })).count(),
+            board
+                .node
+                .iter()
+                .filter(|item| matches!(item, Item::Track { .. }))
+                .count(),
             0,
             "the stale track must be deleted, not left stranded at the old pad position"
         );
-        assert_eq!(board.pads_on_net(net).len(), 2, "the net's own pad membership must be unaffected by deleting the stale copper");
+        assert_eq!(
+            board.pads_on_net(net).len(),
+            2,
+            "the net's own pad membership must be unaffected by deleting the stale copper"
+        );
     }
 
     #[test]
     fn try_move_footprint_leaves_a_wire_touching_other_footprints_pads_alone() {
         let mut board = test_board();
         let template = two_pin_template();
-        let moving = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(0, 15 * MM), 0.0).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 15 * MM), 0.0)
+            .unwrap();
         let b = pad_ids_of(&board, 1)[0];
         let c = pad_ids_of(&board, 2)[0];
         let unrelated_net = board.connect_pads(b, c).unwrap();
         let (b_center, c_center) = (board.pad_center(b).unwrap(), board.pad_center(c).unwrap());
-        board.node.add(Item::Track { shape: Segment::new(b_center, c_center, 250_000), net: Some(unrelated_net), layer: LayerId::FCu, class: NetClass::C });
+        board.node.add(Item::Track {
+            shape: Segment::new(b_center, c_center, 250_000),
+            net: Some(unrelated_net),
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        });
 
-        board.try_move_footprint(moving, &template, Point::new(-10 * MM, -15 * MM), 0.0).expect("open space must accept the move");
+        board
+            .try_move_footprint(moving, &template, Point::new(-10 * MM, -15 * MM), 0.0)
+            .expect("open space must accept the move");
 
         assert_eq!(
-            board.node.iter().filter(|item| matches!(item, Item::Track { .. })).count(),
+            board
+                .node
+                .iter()
+                .filter(|item| matches!(item, Item::Track { .. }))
+                .count(),
             1,
             "a wire that doesn't touch the moved footprint's own pads must survive the move"
         );
@@ -5028,8 +6698,12 @@ mod tests {
     fn try_move_footprint_rejected_by_collision_leaves_its_wires_untouched() {
         let mut board = test_board();
         let template = two_pin_template();
-        let moving = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        let moving = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let net = board.connect_pads(a, a).unwrap(); // self-connect trick: gives `a` a net without needing a second real pad
         let a_center = board.pad_center(a).unwrap();
@@ -5040,7 +6714,9 @@ mod tests {
             class: NetClass::C,
         });
 
-        let err = board.try_move_footprint(moving, &template, Point::new(10 * MM, 0), 0.0).unwrap_err();
+        let err = board
+            .try_move_footprint(moving, &template, Point::new(10 * MM, 0), 0.0)
+            .unwrap_err();
 
         assert!(matches!(err, PlacementError::Collision(_)));
         assert_eq!(
@@ -5054,13 +6730,22 @@ mod tests {
     fn remove_footprint_deletes_a_wire_touching_one_of_its_pads_too() {
         let mut board = test_board();
         let template = two_pin_template();
-        let removing = board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        let removing = board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let net = board.connect_pads(a, b).unwrap();
         let (a_center, b_center) = (board.pad_center(a).unwrap(), board.pad_center(b).unwrap());
-        board.node.add(Item::Track { shape: Segment::new(a_center, b_center, 250_000), net: Some(net), layer: LayerId::FCu, class: NetClass::C });
+        board.node.add(Item::Track {
+            shape: Segment::new(a_center, b_center, 250_000),
+            net: Some(net),
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        });
 
         board.remove_footprint(removing);
 
@@ -5075,7 +6760,9 @@ mod tests {
     fn remove_footprint_deletes_its_pads_from_the_node() {
         let mut board = test_board();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         assert_eq!(board.node.iter().count(), template.pads.len());
 
         board.remove_footprint(id);
@@ -5091,12 +6778,18 @@ mod tests {
     fn connect_pads_creates_a_new_net_when_neither_pad_has_one() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
 
-        let net = board.connect_pads(a, b).expect("connecting two unassigned pads must succeed");
+        let net = board
+            .connect_pads(a, b)
+            .expect("connecting two unassigned pads must succeed");
         assert_eq!(board.nets.len(), 1);
         assert_eq!(board.pads_on_net(net).len(), 2);
     }
@@ -5105,9 +6798,15 @@ mod tests {
     fn connect_pads_extends_an_existing_net_instead_of_making_a_new_one() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(0, 15 * MM), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 15 * MM), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let c = pad_ids_of(&board, 2)[0];
@@ -5115,7 +6814,10 @@ mod tests {
         let net_ab = board.connect_pads(a, b).unwrap();
         let net_bc = board.connect_pads(b, c).unwrap();
 
-        assert_eq!(net_ab, net_bc, "joining a third pad to an already-connected one must reuse the same net");
+        assert_eq!(
+            net_ab, net_bc,
+            "joining a third pad to an already-connected one must reuse the same net"
+        );
         assert_eq!(board.nets.len(), 1);
         assert_eq!(board.pads_on_net(net_ab).len(), 3);
     }
@@ -5124,10 +6826,18 @@ mod tests {
     fn connect_pads_refuses_to_merge_two_different_existing_nets() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(0, 15 * MM), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(0, -15 * MM), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 15 * MM), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, -15 * MM), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let c = pad_ids_of(&board, 2)[0];
@@ -5137,33 +6847,52 @@ mod tests {
 
         let err = board.connect_pads(a, c).unwrap_err();
         assert_eq!(err, NetError::AlreadyOnDifferentNets);
-        assert_eq!(board.nets.len(), 2, "a refused merge must leave both nets exactly as they were");
+        assert_eq!(
+            board.nets.len(),
+            2,
+            "a refused merge must leave both nets exactly as they were"
+        );
     }
 
     #[test]
     fn disconnect_pad_removes_the_net_once_it_has_no_pads_left() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let net = board.connect_pads(a, b).unwrap();
 
         board.disconnect_pad(a).unwrap();
-        assert_eq!(board.pads_on_net(net).len(), 1, "the net itself must survive with its remaining pad");
+        assert_eq!(
+            board.pads_on_net(net).len(),
+            1,
+            "the net itself must survive with its remaining pad"
+        );
         assert_eq!(board.nets.len(), 1);
 
         board.disconnect_pad(b).unwrap();
-        assert!(board.nets.is_empty(), "a net with zero pads left must be pruned");
+        assert!(
+            board.nets.is_empty(),
+            "a net with zero pads left must be pruned"
+        );
     }
 
     #[test]
     fn remove_net_disconnects_every_one_of_its_pads() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let net = board.connect_pads(a, b).unwrap();
@@ -5178,56 +6907,140 @@ mod tests {
     fn remove_net_also_deletes_every_track_and_via_still_on_it() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let net = board.connect_pads(a, b).unwrap();
-        board.add_track_path(&[Point::new(-10 * MM, 0), Point::new(0, 0)], net, LayerId::FCu, 250_000, NetClass::C);
-        board.try_add_via(Point::new(5 * MM, 0), net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap();
-        let other_net_track_before = board.node.iter().filter(|i| matches!(i, Item::Track { .. })).count();
-        assert!(other_net_track_before > 0, "test setup: the track must actually have been added");
+        board.add_track_path(
+            &[Point::new(-10 * MM, 0), Point::new(0, 0)],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
+        board
+            .try_add_via(
+                Point::new(5 * MM, 0),
+                net,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+            )
+            .unwrap();
+        let other_net_track_before = board
+            .node
+            .iter()
+            .filter(|i| matches!(i, Item::Track { .. }))
+            .count();
+        assert!(
+            other_net_track_before > 0,
+            "test setup: the track must actually have been added"
+        );
 
         board.remove_net(net);
 
         assert!(board.nets.is_empty());
-        assert!(!board.node.iter().any(|item| matches!(item, Item::Track { .. })), "every track on the deleted net must be gone too");
-        assert!(!board.node.iter().any(|item| matches!(item, Item::Via { .. })), "every via on the deleted net must be gone too");
+        assert!(
+            !board
+                .node
+                .iter()
+                .any(|item| matches!(item, Item::Track { .. })),
+            "every track on the deleted net must be gone too"
+        );
+        assert!(
+            !board
+                .node
+                .iter()
+                .any(|item| matches!(item, Item::Via { .. })),
+            "every via on the deleted net must be gone too"
+        );
     }
 
     #[test]
     fn track_at_finds_a_track_near_its_centerline_but_not_far_from_it() {
         let mut board = test_board();
-        board.node.add(Item::Track { shape: Segment::new(Point::new(0, 0), Point::new(10 * MM, 0), 250_000), net: None, layer: LayerId::FCu, class: NetClass::C });
+        board.node.add(Item::Track {
+            shape: Segment::new(Point::new(0, 0), Point::new(10 * MM, 0), 250_000),
+            net: None,
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        });
         let id = board.node.iter_with_ids().next().unwrap().0;
 
-        assert_eq!(board.track_at(Point::new(5 * MM, 0), 0), Some(id), "dead center of the track must hit");
-        assert_eq!(board.track_at(Point::new(5 * MM, 100_000), 0), Some(id), "within the track's own half-width must still hit");
-        assert_eq!(board.track_at(Point::new(5 * MM, MM), 0), None, "1mm off a 0.25mm-wide track must miss with no tolerance");
-        assert_eq!(board.track_at(Point::new(5 * MM, MM), MM), Some(id), "but a generous tolerance must catch it");
+        assert_eq!(
+            board.track_at(Point::new(5 * MM, 0), 0),
+            Some(id),
+            "dead center of the track must hit"
+        );
+        assert_eq!(
+            board.track_at(Point::new(5 * MM, 100_000), 0),
+            Some(id),
+            "within the track's own half-width must still hit"
+        );
+        assert_eq!(
+            board.track_at(Point::new(5 * MM, MM), 0),
+            None,
+            "1mm off a 0.25mm-wide track must miss with no tolerance"
+        );
+        assert_eq!(
+            board.track_at(Point::new(5 * MM, MM), MM),
+            Some(id),
+            "but a generous tolerance must catch it"
+        );
     }
 
     #[test]
     fn via_at_finds_a_via_within_its_radius_plus_tolerance() {
         let mut board = test_board();
-        board.node.add(Item::Via { shape: Circle::new(Point::new(0, 0), 300_000), drill: 300_000, net: None });
+        board.node.add(Item::Via {
+            shape: Circle::new(Point::new(0, 0), 300_000),
+            drill: 300_000,
+            net: None,
+        });
         let id = board.node.iter_with_ids().next().unwrap().0;
 
         assert_eq!(board.via_at(Point::new(0, 0), 0), Some(id));
-        assert_eq!(board.via_at(Point::new(500_000, 0), 0), None, "outside the via's own radius must miss with no tolerance");
-        assert_eq!(board.via_at(Point::new(500_000, 0), 300_000), Some(id), "but a generous tolerance must catch it");
+        assert_eq!(
+            board.via_at(Point::new(500_000, 0), 0),
+            None,
+            "outside the via's own radius must miss with no tolerance"
+        );
+        assert_eq!(
+            board.via_at(Point::new(500_000, 0), 300_000),
+            Some(id),
+            "but a generous tolerance must catch it"
+        );
     }
 
     #[test]
     fn remove_item_deletes_a_track_or_via_but_refuses_a_pad() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let pad = pad_ids_of(&board, 0)[0];
-        board.node.add(Item::Track { shape: Segment::new(Point::new(0, 0), Point::new(10 * MM, 0), 250_000), net: None, layer: LayerId::FCu, class: NetClass::C });
-        let track = board.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Track { .. })).unwrap().0;
+        board.node.add(Item::Track {
+            shape: Segment::new(Point::new(0, 0), Point::new(10 * MM, 0), 250_000),
+            net: None,
+            layer: LayerId::FCu,
+            class: NetClass::C,
+        });
+        let track = board
+            .node
+            .iter_with_ids()
+            .find(|(_, i)| matches!(i, Item::Track { .. }))
+            .unwrap()
+            .0;
 
-        assert!(!board.remove_item(pad), "a pad must not be deletable through this path");
+        assert!(
+            !board.remove_item(pad),
+            "a pad must not be deletable through this path"
+        );
         assert!(board.node.get(pad).is_some());
 
         assert!(board.remove_item(track));
@@ -5238,8 +7051,12 @@ mod tests {
     fn connected_wire_gathers_every_leg_of_a_multi_corner_route() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let a_center = board.pad_center(a).unwrap();
@@ -5249,18 +7066,37 @@ mod tests {
         // separate `Item::Track` legs, exactly like a real
         // `RoutingDrag::commit` with two fixed corners would add.
         board.add_track_path(
-            &[a_center, Point::new(-5 * MM, 0), Point::new(-5 * MM, 5 * MM), Point::new(5 * MM, 5 * MM), b_center],
+            &[
+                a_center,
+                Point::new(-5 * MM, 0),
+                Point::new(-5 * MM, 5 * MM),
+                Point::new(5 * MM, 5 * MM),
+                b_center,
+            ],
             net,
             LayerId::FCu,
             250_000,
             NetClass::C,
         );
-        let track_ids: Vec<ItemId> = board.node.iter_with_ids().filter(|(_, i)| matches!(i, Item::Track { .. })).map(|(id, _)| id).collect();
-        assert_eq!(track_ids.len(), 4, "test setup: four legs for the four-point path above");
+        let track_ids: Vec<ItemId> = board
+            .node
+            .iter_with_ids()
+            .filter(|(_, i)| matches!(i, Item::Track { .. }))
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            track_ids.len(),
+            4,
+            "test setup: four legs for the four-point path above"
+        );
 
         for &start in &track_ids {
             let wire = board.connected_wire(start);
-            assert_eq!(wire.len(), 4, "every leg must gather all four, no matter which one the click landed on");
+            assert_eq!(
+                wire.len(),
+                4,
+                "every leg must gather all four, no matter which one the click landed on"
+            );
             for &id in &track_ids {
                 assert!(wire.contains(&id));
             }
@@ -5271,60 +7107,152 @@ mod tests {
     fn connected_wire_does_not_pull_in_an_unrelated_wire_that_only_shares_a_pad() {
         let mut board = test_board();
         let template = crate::footprint::builtin_templates().remove(1); // 4-pin header, room for two separate nets
-        board.try_place_footprint(&template, Point::new(-12 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(12 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-12 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(12 * MM, 0), 0.0)
+            .unwrap();
         let pads_left = pad_ids_of(&board, 0);
         let pads_right = pad_ids_of(&board, 1);
         let net_a = board.connect_pads(pads_left[0], pads_right[0]).unwrap();
         let net_b = board.connect_pads(pads_left[1], pads_right[1]).unwrap();
-        board.add_track_path(&[board.pad_center(pads_left[0]).unwrap(), board.pad_center(pads_right[0]).unwrap()], net_a, LayerId::FCu, 250_000, NetClass::C);
-        board.add_track_path(&[board.pad_center(pads_left[1]).unwrap(), board.pad_center(pads_right[1]).unwrap()], net_b, LayerId::FCu, 250_000, NetClass::C);
+        board.add_track_path(
+            &[
+                board.pad_center(pads_left[0]).unwrap(),
+                board.pad_center(pads_right[0]).unwrap(),
+            ],
+            net_a,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
+        board.add_track_path(
+            &[
+                board.pad_center(pads_left[1]).unwrap(),
+                board.pad_center(pads_right[1]).unwrap(),
+            ],
+            net_b,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
 
-        let track_a = board.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Track { net, .. } if *net == Some(net_a))).unwrap().0;
+        let track_a = board
+            .node
+            .iter_with_ids()
+            .find(|(_, i)| matches!(i, Item::Track { net, .. } if *net == Some(net_a)))
+            .unwrap()
+            .0;
         let wire = board.connected_wire(track_a);
-        assert_eq!(wire, vec![track_a], "a different net's wire, even on the same two footprints, must never be pulled in");
+        assert_eq!(
+            wire,
+            vec![track_a],
+            "a different net's wire, even on the same two footprints, must never be pulled in"
+        );
     }
 
     #[test]
     fn connected_wire_crosses_a_via_onto_the_other_layer() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let a_center = board.pad_center(a).unwrap();
         let b_center = board.pad_center(b).unwrap();
         let net = board.connect_pads(a, b).unwrap();
         let via_point = Point::new(0, 0);
-        board.try_add_via(via_point, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap();
-        board.add_track_path(&[a_center, via_point], net, LayerId::FCu, 250_000, NetClass::C);
-        board.add_track_path(&[via_point, b_center], net, LayerId::BCu, 250_000, NetClass::C);
+        board
+            .try_add_via(via_point, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL)
+            .unwrap();
+        board.add_track_path(
+            &[a_center, via_point],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
+        board.add_track_path(
+            &[via_point, b_center],
+            net,
+            LayerId::BCu,
+            250_000,
+            NetClass::C,
+        );
 
-        let leg_on_fcu = board.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Track { layer: LayerId::FCu, .. })).unwrap().0;
+        let leg_on_fcu = board
+            .node
+            .iter_with_ids()
+            .find(|(_, i)| {
+                matches!(
+                    i,
+                    Item::Track {
+                        layer: LayerId::FCu,
+                        ..
+                    }
+                )
+            })
+            .unwrap()
+            .0;
         let wire = board.connected_wire(leg_on_fcu);
-        assert_eq!(wire.len(), 3, "both legs plus the via bridging them must all be gathered");
-        assert!(wire.iter().any(|&id| matches!(board.node.get(id), Some(Item::Via { .. }))));
-        assert!(wire.iter().any(|&id| matches!(board.node.get(id), Some(Item::Track { layer: LayerId::BCu, .. }))));
+        assert_eq!(
+            wire.len(),
+            3,
+            "both legs plus the via bridging them must all be gathered"
+        );
+        assert!(wire
+            .iter()
+            .any(|&id| matches!(board.node.get(id), Some(Item::Via { .. }))));
+        assert!(wire.iter().any(|&id| matches!(
+            board.node.get(id),
+            Some(Item::Track {
+                layer: LayerId::BCu,
+                ..
+            })
+        )));
     }
 
     #[test]
     fn remove_wire_deletes_every_leg_at_once_but_leaves_the_net_and_pads_intact() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let a_center = board.pad_center(a).unwrap();
         let b_center = board.pad_center(b).unwrap();
         let net = board.connect_pads(a, b).unwrap();
-        board.add_track_path(&[a_center, Point::new(0, 5 * MM), b_center], net, LayerId::FCu, 250_000, NetClass::C);
-        let first_leg = board.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Track { .. })).unwrap().0;
+        board.add_track_path(
+            &[a_center, Point::new(0, 5 * MM), b_center],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
+        let first_leg = board
+            .node
+            .iter_with_ids()
+            .find(|(_, i)| matches!(i, Item::Track { .. }))
+            .unwrap()
+            .0;
 
         assert!(board.remove_wire(first_leg));
 
-        assert!(!board.node.iter().any(|i| matches!(i, Item::Track { .. })), "every leg of the wire must be gone");
+        assert!(
+            !board.node.iter().any(|i| matches!(i, Item::Track { .. })),
+            "every leg of the wire must be gone"
+        );
         assert_eq!(board.nets.len(), 1, "the net itself must survive");
         assert_eq!(board.pad_net(a), Ok(Some(net)), "pads must stay connected");
         assert_eq!(board.pad_net(b), Ok(Some(net)), "pads must stay connected");
@@ -5334,7 +7262,9 @@ mod tests {
     fn remove_wire_refuses_for_a_pad() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let pad = pad_ids_of(&board, 0)[0];
         assert!(!board.remove_wire(pad));
         assert!(board.node.get(pad).is_some());
@@ -5347,13 +7277,18 @@ mod tests {
         // removing that one footprint removes every pad the net has.
         let mut board = test_board();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let pads = pad_ids_of(&board, 0);
         board.connect_pads(pads[0], pads[1]).unwrap();
         assert_eq!(board.nets.len(), 1);
 
         board.remove_footprint(id);
-        assert!(board.nets.is_empty(), "removing every pad a net has must prune that net too");
+        assert!(
+            board.nets.is_empty(),
+            "removing every pad a net has must prune that net too"
+        );
     }
 
     #[test]
@@ -5373,11 +7308,19 @@ mod tests {
     fn find_pad_resolves_a_reference_and_pad_number_to_the_right_item_id() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let expected = board.footprints[0].pad_item_ids[1];
 
-        assert_eq!(board.find_pad(std::slice::from_ref(&template), "P1", "2"), Some(expected));
-        assert_eq!(board.find_pad(std::slice::from_ref(&template), "P1", "no-such-pin"), None);
+        assert_eq!(
+            board.find_pad(std::slice::from_ref(&template), "P1", "2"),
+            Some(expected)
+        );
+        assert_eq!(
+            board.find_pad(std::slice::from_ref(&template), "P1", "no-such-pin"),
+            None
+        );
         assert_eq!(board.find_pad(&[template], "no-such-reference", "1"), None);
     }
 
@@ -5385,8 +7328,12 @@ mod tests {
     fn find_net_by_name_resolves_an_exact_match_and_misses_an_unknown_name() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(&board, 0)[0];
         let b = pad_ids_of(&board, 1)[0];
         let net = board.connect_pads(a, b).unwrap();
@@ -5404,7 +7351,11 @@ mod tests {
 
         assert_eq!(board.nets.iter().find(|n| n.id == net).unwrap().name, "GND");
         assert_eq!(board.find_net_by_name("GND"), Some(net));
-        assert_eq!(board.find_net_by_name("Net1"), None, "the old auto-generated name must no longer resolve");
+        assert_eq!(
+            board.find_net_by_name("Net1"),
+            None,
+            "the old auto-generated name must no longer resolve"
+        );
     }
 
     #[test]
@@ -5430,17 +7381,24 @@ mod tests {
     fn rename_net_rejects_an_unknown_net_id() {
         let mut board = test_board();
         let bogus = NetId(999);
-        assert_eq!(board.rename_net(bogus, "GND"), Err(RenameNetError::NotFound));
+        assert_eq!(
+            board.rename_net(bogus, "GND"),
+            Err(RenameNetError::NotFound)
+        );
     }
 
     #[test]
-    fn rename_net_rejects_a_name_already_used_by_a_different_net_but_allows_renaming_to_its_own_current_name() {
+    fn rename_net_rejects_a_name_already_used_by_a_different_net_but_allows_renaming_to_its_own_current_name(
+    ) {
         let mut board = test_board();
         let gnd = board.create_net();
         board.rename_net(gnd, "GND").unwrap();
         let other = board.create_net();
 
-        assert_eq!(board.rename_net(other, "GND"), Err(RenameNetError::NameAlreadyUsed));
+        assert_eq!(
+            board.rename_net(other, "GND"),
+            Err(RenameNetError::NameAlreadyUsed)
+        );
         // Renaming a net to the exact name it already has is a harmless no-op, not a self-conflict.
         assert!(board.rename_net(gnd, "GND").is_ok());
     }
@@ -5449,7 +7407,9 @@ mod tests {
     fn footprint_at_hits_a_pad_and_misses_empty_space() {
         let mut board = test_board();
         let template = two_pin_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
 
         let pad_position = match board.node.get(board.footprints[0].pad_item_ids[0]).unwrap() {
             Item::Pad { shape, .. } => shape.center(),
@@ -5470,17 +7430,31 @@ mod tests {
     fn footprint_at_finds_a_pure_mounting_hole_footprint_by_its_hole_not_just_a_pad() {
         let mut board = test_board();
         let template = mounting_hole_template();
-        let id = board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let id = board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
 
-        let hole_position = match board.node.get(board.footprints[0].hole_item_ids[0]).unwrap() {
+        let hole_position = match board
+            .node
+            .get(board.footprints[0].hole_item_ids[0])
+            .unwrap()
+        {
             Item::Hole { position, .. } => *position,
             _ => panic!("expected a hole"),
         };
-        assert_eq!(board.footprint_at(hole_position), Some(id), "clicking dead center of the hole must select its footprint");
+        assert_eq!(
+            board.footprint_at(hole_position),
+            Some(id),
+            "clicking dead center of the hole must select its footprint"
+        );
         assert_eq!(board.footprint_at(Point::new(19 * MM, 19 * MM)), None);
     }
 
-    fn one_pad_rect_template(width: Unit, height: Unit, rotation_deg: f64) -> crate::footprint::FootprintTemplate {
+    fn one_pad_rect_template(
+        width: Unit,
+        height: Unit,
+        rotation_deg: f64,
+    ) -> crate::footprint::FootprintTemplate {
         crate::footprint::FootprintTemplate {
             name: "rect-test".to_string(),
             reference_prefix: "P".to_string(),
@@ -5508,18 +7482,28 @@ mod tests {
         // hit-test must reject.
         let mut board = test_board();
         let template = one_pad_rect_template(4 * MM, MM, 45.0);
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
 
         // Just off the pad's own long axis (rotated 45 degrees), well
         // inside the true rectangle.
         let on_axis = Point::new(mm_to_unit(1.0), mm_to_unit(1.0));
-        assert_eq!(board.pad_at(on_axis), Some(board.footprints[0].pad_item_ids[0]), "must hit real copper on the rotated pad's long axis");
+        assert_eq!(
+            board.pad_at(on_axis),
+            Some(board.footprints[0].pad_item_ids[0]),
+            "must hit real copper on the rotated pad's long axis"
+        );
 
         // Same distance from the center, but off-axis (e.g. straight
         // along unrotated +X) -- inside the old bounding circle, but
         // outside the true rotated rectangle.
         let off_axis = Point::new(mm_to_unit(1.9), 0);
-        assert_eq!(board.pad_at(off_axis), None, "must miss the bounding circle's corner that isn't real copper");
+        assert_eq!(
+            board.pad_at(off_axis),
+            None,
+            "must miss the bounding circle's corner that isn't real copper"
+        );
     }
 
     /// The rotated pad's true rightmost extent along X (its AABB
@@ -5531,7 +7515,13 @@ mod tests {
     fn rightmost_extent_of_a_single_rect_pad(width: Unit, height: Unit, rotation_deg: f64) -> Unit {
         let template = one_pad_rect_template(width, height, rotation_deg);
         let items = crate::footprint::world_items(&template, Point::new(0, 0), 0.0);
-        let Item::Pad { shape: PadShape::Polygon { outline, .. }, .. } = &items[0] else { panic!("expected a polygon pad") };
+        let Item::Pad {
+            shape: PadShape::Polygon { outline, .. },
+            ..
+        } = &items[0]
+        else {
+            panic!("expected a polygon pad")
+        };
         outline.points.iter().map(|p| p.x).max().unwrap()
     }
 
@@ -5549,7 +7539,9 @@ mod tests {
         let gap_from_edge = 50_000; // 0.05mm -- less than the 0.20mm minimum
         let position = Point::new(20 * MM - gap_from_edge - extent, 0);
 
-        let err = board.try_place_footprint(&template, position, 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&template, position, 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::OffBoard);
     }
 
@@ -5567,13 +7559,19 @@ mod tests {
         let gap_from_edge = 3 * MM;
         let position = Point::new(20 * MM - gap_from_edge - extent, 0);
 
-        board.try_place_footprint(&template, position, 0.0).expect("a well-cleared rotated rect pad must be accepted");
+        board
+            .try_place_footprint(&template, position, 0.0)
+            .expect("a well-cleared rotated rect pad must be accepted");
     }
 
     fn net_for_a_connected_pair(board: &mut BoardDoc) -> NetId {
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let a = pad_ids_of(board, 0)[0];
         let b = pad_ids_of(board, 1)[0];
         board.connect_pads(a, b).unwrap()
@@ -5589,7 +7587,9 @@ mod tests {
         let mut template = two_pin_template();
         template.pads[0].radius = 100_000; // 0.2mm diameter, under the 0.25mm SMD floor
         template.pads[0].shape = crate::footprint::PadShapeKind::Circle;
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).expect("a sub-minimum SMD pad must not hard-block placement");
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .expect("a sub-minimum SMD pad must not hard-block placement");
         assert_eq!(board.footprints.len(), 1);
         assert!(
             !crate::footprint::template_dfm_violations(&template.pads, &[]).is_empty(),
@@ -5602,8 +7602,12 @@ mod tests {
         let mut board = test_board();
         let net_a = net_for_a_connected_pair(&mut board);
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 12 * MM), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 12 * MM), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 12 * MM), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 12 * MM), 0.0)
+            .unwrap();
         let c = pad_ids_of(&board, 2)[0];
         let d = pad_ids_of(&board, 3)[0];
         let net_b = board.connect_pads(c, d).unwrap();
@@ -5613,28 +7617,45 @@ mod tests {
         // walls sit only 0.45mm apart, under JLCPCB's 0.5mm
         // different-net hole-to-hole rule. Exactly the class of refusal
         // only a drill-aware check can produce.
-        board.try_add_via(Point::new(0, -12 * MM), net_a, 600_000, 300_000).unwrap();
-        let err = board.try_add_via(Point::new(750_000, -12 * MM), net_b, 600_000, 300_000).unwrap_err();
+        board
+            .try_add_via(Point::new(0, -12 * MM), net_a, 600_000, 300_000)
+            .unwrap();
+        let err = board
+            .try_add_via(Point::new(750_000, -12 * MM), net_b, 600_000, 300_000)
+            .unwrap_err();
         assert_eq!(err, PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
 
         // The identical geometry on the *same* net falls under the
         // relaxed 0.254mm rule instead -- a legal stitching pair.
-        board.try_add_via(Point::new(750_000, -12 * MM), net_a, 600_000, 300_000).expect("a same-net via pair with a 0.45mm wall gap must stay legal");
+        board
+            .try_add_via(Point::new(750_000, -12 * MM), net_a, 600_000, 300_000)
+            .expect("a same-net via pair with a 0.45mm wall gap must stay legal");
     }
 
     #[test]
     fn try_place_footprint_refuses_a_mounting_hole_whose_drill_crowds_an_existing_via() {
         let mut board = test_board();
         let net = net_for_a_connected_pair(&mut board);
-        let mounting = crate::footprint::builtin_templates().into_iter().find(|t| !t.holes.is_empty()).expect("a mounting-hole builtin must exist");
+        let mounting = crate::footprint::builtin_templates()
+            .into_iter()
+            .find(|t| !t.holes.is_empty())
+            .expect("a mounting-hole builtin must exist");
         let drill = mounting.holes[0].drill;
 
         let via_center = Point::new(0, -12 * MM);
-        board.try_add_via(via_center, net, 600_000, 300_000).unwrap();
+        board
+            .try_add_via(via_center, net, 600_000, 300_000)
+            .unwrap();
         // Wall gap 0.35mm (under the 0.5mm different-net rule), while
         // the copper edges still clear each other comfortably.
         let distance = drill / 2 + 150_000 + 350_000;
-        let err = board.try_place_footprint(&mounting, Point::new(via_center.x + distance, via_center.y), 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(
+                &mounting,
+                Point::new(via_center.x + distance, via_center.y),
+                0.0,
+            )
+            .unwrap_err();
         assert_eq!(err, PlacementError::Dfm(DfmViolation::HoleToHoleBelowMin));
 
         // Clean placement must clear BOTH remaining gates: the 0.5mm
@@ -5643,8 +7664,14 @@ mod tests {
         // (0.3mm radius) at the pad-to-pad clearance.
         let distance = drill + 150_000 + 300_000;
         board
-            .try_place_footprint(&mounting, Point::new(via_center.x + distance, via_center.y), 0.0)
-            .expect("a hole clear of both the drill rule and the screw-head keep-out must be legal");
+            .try_place_footprint(
+                &mounting,
+                Point::new(via_center.x + distance, via_center.y),
+                0.0,
+            )
+            .expect(
+                "a hole clear of both the drill rule and the screw-head keep-out must be legal",
+            );
     }
 
     #[test]
@@ -5655,10 +7682,22 @@ mod tests {
         let net = net_for_a_connected_pair(&mut board);
         let before = board.node.iter().count();
         let err = board
-            .try_add_via(Point::new(0, 5 * MM), net, JlcpcbDfm::MIN_VIA_DIAMETER, JlcpcbDfm::MIN_VIA_HOLE)
+            .try_add_via(
+                Point::new(0, 5 * MM),
+                net,
+                JlcpcbDfm::MIN_VIA_DIAMETER,
+                JlcpcbDfm::MIN_VIA_HOLE,
+            )
             .expect_err("sub-minimum annular ring must be refused");
-        assert_eq!(err, PlacementError::Dfm(DfmViolation::ViaAnnularRingBelowMin));
-        assert_eq!(board.node.iter().count(), before, "a refused via must not be added");
+        assert_eq!(
+            err,
+            PlacementError::Dfm(DfmViolation::ViaAnnularRingBelowMin)
+        );
+        assert_eq!(
+            board.node.iter().count(),
+            before,
+            "a refused via must not be added"
+        );
     }
 
     #[test]
@@ -5671,12 +7710,29 @@ mod tests {
         let (a, b) = (Point::new(-5 * MM, 0), Point::new(5 * MM, 0));
         board.add_track_path(&[a, b], net, LayerId::FCu, 250_000, NetClass::C);
 
-        let same = |a, b, width, net, layer| Item::Track { shape: Segment::new(a, b, width), net, layer, class: NetClass::C };
+        let same = |a, b, width, net, layer| Item::Track {
+            shape: Segment::new(a, b, width),
+            net,
+            layer,
+            class: NetClass::C,
+        };
         assert!(board.has_identical_routed_item(&same(a, b, 250_000, Some(net), LayerId::FCu)));
-        assert!(board.has_identical_routed_item(&same(b, a, 250_000, Some(net), LayerId::FCu)), "swapped endpoints are the same capsule");
-        assert!(!board.has_identical_routed_item(&same(a, b, 300_000, Some(net), LayerId::FCu)), "a different width is different copper");
-        assert!(!board.has_identical_routed_item(&same(a, b, 250_000, Some(net), LayerId::BCu)), "a different layer is different copper");
-        assert!(!board.has_identical_routed_item(&same(a, b, 250_000, None, LayerId::FCu)), "a different net is different copper");
+        assert!(
+            board.has_identical_routed_item(&same(b, a, 250_000, Some(net), LayerId::FCu)),
+            "swapped endpoints are the same capsule"
+        );
+        assert!(
+            !board.has_identical_routed_item(&same(a, b, 300_000, Some(net), LayerId::FCu)),
+            "a different width is different copper"
+        );
+        assert!(
+            !board.has_identical_routed_item(&same(a, b, 250_000, Some(net), LayerId::BCu)),
+            "a different layer is different copper"
+        );
+        assert!(
+            !board.has_identical_routed_item(&same(a, b, 250_000, None, LayerId::FCu)),
+            "a different net is different copper"
+        );
     }
 
     #[test]
@@ -5684,13 +7740,48 @@ mod tests {
         let mut board = test_board();
         let net = net_for_a_connected_pair(&mut board);
         let center = Point::new(0, 5 * MM);
-        board.try_add_via(center, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap();
+        board
+            .try_add_via(center, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL)
+            .unwrap();
 
-        let via = |center, diameter: Unit, drill, net| Item::Via { shape: Circle::new(center, diameter / 2), drill, net };
-        assert!(board.has_identical_routed_item(&via(center, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, Some(net))));
-        assert!(!board.has_identical_routed_item(&via(Point::new(MM, 5 * MM), DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, Some(net))), "a different center is a different via");
-        assert!(!board.has_identical_routed_item(&via(center, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL + 50_000, Some(net))), "a different drill is a different via");
-        assert!(!board.has_identical_routed_item(&via(center, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, None)), "a different net is a different via");
+        let via = |center, diameter: Unit, drill, net| Item::Via {
+            shape: Circle::new(center, diameter / 2),
+            drill,
+            net,
+        };
+        assert!(board.has_identical_routed_item(&via(
+            center,
+            DEFAULT_VIA_DIAMETER,
+            DEFAULT_VIA_DRILL,
+            Some(net)
+        )));
+        assert!(
+            !board.has_identical_routed_item(&via(
+                Point::new(MM, 5 * MM),
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                Some(net)
+            )),
+            "a different center is a different via"
+        );
+        assert!(
+            !board.has_identical_routed_item(&via(
+                center,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL + 50_000,
+                Some(net)
+            )),
+            "a different drill is a different via"
+        );
+        assert!(
+            !board.has_identical_routed_item(&via(
+                center,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                None
+            )),
+            "a different net is a different via"
+        );
     }
 
     #[test]
@@ -5698,10 +7789,21 @@ mod tests {
         let mut board = test_board();
         let net = net_for_a_connected_pair(&mut board);
 
-        let id = board.try_add_via(Point::new(0, 5 * MM), net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).expect("open space must accept a via");
+        let id = board
+            .try_add_via(
+                Point::new(0, 5 * MM),
+                net,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+            )
+            .expect("open space must accept a via");
 
         match board.node.get(id) {
-            Some(Item::Via { shape, drill, net: via_net }) => {
+            Some(Item::Via {
+                shape,
+                drill,
+                net: via_net,
+            }) => {
                 assert_eq!(shape.center, Point::new(0, 5 * MM));
                 assert_eq!(shape.radius, DEFAULT_VIA_DIAMETER / 2);
                 assert_eq!(*drill, DEFAULT_VIA_DRILL);
@@ -5719,13 +7821,28 @@ mod tests {
         let mut board = test_board();
         let net = net_for_a_connected_pair(&mut board);
         let mid = Point::new(0, 5 * MM);
-        board.add_track_path(&[Point::new(-5 * MM, 5 * MM), Point::new(5 * MM, 5 * MM)], net, LayerId::FCu, 250_000, NetClass::C);
+        board.add_track_path(
+            &[Point::new(-5 * MM, 5 * MM), Point::new(5 * MM, 5 * MM)],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
         let before = board.node.iter().count();
 
-        let err = board.try_add_via(mid, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap_err();
+        let err = board
+            .try_add_via(mid, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL)
+            .unwrap_err();
         assert_eq!(err, PlacementError::OnTrack);
-        assert_eq!(board.node.iter().count(), before, "a rejected via must not be added");
-        assert!(!board.via_would_fit(mid, net, DEFAULT_VIA_DIAMETER), "ghost preview must match the hard gate");
+        assert_eq!(
+            board.node.iter().count(),
+            before,
+            "a rejected via must not be added"
+        );
+        assert!(
+            !board.via_would_fit(mid, net, DEFAULT_VIA_DIAMETER),
+            "ghost preview must match the hard gate"
+        );
     }
 
     #[test]
@@ -5738,16 +7855,29 @@ mod tests {
         let mut board = test_board();
         let net = net_for_a_connected_pair(&mut board);
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 15 * MM), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 15 * MM), 0.0)
+            .unwrap();
         let unconnected_pad_center = match board.node.get(pad_ids_of(&board, 2)[0]).unwrap() {
             Item::Pad { shape, .. } => shape.center(),
             _ => panic!("expected a pad"),
         };
         let before = board.node.iter().count();
 
-        let err = board.try_add_via(unconnected_pad_center, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap_err();
+        let err = board
+            .try_add_via(
+                unconnected_pad_center,
+                net,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+            )
+            .unwrap_err();
         assert!(matches!(err, PlacementError::Collision(_)));
-        assert_eq!(board.node.iter().count(), before, "a rejected via must not be added");
+        assert_eq!(
+            board.node.iter().count(),
+            before,
+            "a rejected via must not be added"
+        );
     }
 
     #[test]
@@ -5762,9 +7892,15 @@ mod tests {
         let gap_from_edge = 50_000; // 0.05mm
         let center = Point::new(20 * MM - gap_from_edge - DEFAULT_VIA_DIAMETER / 2, 15 * MM);
 
-        let err = board.try_add_via(center, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap_err();
+        let err = board
+            .try_add_via(center, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL)
+            .unwrap_err();
         assert_eq!(err, PlacementError::OffBoard);
-        assert_eq!(board.node.iter().count(), before, "a rejected via must not be added");
+        assert_eq!(
+            board.node.iter().count(),
+            before,
+            "a rejected via must not be added"
+        );
     }
 
     #[test]
@@ -5794,9 +7930,20 @@ mod tests {
         let net = net_for_a_connected_pair(&mut board);
         let before = board.node.iter().count();
 
-        let err = board.try_add_stitching_via(Point::new(0, 15 * MM), net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap_err();
+        let err = board
+            .try_add_stitching_via(
+                Point::new(0, 15 * MM),
+                net,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+            )
+            .unwrap_err();
         assert_eq!(err, ViaError::Dangling);
-        assert_eq!(board.node.iter().count(), before, "a rejected dangling via must be rolled back, not left on the board");
+        assert_eq!(
+            board.node.iter().count(),
+            before,
+            "a rejected dangling via must be rolled back, not left on the board"
+        );
     }
 
     #[test]
@@ -5813,13 +7960,20 @@ mod tests {
         let gap_from_edge = 50_000; // 0.05mm, see the `try_add_via` sibling test
         let center = Point::new(20 * MM - gap_from_edge - DEFAULT_VIA_DIAMETER / 2, 15 * MM);
 
-        let err = board.try_add_stitching_via(center, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap_err();
+        let err = board
+            .try_add_stitching_via(center, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL)
+            .unwrap_err();
         assert_eq!(err, ViaError::Placement(PlacementError::OffBoard));
-        assert_eq!(board.node.iter().count(), before, "a rejected via must not be added");
+        assert_eq!(
+            board.node.iter().count(),
+            before,
+            "a rejected via must not be added"
+        );
     }
 
     #[test]
-    fn try_add_pin_stitching_via_places_the_via_radially_away_from_the_footprints_own_body_and_connects_it_with_a_stub() {
+    fn try_add_pin_stitching_via_places_the_via_radially_away_from_the_footprints_own_body_and_connects_it_with_a_stub(
+    ) {
         // `two_pin_template()`'s pad "1" sits at local x = -1.27mm, and
         // this symmetric two-pad footprint's own fallback courtyard is
         // centered on its `position` -- so the radial-outward direction
@@ -5827,22 +7981,40 @@ mod tests {
         // never back across it.
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let pad_id = pad_ids_of(&board, 0)[0];
-        board.connect_pads(pad_id, pad_ids_of(&board, 1)[0]).unwrap();
+        board
+            .connect_pads(pad_id, pad_ids_of(&board, 1)[0])
+            .unwrap();
 
         let items_before = board.node.iter().count();
         let pad_center = board.pad_center(pad_id).unwrap();
 
         let result = board
-            .try_add_pin_stitching_via(pad_id, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH)
+            .try_add_pin_stitching_via(
+                pad_id,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                crate::routing::DEFAULT_TRACE_WIDTH,
+            )
             .expect("open space next to the pin must accept a stitching via");
 
         assert!(result.center.x < pad_center.x, "the via must land further from the part than the pin itself, not on top of it or back across the body");
         assert_eq!(result.center.y, pad_center.y);
-        assert!(matches!(board.node.get(result.via_id), Some(Item::Via { .. })), "the via itself must actually be live");
-        assert_eq!(board.node.iter().count(), items_before + 2, "exactly one new via and one new stub track leg must be added");
+        assert!(
+            matches!(board.node.get(result.via_id), Some(Item::Via { .. })),
+            "the via itself must actually be live"
+        );
+        assert_eq!(
+            board.node.iter().count(),
+            items_before + 2,
+            "exactly one new via and one new stub track leg must be added"
+        );
         assert!(
             board.node.iter().any(|item| matches!(item, Item::Track { shape, .. } if shape.a == pad_center && shape.b == result.center)),
             "a stub track from the pin straight to the new via must have been committed"
@@ -5850,7 +8022,10 @@ mod tests {
     }
 
     fn wire_pad_template() -> crate::footprint::FootprintTemplate {
-        crate::footprint::builtin_templates().into_iter().find(|t| t.name == "Wire pad (solder, 2mm)").unwrap()
+        crate::footprint::builtin_templates()
+            .into_iter()
+            .find(|t| t.name == "Wire pad (solder, 2mm)")
+            .unwrap()
     }
 
     #[test]
@@ -5864,13 +8039,22 @@ mod tests {
         // ends up, it must keep normal clearance from EVERY pad.
         let mut board = test_board();
         let template = wire_pad_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new((3.0 * MM as f64) as Unit, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new((3.0 * MM as f64) as Unit, 0), 0.0)
+            .unwrap();
         let pad_a = pad_ids_of(&board, 0)[0];
         board.connect_pads(pad_a, pad_ids_of(&board, 1)[0]).unwrap();
 
         let result = board
-            .try_add_pin_stitching_via(pad_a, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH)
+            .try_add_pin_stitching_via(
+                pad_a,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                crate::routing::DEFAULT_TRACE_WIDTH,
+            )
             .expect("the angular sweep must find a spot that overlaps no pad");
         assert!(
             !board.via_too_close_to_any_pad(result.center, DEFAULT_VIA_DIAMETER),
@@ -5880,7 +8064,8 @@ mod tests {
     }
 
     #[test]
-    fn try_add_pin_stitching_via_falls_back_to_a_fixed_direction_when_the_pin_sits_on_the_footprints_own_center() {
+    fn try_add_pin_stitching_via_falls_back_to_a_fixed_direction_when_the_pin_sits_on_the_footprints_own_center(
+    ) {
         // `wire_pad_template()` has exactly one pad, at the footprint's
         // own local origin -- the one case where "radially away from
         // the body" is undefined (zero-length direction). Must still
@@ -5888,14 +8073,30 @@ mod tests {
         // panicking on a division by zero or refusing outright.
         let mut board = test_board();
         let template = wire_pad_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
-        board.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
+        board
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let pad_id = pad_ids_of(&board, 0)[0];
-        board.connect_pads(pad_id, pad_ids_of(&board, 1)[0]).unwrap();
+        board
+            .connect_pads(pad_id, pad_ids_of(&board, 1)[0])
+            .unwrap();
 
-        let result = board.try_add_pin_stitching_via(pad_id, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH).expect("the fixed fallback direction must still be a legal placement");
+        let result = board
+            .try_add_pin_stitching_via(
+                pad_id,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                crate::routing::DEFAULT_TRACE_WIDTH,
+            )
+            .expect("the fixed fallback direction must still be a legal placement");
 
-        assert!(result.center.x > 0, "the documented +X fallback must have been used");
+        assert!(
+            result.center.x > 0,
+            "the documented +X fallback must have been used"
+        );
         assert_eq!(result.center.y, 0);
     }
 
@@ -5903,9 +8104,23 @@ mod tests {
     fn try_add_pin_stitching_via_rejects_a_non_pad_item_id() {
         let mut board = test_board();
         let net = net_for_a_connected_pair(&mut board);
-        let via_id = board.try_add_via(Point::new(0, 5 * MM), net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap();
+        let via_id = board
+            .try_add_via(
+                Point::new(0, 5 * MM),
+                net,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+            )
+            .unwrap();
 
-        let err = board.try_add_pin_stitching_via(via_id, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH).unwrap_err();
+        let err = board
+            .try_add_pin_stitching_via(
+                via_id,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                crate::routing::DEFAULT_TRACE_WIDTH,
+            )
+            .unwrap_err();
         assert_eq!(err, PinStitchingViaError::NotAPad);
     }
 
@@ -5913,13 +8128,26 @@ mod tests {
     fn try_add_pin_stitching_via_rejects_a_pad_with_no_net_yet() {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let pad_id = pad_ids_of(&board, 0)[0];
         let before = board.node.iter().count();
 
-        let err = board.try_add_pin_stitching_via(pad_id, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH).unwrap_err();
+        let err = board
+            .try_add_pin_stitching_via(
+                pad_id,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                crate::routing::DEFAULT_TRACE_WIDTH,
+            )
+            .unwrap_err();
         assert_eq!(err, PinStitchingViaError::NoNet);
-        assert_eq!(board.node.iter().count(), before, "a refused pin must not have anything added for it");
+        assert_eq!(
+            board.node.iter().count(),
+            before,
+            "a refused pin must not have anything added for it"
+        );
     }
 
     #[test]
@@ -5938,7 +8166,13 @@ mod tests {
         let net_a = board.create_net();
         let net_b = board.create_net();
         let pad_radius = mm_to_unit(0.1);
-        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        let pad_id = board.node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)),
+            net: Some(net_a),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
         // Smallest JLCPCB-legal via (0.35/0.15 -- annular ring exactly
         // at MIN_VIA_ANNULAR_RING once drill is at MIN_VIA_HOLE).
         let via_diameter = mm_to_unit(0.35);
@@ -5948,16 +8182,26 @@ mod tests {
         // 0.20 = 0.375 exclusion; obstacle at y=0.45 clears that), but
         // well within the 2mm-wide stub's own much larger corridor.
         board.node.add(Item::Track {
-            shape: Segment::new(Point::new(mm_to_unit(0.3), mm_to_unit(0.45)), Point::new(mm_to_unit(0.5), mm_to_unit(0.45)), mm_to_unit(0.1)),
+            shape: Segment::new(
+                Point::new(mm_to_unit(0.3), mm_to_unit(0.45)),
+                Point::new(mm_to_unit(0.5), mm_to_unit(0.45)),
+                mm_to_unit(0.1),
+            ),
             net: Some(net_b),
             layer: LayerId::FCu,
             class: NetClass::C,
         });
         let items_before = board.node.iter().count();
 
-        let err = board.try_add_pin_stitching_via(pad_id, via_diameter, via_drill, wide_stub_width).unwrap_err();
+        let err = board
+            .try_add_pin_stitching_via(pad_id, via_diameter, via_drill, wide_stub_width)
+            .unwrap_err();
         assert_eq!(err, PinStitchingViaError::NoRoomForStub);
-        assert_eq!(board.node.iter().count(), items_before, "the via must be rolled straight back out again, not left dangling on the board");
+        assert_eq!(
+            board.node.iter().count(),
+            items_before,
+            "the via must be rolled straight back out again, not left dangling on the board"
+        );
     }
 
     #[test]
@@ -5972,7 +8216,13 @@ mod tests {
         let net_a = board.create_net();
         let net_b = board.create_net();
         let pad_radius = mm_to_unit(0.1);
-        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
+        let pad_id = board.node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)),
+            net: Some(net_a),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
 
         let ideal = board.pin_stitching_via_candidates(pad_id, DEFAULT_VIA_DIAMETER)[0];
         // A tiny via, but sitting exactly on the one point being
@@ -5980,14 +8230,26 @@ mod tests {
         // reaching far enough around the circle to block every
         // fallback angle too (see the full-sweep-blocked test below
         // for that case).
-        board.node.add(Item::Via { shape: Circle::new(ideal, mm_to_unit(0.05)), drill: 0, net: Some(net_b) });
+        board.node.add(Item::Via {
+            shape: Circle::new(ideal, mm_to_unit(0.05)),
+            drill: 0,
+            net: Some(net_b),
+        });
         let items_before = board.node.iter().count();
 
         let result = board
-            .try_add_pin_stitching_via(pad_id, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH)
+            .try_add_pin_stitching_via(
+                pad_id,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                crate::routing::DEFAULT_TRACE_WIDTH,
+            )
             .expect("a small angular deviation must find a free spot next to the blocked one");
 
-        assert_ne!(result.center, ideal, "must not have reused the blocked, already-occupied spot");
+        assert_ne!(
+            result.center, ideal,
+            "must not have reused the blocked, already-occupied spot"
+        );
         let ideal_distance = (ideal.x as f64).hypot(ideal.y as f64);
         let actual_distance = (result.center.x as f64).hypot(result.center.y as f64);
         assert!(
@@ -6002,7 +8264,8 @@ mod tests {
     }
 
     #[test]
-    fn try_add_pin_stitching_via_reports_the_natural_points_own_error_when_the_whole_sweep_is_blocked() {
+    fn try_add_pin_stitching_via_reports_the_natural_points_own_error_when_the_whole_sweep_is_blocked(
+    ) {
         // One big obstacle centered exactly on the pad itself reaches
         // every point on the sweep's candidate circle equally -- they
         // all sit at the very same fixed distance from the pad, by
@@ -6015,13 +8278,33 @@ mod tests {
         let net_a = board.create_net();
         let net_b = board.create_net();
         let pad_radius = mm_to_unit(0.1);
-        let pad_id = board.node.add(Item::Pad { shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)), net: Some(net_a), layer: LayerId::FCu, zone_connection: ZoneConnection::Thermal });
-        board.node.add(Item::Via { shape: Circle::new(Point::new(0, 0), mm_to_unit(2.0)), drill: 0, net: Some(net_b) });
+        let pad_id = board.node.add(Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), pad_radius)),
+            net: Some(net_a),
+            layer: LayerId::FCu,
+            zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
+        });
+        board.node.add(Item::Via {
+            shape: Circle::new(Point::new(0, 0), mm_to_unit(2.0)),
+            drill: 0,
+            net: Some(net_b),
+        });
         let items_before = board.node.iter().count();
 
-        let err = board.try_add_pin_stitching_via(pad_id, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, crate::routing::DEFAULT_TRACE_WIDTH).unwrap_err();
+        let err = board
+            .try_add_pin_stitching_via(
+                pad_id,
+                DEFAULT_VIA_DIAMETER,
+                DEFAULT_VIA_DRILL,
+                crate::routing::DEFAULT_TRACE_WIDTH,
+            )
+            .unwrap_err();
 
-        assert!(matches!(err, PinStitchingViaError::Via(_)), "expected every candidate to fail as a plain via placement collision, got {err:?}");
+        assert!(
+            matches!(err, PinStitchingViaError::Via(_)),
+            "expected every candidate to fail as a plain via placement collision, got {err:?}"
+        );
         assert_eq!(
             board.node.iter().count(),
             items_before,
@@ -6045,32 +8328,48 @@ mod tests {
     fn set_outline_accepts_an_arbitrary_polygon_that_still_clears_every_existing_item() {
         let mut board = test_board(); // 40x40mm rounded rect
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
 
         let new_outline = vec![chamfered_outline(40 * MM, 40 * MM, 5 * MM)];
-        board.set_outline(new_outline.clone(), &[template]).expect("a well-clear chamfered outline must be accepted");
+        board
+            .set_outline(new_outline.clone(), &[template])
+            .expect("a well-clear chamfered outline must be accepted");
         assert_eq!(board.outline, new_outline);
     }
 
     #[test]
-    fn set_outline_rejects_a_shape_that_would_leave_an_existing_footprint_off_board_and_touches_nothing() {
+    fn set_outline_rejects_a_shape_that_would_leave_an_existing_footprint_off_board_and_touches_nothing(
+    ) {
         let mut board = test_board();
         let template = two_pin_template();
-        board.try_place_footprint(&template, Point::new(15 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(15 * MM, 0), 0.0)
+            .unwrap();
         let original_outline = board.outline.clone();
 
         // A much smaller board -- the already-placed part no longer fits.
         let tiny_outline = vec![Polygon::rounded_rect(4 * MM, 4 * MM, 0, 8)];
         let err = board.set_outline(tiny_outline, &[template]).unwrap_err();
         assert!(matches!(err, SetOutlineError::FootprintOffBoard(_)));
-        assert_eq!(board.outline, original_outline, "a rejected set_outline must leave the outline untouched");
+        assert_eq!(
+            board.outline, original_outline,
+            "a rejected set_outline must leave the outline untouched"
+        );
     }
 
     #[test]
     fn set_outline_rejects_a_shape_that_would_leave_an_existing_track_off_board() {
         let mut board = test_board();
         let net = net_for_a_connected_pair(&mut board);
-        board.add_track_path(&[Point::new(-10 * MM, 0), Point::new(10 * MM, 0)], net, LayerId::FCu, 250_000, NetClass::C);
+        board.add_track_path(
+            &[Point::new(-10 * MM, 0), Point::new(10 * MM, 0)],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
         let original_outline = board.outline.clone();
 
         let tiny_outline = vec![Polygon::rounded_rect(4 * MM, 4 * MM, 0, 8)];
@@ -6083,25 +8382,41 @@ mod tests {
     fn set_outline_rejects_a_shape_that_would_leave_an_existing_mounting_hole_off_board() {
         let mut board = test_board(); // 40x40mm
         let template = mounting_hole_template();
-        board.try_place_footprint(&template, Point::new(15 * MM, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(15 * MM, 0), 0.0)
+            .unwrap();
         let original_outline = board.outline.clone();
 
         // A much smaller board -- the already-placed hole no longer fits.
         let tiny_outline = vec![Polygon::rounded_rect(4 * MM, 4 * MM, 0, 8)];
         let err = board.set_outline(tiny_outline, &[template]).unwrap_err();
         assert!(matches!(err, SetOutlineError::FootprintOffBoard(_)));
-        assert_eq!(board.outline, original_outline, "a rejected set_outline must leave the outline untouched");
+        assert_eq!(
+            board.outline, original_outline,
+            "a rejected set_outline must leave the outline untouched"
+        );
     }
 
     #[test]
     fn set_outline_reclips_an_existing_zone_to_the_smaller_shape() {
         let mut board = test_board(); // 40x40mm
         let net = board.create_net();
-        board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net).unwrap();
-        assert!(!board.zones[0].item_ids.is_empty(), "test setup: the zone must have filled to something on the full board");
+        board
+            .add_zone(
+                chamfered_outline(30 * MM, 30 * MM, 2 * MM),
+                LayerId::FCu,
+                net,
+            )
+            .unwrap();
+        assert!(
+            !board.zones[0].item_ids.is_empty(),
+            "test setup: the zone must have filled to something on the full board"
+        );
 
         let smaller_outline = vec![Polygon::rounded_rect(10 * MM, 10 * MM, 0, 8)];
-        board.set_outline(smaller_outline, &[]).expect("shrinking the board must not itself be rejected because of a zone");
+        board
+            .set_outline(smaller_outline, &[])
+            .expect("shrinking the board must not itself be rejected because of a zone");
 
         // A tiny slack for the clip's own boundary-edge float rounding --
         // this is checking "did the refill actually re-clip to the
@@ -6109,7 +8424,9 @@ mod tests {
         // margin is harmless.
         let half_extent = 5 * MM + 1_000;
         for &item_id in &board.zones[0].item_ids {
-            let Some(Item::Zone { outline, .. }) = board.node.get(item_id) else { panic!("expected a zone island") };
+            let Some(Item::Zone { outline, .. }) = board.node.get(item_id) else {
+                panic!("expected a zone island")
+            };
             for &p in &outline.points {
                 assert!(p.x.abs() <= half_extent && p.y.abs() <= half_extent, "every refilled zone vertex must now lie within the smaller 10x10mm board, got {p:?}");
             }
@@ -6120,22 +8437,44 @@ mod tests {
     fn remove_zone_deletes_its_fill_islands_and_forgets_the_record() {
         let mut board = test_board(); // 40x40mm
         let net = board.create_net();
-        let id = board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net).unwrap();
+        let id = board
+            .add_zone(
+                chamfered_outline(30 * MM, 30 * MM, 2 * MM),
+                LayerId::FCu,
+                net,
+            )
+            .unwrap();
         let island_count = board.zones[0].item_ids.len();
-        assert!(island_count > 0, "test setup: an obstacle-free pour must fill to at least one island");
+        assert!(
+            island_count > 0,
+            "test setup: an obstacle-free pour must fill to at least one island"
+        );
         let node_count_before = board.node.iter().count();
 
         board.remove_zone(id);
 
-        assert!(board.zones.is_empty(), "the ZoneRecord itself must be gone, not just re-filled empty");
-        assert_eq!(board.node.iter().count(), node_count_before - island_count, "every one of the zone's fill islands must be gone from the node too");
+        assert!(
+            board.zones.is_empty(),
+            "the ZoneRecord itself must be gone, not just re-filled empty"
+        );
+        assert_eq!(
+            board.node.iter().count(),
+            node_count_before - island_count,
+            "every one of the zone's fill islands must be gone from the node too"
+        );
     }
 
     #[test]
     fn remove_zone_is_a_no_op_for_an_id_that_is_no_longer_recorded() {
         let mut board = test_board();
         let net = board.create_net();
-        let id = board.add_zone(chamfered_outline(30 * MM, 30 * MM, 2 * MM), LayerId::FCu, net).unwrap();
+        let id = board
+            .add_zone(
+                chamfered_outline(30 * MM, 30 * MM, 2 * MM),
+                LayerId::FCu,
+                net,
+            )
+            .unwrap();
         board.remove_zone(id);
         let node_count = board.node.iter().count();
 
@@ -6144,7 +8483,10 @@ mod tests {
         assert!(board.zones.is_empty());
     }
 
-    fn single_pad_template(name: &str, zone_connection: ZoneConnection) -> crate::footprint::FootprintTemplate {
+    fn single_pad_template(
+        name: &str,
+        zone_connection: ZoneConnection,
+    ) -> crate::footprint::FootprintTemplate {
         let mut t = two_pin_template();
         t.name = name.into();
         // Tiny courtyard so body-clearance does not mask the copper gate under test.
@@ -6173,11 +8515,15 @@ mod tests {
         let mut board = test_board();
         let a = single_pad_template("ThermalA", ZoneConnection::Thermal);
         let b = single_pad_template("ThermalB", ZoneConnection::Thermal);
-        board.try_place_footprint(&a, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&a, Point::new(0, 0), 0.0)
+            .unwrap();
         // Radii 0.5mm; centres 1.35mm apart → copper edge gap 0.35mm.
         // Clears body spacing (0.3mm) and PAD_TO_PAD (0.15mm), but not
         // 2× thermal::GAP (0.40mm).
-        let err = board.try_place_footprint(&b, Point::new(MM + 350_000, 0), 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&b, Point::new(MM + 350_000, 0), 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::ThermalKeepout);
     }
 
@@ -6186,7 +8532,9 @@ mod tests {
         let mut board = test_board();
         let a = single_pad_template("SolidA", ZoneConnection::Solid);
         let b = single_pad_template("SolidB", ZoneConnection::Solid);
-        board.try_place_footprint(&a, Point::new(0, 0), 0.0).unwrap();
+        board
+            .try_place_footprint(&a, Point::new(0, 0), 0.0)
+            .unwrap();
         // Same geometry that ThermalKeepout refused — Solid must pass.
         board
             .try_place_footprint(&b, Point::new(MM + 350_000, 0), 0.0)
@@ -6197,7 +8545,9 @@ mod tests {
     fn thermal_placement_ok_when_isolated() {
         let mut board = test_board();
         let a = single_pad_template("ThermalIso", ZoneConnection::Thermal);
-        board.try_place_footprint(&a, Point::new(0, 0), 0.0).expect("isolated thermal must place");
+        board
+            .try_place_footprint(&a, Point::new(0, 0), 0.0)
+            .expect("isolated thermal must place");
     }
 
     #[test]
@@ -6218,7 +8568,9 @@ mod tests {
             board.add_track_path(&[a, b], net, LayerId::FCu, w, NetClass::C);
         }
         let pad = single_pad_template("BoxedThermal", ZoneConnection::Thermal);
-        let err = board.try_place_footprint(&pad, Point::new(0, 0), 0.0).unwrap_err();
+        let err = board
+            .try_place_footprint(&pad, Point::new(0, 0), 0.0)
+            .unwrap_err();
         assert_eq!(err, PlacementError::ThermalKeepout);
     }
 
@@ -6267,7 +8619,10 @@ mod tests {
                 radius: 100_000,
                 layer: LayerId::FCu,
                 number: format!("{}", i + 1),
-                shape: crate::footprint::PadShapeKind::Rect { width: 850_000, height: 200_000 },
+                shape: crate::footprint::PadShapeKind::Rect {
+                    width: 850_000,
+                    height: 200_000,
+                },
                 rotation_deg: 90.0,
                 hole_diameter: None,
                 pin_name: None,
@@ -6283,8 +8638,15 @@ mod tests {
     fn route_refuses_track_that_drops_thermal_below_two_free_dirs() {
         let mut board = test_board();
         let pad = single_pad_template("RouteGate", ZoneConnection::Thermal);
-        let id = board.try_place_footprint(&pad, Point::new(0, 0), 0.0).unwrap();
-        let pad_id = board.footprints.iter().find(|f| f.id == id).unwrap().pad_item_ids[0];
+        let id = board
+            .try_place_footprint(&pad, Point::new(0, 0), 0.0)
+            .unwrap();
+        let pad_id = board
+            .footprints
+            .iter()
+            .find(|f| f.id == id)
+            .unwrap()
+            .pad_item_ids[0];
         let net = board.connect_pads(pad_id, pad_id).unwrap();
 
         let w = board.thermal_spoke_width();
@@ -6292,13 +8654,31 @@ mod tests {
         // Tracks that do NOT terminate on the pad (parallel blockers).
         let d = r + thermal::GAP + w / 2;
         // Block only +X and -X — leave ±Y free (≥2).
-        board.add_track_path(&[Point::new(d, -MM), Point::new(d, MM)], net, LayerId::FCu, w, NetClass::C);
-        board.add_track_path(&[Point::new(-d, -MM), Point::new(-d, MM)], net, LayerId::FCu, w, NetClass::C);
+        board.add_track_path(
+            &[Point::new(d, -MM), Point::new(d, MM)],
+            net,
+            LayerId::FCu,
+            w,
+            NetClass::C,
+        );
+        board.add_track_path(
+            &[Point::new(-d, -MM), Point::new(-d, MM)],
+            net,
+            LayerId::FCu,
+            w,
+            NetClass::C,
+        );
         assert!(board.thermals_remain_legal().is_ok());
 
         // Block +Y as well → only -Y left → refuse.
         let err = board
-            .try_add_track_path(&[Point::new(-MM, d), Point::new(MM, d)], net, LayerId::FCu, w, NetClass::C)
+            .try_add_track_path(
+                &[Point::new(-MM, d), Point::new(MM, d)],
+                net,
+                LayerId::FCu,
+                w,
+                NetClass::C,
+            )
             .unwrap_err();
         assert_eq!(err, PlacementError::ThermalKeepout);
     }

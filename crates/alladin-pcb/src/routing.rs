@@ -29,8 +29,14 @@ pub(crate) fn path_keeps_edge_clearance(path: &[Point], width: Unit, outline: &[
 /// MCP route gates use to enforce a comfort distance from the cut line
 /// (see `mcp_routing::EDGE_COMFORT_MARGIN`) that a candidate can relax
 /// per-call, but never below the fab minimum.
-pub(crate) fn path_keeps_edge_margin(path: &[Point], width: Unit, outline: &[Polygon], margin: Unit) -> bool {
-    path.windows(2).all(|leg| segment_within_outline_with_clearance(leg[0], leg[1], width, margin, outline))
+pub(crate) fn path_keeps_edge_margin(
+    path: &[Point],
+    width: Unit,
+    outline: &[Polygon],
+    margin: Unit,
+) -> bool {
+    path.windows(2)
+        .all(|leg| segment_within_outline_with_clearance(leg[0], leg[1], width, margin, outline))
 }
 
 /// Snaps the direction from `from` to `cursor` onto the nearest clean
@@ -197,7 +203,13 @@ impl RoutingDrag {
     /// [`Self::start_with_options`] to configure those too.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn start_with_width(doc: &BoardDoc, from_pad: ItemId, width: Unit) -> Option<Self> {
-        Self::start_with_options(doc, from_pad, width, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL)
+        Self::start_with_options(
+            doc,
+            from_pad,
+            width,
+            DEFAULT_VIA_DIAMETER,
+            DEFAULT_VIA_DRILL,
+        )
     }
 
     /// Same as [`Self::start_with_width`], but also lets the caller
@@ -206,7 +218,13 @@ impl RoutingDrag {
     /// always [`DEFAULT_VIA_DIAMETER`]/[`DEFAULT_VIA_DRILL`] -- the
     /// GUI's "Via" toolbar fields (`crate::app::EditorState::via_diameter`/
     /// `via_drill`) go through this.
-    pub fn start_with_options(doc: &BoardDoc, from_pad: ItemId, width: Unit, via_diameter: Unit, via_drill: Unit) -> Option<Self> {
+    pub fn start_with_options(
+        doc: &BoardDoc,
+        from_pad: ItemId,
+        width: Unit,
+        via_diameter: Unit,
+        via_drill: Unit,
+    ) -> Option<Self> {
         let (from_point, layer, net) = doc.pad_endpoint(from_pad)?;
         Some(Self {
             from_pad,
@@ -231,14 +249,19 @@ impl RoutingDrag {
     /// `pub(crate)` for `crate::app`'s preview painter, which anchors
     /// the "dock search still running" dashed placeholder line here.
     pub(crate) fn last_fixed_point(&self) -> Point {
-        self.fixed.last().and_then(|corner| corner.last().copied()).unwrap_or(self.from_point)
+        self.fixed
+            .last()
+            .and_then(|corner| corner.last().copied())
+            .unwrap_or(self.from_point)
     }
 
     /// [`Self::from_point`] followed by every already-fixed corner,
     /// flattened -- the path prefix every commit/via-drop builds on top
     /// of.
     fn fixed_path(&self) -> Vec<Point> {
-        std::iter::once(self.from_point).chain(self.fixed.iter().flatten().copied()).collect()
+        std::iter::once(self.from_point)
+            .chain(self.fixed.iter().flatten().copied())
+            .collect()
     }
 
     /// Every already-fixed corner, flattened, for the UI to draw as
@@ -294,8 +317,9 @@ impl RoutingDrag {
     /// [`Self::live_legs`]. Purely geometric -- no path search.
     pub fn update(&mut self, doc: &BoardDoc, cursor: Point) {
         let last = self.last_fixed_point();
-        self.hover_target =
-            doc.pad_at(cursor).filter(|&id| id != self.from_pad && doc.pad_net(id) == Ok(Some(self.net)));
+        self.hover_target = doc
+            .pad_at(cursor)
+            .filter(|&id| id != self.from_pad && doc.pad_net(id) == Ok(Some(self.net)));
 
         if let Some(target) = self.hover_target {
             self.live_legs.clear();
@@ -333,7 +357,8 @@ impl RoutingDrag {
                 }
                 self.preview = None;
                 // Prefer reporting edge when copper was fine on either attempt.
-                self.edge_clearance_violation = (copper_ok && !edge_ok) || (copper_ok_alt && !edge_ok_alt);
+                self.edge_clearance_violation =
+                    (copper_ok && !edge_ok) || (copper_ok_alt && !edge_ok_alt);
             } else {
                 self.preview = None;
                 self.edge_clearance_violation = copper_ok && !edge_ok;
@@ -361,7 +386,15 @@ impl RoutingDrag {
         let resolver = doc.resolver();
         let mut prev = last;
         for &p in legs {
-            if !doc.node.path_is_clear(prev, p, self.width, Some(self.net), self.layer, NetClass::C, resolver) {
+            if !doc.node.path_is_clear(
+                prev,
+                p,
+                self.width,
+                Some(self.net),
+                self.layer,
+                NetClass::C,
+                resolver,
+            ) {
                 return false;
             }
             prev = p;
@@ -378,7 +411,8 @@ impl RoutingDrag {
         let mut path = Vec::with_capacity(legs.len() + 1);
         path.push(last);
         path.extend_from_slice(legs);
-        self.legs_copper_clear(doc, last, legs) && path_keeps_edge_clearance(&path, self.width, &doc.outline)
+        self.legs_copper_clear(doc, last, legs)
+            && path_keeps_edge_clearance(&path, self.width, &doc.outline)
     }
 
     /// Fixes the current live, free-steered leg(s) as a permanent corner.
@@ -404,11 +438,16 @@ impl RoutingDrag {
     /// Commits fixed corners plus the docked snapped stub. Refuses unless
     /// hover-docked with a clearance-clean [`Self::preview`].
     pub fn commit(&self, doc: &mut BoardDoc) -> bool {
-        let Some(_target) = self.hover_target else { return false };
-        let Some(dock_path) = &self.preview else { return false };
+        let Some(_target) = self.hover_target else {
+            return false;
+        };
+        let Some(dock_path) = &self.preview else {
+            return false;
+        };
         let mut path = self.fixed_path();
         path.extend_from_slice(&dock_path[1..]);
-        doc.try_add_track_path(&path, self.net, self.layer, self.width, NetClass::C).is_ok()
+        doc.try_add_track_path(&path, self.net, self.layer, self.width, NetClass::C)
+            .is_ok()
     }
 
     /// Drops a via at the current live end, commits tracks up to it, flips layer.
@@ -419,11 +458,14 @@ impl RoutingDrag {
         }
         let via_center = *live.last().unwrap();
 
-        let via_id = doc.try_add_via(via_center, self.net, self.via_diameter, self.via_drill).map_err(DropViaError::Via)?;
+        let via_id = doc
+            .try_add_via(via_center, self.net, self.via_diameter, self.via_drill)
+            .map_err(DropViaError::Via)?;
 
         let mut path = self.fixed_path();
         path.extend_from_slice(live);
-        if let Err(e) = doc.try_add_track_path(&path, self.net, self.layer, self.width, NetClass::C) {
+        if let Err(e) = doc.try_add_track_path(&path, self.net, self.layer, self.width, NetClass::C)
+        {
             doc.node.remove(via_id);
             return Err(DropViaError::Via(e));
         }
@@ -450,9 +492,14 @@ impl RoutingDrag {
             }
             if self.edge_clearance_violation {
                 let mm = JlcpcbDfm::COPPER_TO_ROUTED_EDGE as f64 / alladin_geom::MM as f64;
-                return Some(format!("final leg comes within {mm:.2}mm of the board edge"));
+                return Some(format!(
+                    "final leg comes within {mm:.2}mm of the board edge"
+                ));
             }
-            return Some("final leg onto this pin is blocked -- add corners to steer around obstacles".to_string());
+            return Some(
+                "final leg onto this pin is blocked -- add corners to steer around obstacles"
+                    .to_string(),
+            );
         }
         if self.live_legs.is_empty() || self.live_legs_clear {
             return None;
@@ -468,7 +515,9 @@ impl RoutingDrag {
 /// an `Item::Track` only touches on its own actual layer.
 fn item_touches(doc: &BoardDoc, id: ItemId, point: Point, layer: LayerId) -> bool {
     match doc.node.get(id) {
-        Some(Item::Track { shape, layer: l, .. }) => *l == layer && (shape.a == point || shape.b == point),
+        Some(Item::Track {
+            shape, layer: l, ..
+        }) => *l == layer && (shape.a == point || shape.b == point),
         Some(Item::Via { shape, .. }) => shape.center == point,
         _ => false,
     }
@@ -488,9 +537,21 @@ fn item_touches(doc: &BoardDoc, id: ItemId, point: Point, layer: LayerId) -> boo
 /// local (only the grabbed leg and its immediate neighbors ever move),
 /// exactly what "click a segment, the rest of a long route stays put"
 /// requires.
-fn resolve_anchor(doc: &BoardDoc, wire: &[ItemId], leg_id: ItemId, point: Point, layer: LayerId) -> (Point, Option<ItemId>) {
-    let mut touching = wire.iter().copied().filter(|&id| id != leg_id).filter(|&id| item_touches(doc, id, point, layer));
-    let Some(only) = touching.next() else { return (point, None) };
+fn resolve_anchor(
+    doc: &BoardDoc,
+    wire: &[ItemId],
+    leg_id: ItemId,
+    point: Point,
+    layer: LayerId,
+) -> (Point, Option<ItemId>) {
+    let mut touching = wire
+        .iter()
+        .copied()
+        .filter(|&id| id != leg_id)
+        .filter(|&id| item_touches(doc, id, point, layer));
+    let Some(only) = touching.next() else {
+        return (point, None);
+    };
     if touching.next().is_some() {
         return (point, None); // a branch/junction: stop right here, don't guess which side to follow
     }
@@ -541,7 +602,15 @@ impl TraceDrag {
     /// position never moves, see [`resolve_anchor`]'s doc comment) that
     /// already has a net. `None` for anything else.
     pub fn start(doc: &BoardDoc, leg_id: ItemId) -> Option<Self> {
-        let Some(Item::Track { shape, net: Some(net), layer, .. }) = doc.node.get(leg_id) else { return None };
+        let Some(Item::Track {
+            shape,
+            net: Some(net),
+            layer,
+            ..
+        }) = doc.node.get(leg_id)
+        else {
+            return None;
+        };
         let (net, layer, shape) = (*net, *layer, *shape);
         let wire = doc.connected_wire(leg_id);
 
@@ -552,7 +621,16 @@ impl TraceDrag {
         to_remove.extend(left_remove);
         to_remove.extend(right_remove);
 
-        Some(Self { net, layer, width: shape.width, to_remove, left_anchor, right_anchor, path: Vec::new(), clear: false })
+        Some(Self {
+            net,
+            layer,
+            width: shape.width,
+            to_remove,
+            left_anchor,
+            right_anchor,
+            path: Vec::new(),
+            clear: false,
+        })
     }
 
     pub fn net(&self) -> NetId {
@@ -601,7 +679,11 @@ impl TraceDrag {
     /// second-guessed; a blocked drag still shows the default path in
     /// red.
     pub fn update(&mut self, doc: &BoardDoc, cursor: Point) {
-        let assemble = |left_anchor: Point, right_anchor: Point, mut from_left: Vec<Point>, mut from_right: Vec<Point>| -> Vec<Point> {
+        let assemble = |left_anchor: Point,
+                        right_anchor: Point,
+                        mut from_left: Vec<Point>,
+                        mut from_right: Vec<Point>|
+         -> Vec<Point> {
             from_right.pop(); // drop the duplicate `cursor` both halves end on
             let mut path = vec![left_anchor];
             path.append(&mut from_left);
@@ -613,7 +695,17 @@ impl TraceDrag {
         let resolver = doc.resolver();
         let is_clear = |path: &[Point]| -> bool {
             path.len() >= 2
-                && path.windows(2).all(|leg| doc.node.path_is_clear(leg[0], leg[1], self.width, Some(self.net), self.layer, NetClass::C, resolver))
+                && path.windows(2).all(|leg| {
+                    doc.node.path_is_clear(
+                        leg[0],
+                        leg[1],
+                        self.width,
+                        Some(self.net),
+                        self.layer,
+                        NetClass::C,
+                        resolver,
+                    )
+                })
                 && path_keeps_edge_clearance(path, self.width, &doc.outline)
         };
 
@@ -625,14 +717,24 @@ impl TraceDrag {
             }
         };
 
-        let default_path = assemble(self.left_anchor, self.right_anchor, half(self.left_anchor, false), half(self.right_anchor, false));
+        let default_path = assemble(
+            self.left_anchor,
+            self.right_anchor,
+            half(self.left_anchor, false),
+            half(self.right_anchor, false),
+        );
         if is_clear(&default_path) {
             self.clear = true;
             self.path = default_path;
             return;
         }
         for (left_axis_first, right_axis_first) in [(false, true), (true, false), (true, true)] {
-            let path = assemble(self.left_anchor, self.right_anchor, half(self.left_anchor, left_axis_first), half(self.right_anchor, right_axis_first));
+            let path = assemble(
+                self.left_anchor,
+                self.right_anchor,
+                half(self.left_anchor, left_axis_first),
+                half(self.right_anchor, right_axis_first),
+            );
             if path != default_path && is_clear(&path) {
                 self.clear = true;
                 self.path = path;
@@ -649,8 +751,18 @@ impl TraceDrag {
     /// releasing the mouse over a blocked position must leave the
     /// original trace exactly as it was, not commit a half-drawn mess.
     pub fn commit(&self, doc: &mut BoardDoc) -> bool {
-        let Some(path) = self.preview() else { return false };
-        doc.replace_wire_segment(&self.to_remove, path, self.net, self.layer, self.width, NetClass::C).is_ok()
+        let Some(path) = self.preview() else {
+            return false;
+        };
+        doc.replace_wire_segment(
+            &self.to_remove,
+            path,
+            self.net,
+            self.layer,
+            self.width,
+            NetClass::C,
+        )
+        .is_ok()
     }
 }
 
@@ -668,8 +780,10 @@ mod tests {
     fn two_footprints_connected() -> (BoardDoc, ItemId, ItemId) {
         let mut doc = NewBoardParams::default().create();
         let template = &builtin_templates()[0];
-        doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        doc.try_place_footprint(template, Point::new(10 * MM, 0), 0.0).unwrap();
+        doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        doc.try_place_footprint(template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
         let pad_a = doc.footprints[0].pad_item_ids[0];
         let pad_b = doc.footprints[1].pad_item_ids[0];
         doc.connect_pads(pad_a, pad_b).unwrap();
@@ -680,7 +794,8 @@ mod tests {
     fn start_returns_none_for_a_pad_without_a_net() {
         let mut doc = NewBoardParams::default().create();
         let template = &builtin_templates()[0];
-        doc.try_place_footprint(template, Point::new(0, 0), 0.0).unwrap();
+        doc.try_place_footprint(template, Point::new(0, 0), 0.0)
+            .unwrap();
         let pad = doc.footprints[0].pad_item_ids[0];
         assert!(RoutingDrag::start(&doc, pad).is_none());
     }
@@ -713,7 +828,10 @@ mod tests {
         let from = Point::new(0, 0);
         let cursor = Point::new(5 * MM, 2 * MM);
         let legs = snapped_legs(from, cursor);
-        assert_eq!(legs, vec![Point::new(2 * MM, 2 * MM), Point::new(5 * MM, 2 * MM)]);
+        assert_eq!(
+            legs,
+            vec![Point::new(2 * MM, 2 * MM), Point::new(5 * MM, 2 * MM)]
+        );
         // The elbow leg must be a clean 45 degrees, the second leg
         // perfectly horizontal.
         let elbow = legs[0];
@@ -735,8 +853,15 @@ mod tests {
         let cursor = Point::new(5 * MM, 2 * MM);
         let legs = snapped_legs_axis_first(from, cursor);
         assert_eq!(legs, vec![Point::new(3 * MM, 0), cursor]);
-        assert_eq!(legs[0].y, from.y, "the first leg must run straight along the dominant axis");
-        assert_eq!((cursor.x - legs[0].x).abs(), (cursor.y - legs[0].y).abs(), "the second leg must be a clean 45 degrees");
+        assert_eq!(
+            legs[0].y, from.y,
+            "the first leg must run straight along the dominant axis"
+        );
+        assert_eq!(
+            (cursor.x - legs[0].x).abs(),
+            (cursor.y - legs[0].y).abs(),
+            "the second leg must be a clean 45 degrees"
+        );
     }
 
     #[test]
@@ -746,7 +871,10 @@ mod tests {
         // the fallback in `update` can skip the redundant re-check.
         let from = Point::new(0, 0);
         for cursor in [Point::new(5 * MM, 0), Point::new(3 * MM, 3 * MM), from] {
-            assert_eq!(snapped_legs_axis_first(from, cursor), snapped_legs(from, cursor));
+            assert_eq!(
+                snapped_legs_axis_first(from, cursor),
+                snapped_legs(from, cursor)
+            );
         }
     }
 
@@ -776,6 +904,7 @@ mod tests {
             net: Some(NetId(7777)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let cursor = Point::new(a.x + 2 * MM, a.y + 8 * MM);
@@ -783,13 +912,19 @@ mod tests {
         drag.update(&doc, cursor);
 
         let (live, clear) = drag.live_end();
-        assert!(clear, "the mirrored elbow must rescue this leg instead of going red");
+        assert!(
+            clear,
+            "the mirrored elbow must rescue this leg instead of going red"
+        );
         assert_eq!(
             live,
             vec![Point::new(a.x, a.y + 6 * MM), cursor],
             "expected the straight-first elbow onto the exact same cursor position"
         );
-        assert!(drag.can_fix_corner(), "the rescued leg must be fixable like any other clear leg");
+        assert!(
+            drag.can_fix_corner(),
+            "the rescued leg must be fixable like any other clear leg"
+        );
     }
 
     #[test]
@@ -797,11 +932,18 @@ mod tests {
         let (doc, pad_a, _pad_b) = two_footprints_connected();
         let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
         drag.update(&doc, Point::new(-5 * MM, 3 * MM));
-        let expected_corner = snapped_legs(doc.pad_center(pad_a).unwrap(), Point::new(-5 * MM, 3 * MM));
-        assert!(drag.fix_corner(), "a clear, un-docked live leg must be fixable");
+        let expected_corner =
+            snapped_legs(doc.pad_center(pad_a).unwrap(), Point::new(-5 * MM, 3 * MM));
+        assert!(
+            drag.fix_corner(),
+            "a clear, un-docked live leg must be fixable"
+        );
 
         assert_eq!(drag.fixed_points(), expected_corner);
-        assert!(!drag.can_fix_corner(), "the live leg is cleared right after fixing, until the next update()");
+        assert!(
+            !drag.can_fix_corner(),
+            "the live leg is cleared right after fixing, until the next update()"
+        );
         assert!(drag.can_undo_corner());
 
         // The next update() must steer on from the newly fixed corner,
@@ -809,14 +951,21 @@ mod tests {
         drag.update(&doc, Point::new(-5 * MM, 8 * MM));
         let (live, clear) = drag.live_end();
         assert!(clear);
-        assert_eq!(live, vec![Point::new(-5 * MM, 8 * MM)], "a pure vertical continuation from the fixed corner");
+        assert_eq!(
+            live,
+            vec![Point::new(-5 * MM, 8 * MM)],
+            "a pure vertical continuation from the fixed corner"
+        );
     }
 
     #[test]
     fn fix_corner_refuses_when_the_cursor_has_not_moved_yet() {
         let (doc, pad_a, _pad_b) = two_footprints_connected();
         let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
-        assert!(!drag.fix_corner(), "there is no live leg before the first update()");
+        assert!(
+            !drag.fix_corner(),
+            "there is no live leg before the first update()"
+        );
         assert!(drag.fixed_points().is_empty());
     }
 
@@ -827,7 +976,10 @@ mod tests {
         let pad_b_center = doc.pad_center(pad_b).unwrap();
         drag.update(&doc, pad_b_center);
         assert_eq!(drag.hover_target, Some(pad_b));
-        assert!(!drag.fix_corner(), "docking onto a pad is finished by clicking it, not by fixing a corner onto it");
+        assert!(
+            !drag.fix_corner(),
+            "docking onto a pad is finished by clicking it, not by fixing a corner onto it"
+        );
     }
 
     #[test]
@@ -840,7 +992,10 @@ mod tests {
         assert!(!drag.fixed_points().is_empty());
 
         assert!(drag.undo_last_corner());
-        assert!(drag.fixed_points().is_empty(), "undo must remove the entire fixed corner, both elbow points");
+        assert!(
+            drag.fixed_points().is_empty(),
+            "undo must remove the entire fixed corner, both elbow points"
+        );
         assert!(!drag.can_undo_corner());
     }
 
@@ -861,8 +1016,15 @@ mod tests {
         drag.update(&doc, pad_b_center);
 
         assert_eq!(drag.hover_target, Some(pad_b));
-        let path = drag.preview.as_ref().expect("a clear, unobstructed line must be found");
-        assert_eq!(*path.last().unwrap(), pad_b_center, "the preview must dock exactly onto the pad center");
+        let path = drag
+            .preview
+            .as_ref()
+            .expect("a clear, unobstructed line must be found");
+        assert_eq!(
+            *path.last().unwrap(),
+            pad_b_center,
+            "the preview must dock exactly onto the pad center"
+        );
     }
 
     #[test]
@@ -873,8 +1035,14 @@ mod tests {
         drag.update(&doc, pad_b_center);
 
         let before = doc.node.len();
-        assert!(drag.commit(&mut doc), "a docked, unobstructed drag must commit");
-        assert!(doc.node.len() > before, "commit must add at least one track item");
+        assert!(
+            drag.commit(&mut doc),
+            "a docked, unobstructed drag must commit"
+        );
+        assert!(
+            doc.node.len() > before,
+            "commit must add at least one track item"
+        );
     }
 
     #[test]
@@ -887,21 +1055,37 @@ mod tests {
 
         let plane_net = doc.create_net();
         let board_outline = doc.outline.clone();
-        doc.add_zone(board_outline[0].clone(), LayerId::FCu, plane_net).unwrap();
-        assert!(doc.node.iter().any(|item| matches!(item, Item::Zone { .. })), "the plane must have actually filled");
+        doc.add_zone(board_outline[0].clone(), LayerId::FCu, plane_net)
+            .unwrap();
+        assert!(
+            doc.node
+                .iter()
+                .any(|item| matches!(item, Item::Zone { .. })),
+            "the plane must have actually filled"
+        );
 
         let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
         let pad_b_center = doc.pad_center(pad_b).unwrap();
         drag.update(&doc, pad_b_center);
-        assert_eq!(drag.hover_target, Some(pad_b), "docking onto the target pad must be unaffected by the plane underneath it");
+        assert_eq!(
+            drag.hover_target,
+            Some(pad_b),
+            "docking onto the target pad must be unaffected by the plane underneath it"
+        );
 
         let before = doc.node.len();
-        assert!(drag.commit(&mut doc), "a docked drag must still commit even straight across a different-net solid plane");
+        assert!(
+            drag.commit(&mut doc),
+            "a docked drag must still commit even straight across a different-net solid plane"
+        );
         assert!(
             doc.node.iter().any(|item| matches!(item, Item::Track { net: Some(n), layer: LayerId::FCu, .. } if *n == signal_net)),
             "the committed track must actually be on the signal net, not swallowed by the plane"
         );
-        assert!(doc.node.len() > before, "commit must add at least one track item");
+        assert!(
+            doc.node.len() > before,
+            "commit must add at least one track item"
+        );
     }
 
     #[test]
@@ -913,10 +1097,20 @@ mod tests {
 
         let pad_b_center = doc.pad_center(pad_b).unwrap();
         drag.update(&doc, pad_b_center);
-        assert!(drag.commit(&mut doc), "a docked drag with a fixed corner behind it must still commit");
+        assert!(
+            drag.commit(&mut doc),
+            "a docked drag with a fixed corner behind it must still commit"
+        );
 
-        let tracks: Vec<_> = doc.node.iter().filter(|item| matches!(item, Item::Track { .. })).collect();
-        assert!(tracks.len() >= 2, "expected at least one track leg before and one after the fixed corner, got {tracks:?}");
+        let tracks: Vec<_> = doc
+            .node
+            .iter()
+            .filter(|item| matches!(item, Item::Track { .. }))
+            .collect();
+        assert!(
+            tracks.len() >= 2,
+            "expected at least one track leg before and one after the fixed corner, got {tracks:?}"
+        );
     }
 
     #[test]
@@ -927,7 +1121,11 @@ mod tests {
 
         let before = doc.node.len();
         assert!(!drag.commit(&mut doc));
-        assert_eq!(doc.node.len(), before, "a refused commit must not touch the node");
+        assert_eq!(
+            doc.node.len(),
+            before,
+            "a refused commit must not touch the node"
+        );
     }
 
     #[test]
@@ -940,25 +1138,50 @@ mod tests {
         let sibling_center = doc.pad_center(unconnected_sibling).unwrap();
         drag.update(&doc, sibling_center);
 
-        assert_eq!(drag.hover_target, None, "a no-net pad must not be treated as a dock target");
+        assert_eq!(
+            drag.hover_target, None,
+            "a no-net pad must not be treated as a dock target"
+        );
         assert!(!drag.commit(&mut doc));
     }
 
     #[test]
-    fn drop_via_and_switch_layer_places_a_via_at_the_requested_diameter_and_drill_not_the_default() {
+    fn drop_via_and_switch_layer_places_a_via_at_the_requested_diameter_and_drill_not_the_default()
+    {
         let (doc, pad_a, _pad_b) = two_footprints_connected();
         let custom_diameter: Unit = 800_000; // 0.8mm, != DEFAULT_VIA_DIAMETER
         let custom_drill: Unit = 400_000; // 0.4mm, != DEFAULT_VIA_DRILL
-        let mut drag = RoutingDrag::start_with_options(&doc, pad_a, DEFAULT_TRACE_WIDTH, custom_diameter, custom_drill).unwrap();
+        let mut drag = RoutingDrag::start_with_options(
+            &doc,
+            pad_a,
+            DEFAULT_TRACE_WIDTH,
+            custom_diameter,
+            custom_drill,
+        )
+        .unwrap();
         let mut doc = doc;
         drag.update(&doc, Point::new(0, 5 * MM));
 
-        drag.drop_via_and_switch_layer(&mut doc).expect("dropping a via on open space must succeed");
+        drag.drop_via_and_switch_layer(&mut doc)
+            .expect("dropping a via on open space must succeed");
 
-        let via = doc.node.iter().find_map(|item| if let Item::Via { shape, drill, .. } = item { Some((shape.radius, *drill)) } else { None });
+        let via = doc.node.iter().find_map(|item| {
+            if let Item::Via { shape, drill, .. } = item {
+                Some((shape.radius, *drill))
+            } else {
+                None
+            }
+        });
         let (radius, drill) = via.expect("a via must have been added");
-        assert_eq!(radius, custom_diameter / 2, "the via must use the diameter start_with_options was given, not DEFAULT_VIA_DIAMETER");
-        assert_eq!(drill, custom_drill, "the via must use the drill start_with_options was given, not DEFAULT_VIA_DRILL");
+        assert_eq!(
+            radius,
+            custom_diameter / 2,
+            "the via must use the diameter start_with_options was given, not DEFAULT_VIA_DIAMETER"
+        );
+        assert_eq!(
+            drill, custom_drill,
+            "the via must use the drill start_with_options was given, not DEFAULT_VIA_DRILL"
+        );
     }
 
     #[test]
@@ -975,24 +1198,45 @@ mod tests {
         assert!(clear, "a clear line to the via point must exist first");
 
         let before = doc.node.len();
-        assert!(drag.drop_via_and_switch_layer(&mut doc).is_ok(), "dropping a via on open space must succeed");
-        assert!(doc.node.len() > before, "must have added at least a track leg and a via");
-        assert!(doc.node.iter().any(|item| matches!(item, Item::Via { .. })), "a via must have been added");
         assert!(
-            doc.node.iter().any(|item| matches!(item, Item::Track { net: Some(n), .. } if *n == drag.net())),
+            drag.drop_via_and_switch_layer(&mut doc).is_ok(),
+            "dropping a via on open space must succeed"
+        );
+        assert!(
+            doc.node.len() > before,
+            "must have added at least a track leg and a via"
+        );
+        assert!(
+            doc.node.iter().any(|item| matches!(item, Item::Via { .. })),
+            "a via must have been added"
+        );
+        assert!(
+            doc.node
+                .iter()
+                .any(|item| matches!(item, Item::Track { net: Some(n), .. } if *n == drag.net())),
             "the leg leading up to the via must have been committed as a real track"
         );
-        assert_eq!(drag.layer, LayerId::BCu, "the drag must continue on the other copper layer");
+        assert_eq!(
+            drag.layer,
+            LayerId::BCu,
+            "the drag must continue on the other copper layer"
+        );
         assert!(drag.fixed_points().is_empty(), "any prior fixed corners must be cleared after the via, since they're already committed");
         let (live, _) = drag.live_end();
-        assert!(live.is_empty(), "the live leg must be cleared, forcing a fresh route on the new layer");
+        assert!(
+            live.is_empty(),
+            "the live leg must be cleared, forcing a fresh route on the new layer"
+        );
 
         // The drag must still be usable afterwards, not just mechanically
         // switched: finishing the route to the original target proves the
         // second, post-via leg genuinely gets committed too.
         let pad_b_center = doc.pad_center(pad_b).unwrap();
         drag.update(&doc, pad_b_center);
-        assert!(drag.commit(&mut doc), "the drag must still be able to finish routing after the layer switch");
+        assert!(
+            drag.commit(&mut doc),
+            "the drag must still be able to finish routing after the layer switch"
+        );
     }
 
     #[test]
@@ -1001,13 +1245,25 @@ mod tests {
         let mut drag = RoutingDrag::start(&doc, pad_a).unwrap(); // no update() yet -- nothing live
 
         let before = doc.node.len();
-        assert_eq!(drag.drop_via_and_switch_layer(&mut doc), Err(DropViaError::NoLiveRoute));
-        assert_eq!(doc.node.len(), before, "a refused via drop must not touch the node");
-        assert_eq!(drag.layer, LayerId::FCu, "a refused via drop must leave the layer unchanged");
+        assert_eq!(
+            drag.drop_via_and_switch_layer(&mut doc),
+            Err(DropViaError::NoLiveRoute)
+        );
+        assert_eq!(
+            doc.node.len(),
+            before,
+            "a refused via drop must not touch the node"
+        );
+        assert_eq!(
+            drag.layer,
+            LayerId::FCu,
+            "a refused via drop must leave the layer unchanged"
+        );
     }
 
     #[test]
-    fn drop_via_and_switch_layer_refuses_a_via_too_close_to_the_edge_and_leaves_the_drag_unchanged() {
+    fn drop_via_and_switch_layer_refuses_a_via_too_close_to_the_edge_and_leaves_the_drag_unchanged()
+    {
         let (mut doc, pad_a, _pad_b) = two_footprints_connected();
         let mut drag = RoutingDrag::start(&doc, pad_a).unwrap();
         // 0.4mm from the board's y=+15mm edge (`NewBoardParams::default()`
@@ -1028,10 +1284,21 @@ mod tests {
             Err(DropViaError::Via(PlacementError::OffBoard)),
             "a via that would violate the board edge margin must be refused"
         );
-        assert_eq!(doc.node.len(), before, "a refused via drop must not add anything, not even the track leg leading to it");
-        assert_eq!(drag.layer, LayerId::FCu, "a refused via drop must leave the layer unchanged");
+        assert_eq!(
+            doc.node.len(),
+            before,
+            "a refused via drop must not add anything, not even the track leg leading to it"
+        );
+        assert_eq!(
+            drag.layer,
+            LayerId::FCu,
+            "a refused via drop must leave the layer unchanged"
+        );
         let (live, clear_after) = drag.live_end();
-        assert!(clear_after && !live.is_empty(), "a refused via drop must leave the existing live leg intact");
+        assert!(
+            clear_after && !live.is_empty(),
+            "a refused via drop must leave the existing live leg intact"
+        );
     }
 
     /// Two 1-pad footprints with a deliberately tiny 0.05mm pad radius
@@ -1065,7 +1332,8 @@ mod tests {
             corner_radius_mm: 0.0,
         }
         .create();
-        let template = crate::footprint::straight_row_template("tiny".into(), "P".into(), 1, 1.0, 0.05);
+        let template =
+            crate::footprint::straight_row_template("tiny".into(), "P".into(), 1, 1.0, 0.05);
         let y = (y_mm * MM as f64).round() as Unit;
         doc.insert_footprint_unchecked(&template, "P1".into(), Point::new(-10 * MM, y), 0.0, &[]);
         doc.insert_footprint_unchecked(&template, "P2".into(), Point::new(10 * MM, y), 0.0, &[]);
@@ -1085,9 +1353,19 @@ mod tests {
         let pad_b_center = doc.pad_center(pad_b).unwrap();
         drag.update(&doc, pad_b_center);
 
-        assert_eq!(drag.hover_target, Some(pad_b), "still docks onto the target pad");
-        assert!(drag.preview.is_none(), "a route that violates the board-edge margin must not be offered as a preview");
-        assert!(drag.edge_clearance_violation, "the rejection must be attributed to the edge margin, not a generic routing failure");
+        assert_eq!(
+            drag.hover_target,
+            Some(pad_b),
+            "still docks onto the target pad"
+        );
+        assert!(
+            drag.preview.is_none(),
+            "a route that violates the board-edge margin must not be offered as a preview"
+        );
+        assert!(
+            drag.edge_clearance_violation,
+            "the rejection must be attributed to the edge margin, not a generic routing failure"
+        );
     }
 
     #[test]
@@ -1100,7 +1378,10 @@ mod tests {
         let pad_b_center = doc.pad_center(pad_b).unwrap();
         drag.update(&doc, pad_b_center);
 
-        assert!(drag.preview.is_some(), "0.4mm of edge clearance is well past the 0.325mm minimum");
+        assert!(
+            drag.preview.is_some(),
+            "0.4mm of edge clearance is well past the 0.325mm minimum"
+        );
         assert!(!drag.edge_clearance_violation);
     }
 
@@ -1111,8 +1392,13 @@ mod tests {
         let pad_b_center = doc.pad_center(pad_b).unwrap();
         drag.update(&doc, pad_b_center);
 
-        let reason = drag.blocked_reason(&doc, pad_b_center).expect("a rejected route must explain itself");
-        assert!(reason.contains("board edge"), "expected the edge-specific message, got: {reason}");
+        let reason = drag
+            .blocked_reason(&doc, pad_b_center)
+            .expect("a rejected route must explain itself");
+        assert!(
+            reason.contains("board edge"),
+            "expected the edge-specific message, got: {reason}"
+        );
     }
 
     #[test]
@@ -1128,7 +1414,9 @@ mod tests {
         let (_, clear) = drag.live_end();
         assert!(!clear, "test setup: the leg must actually be blocked");
 
-        let reason = drag.blocked_reason(&doc, Point::new(0, 0)).expect("a blocked free-steered leg must explain itself");
+        let reason = drag
+            .blocked_reason(&doc, Point::new(0, 0))
+            .expect("a blocked free-steered leg must explain itself");
         assert!(!reason.is_empty());
     }
 
@@ -1144,10 +1432,23 @@ mod tests {
         let net = doc.pad_net(pad_a).unwrap().unwrap();
         let p1 = Point::new(-5 * MM, 0);
         let p2 = Point::new(5 * MM, 0);
-        doc.add_track_path(&[a_center, p1, p2, b_center], net, LayerId::FCu, 250_000, NetClass::C);
-        let mut legs: Vec<ItemId> = doc.node.iter_with_ids().filter(|(_, i)| matches!(i, Item::Track { .. })).map(|(id, _)| id).collect();
+        doc.add_track_path(
+            &[a_center, p1, p2, b_center],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
+        let mut legs: Vec<ItemId> = doc
+            .node
+            .iter_with_ids()
+            .filter(|(_, i)| matches!(i, Item::Track { .. }))
+            .map(|(id, _)| id)
+            .collect();
         legs.sort_by_key(|&id| {
-            let Some(Item::Track { shape, .. }) = doc.node.get(id) else { unreachable!() };
+            let Some(Item::Track { shape, .. }) = doc.node.get(id) else {
+                unreachable!()
+            };
             shape.a.x.min(shape.b.x)
         });
         let (leg_a_p1, leg_p1_p2, leg_p2_b) = (legs[0], legs[1], legs[2]);
@@ -1155,9 +1456,11 @@ mod tests {
     }
 
     #[test]
-    fn start_on_the_middle_leg_of_a_three_leg_wire_pins_both_pad_centers_and_marks_all_three_legs_for_removal() {
+    fn start_on_the_middle_leg_of_a_three_leg_wire_pins_both_pad_centers_and_marks_all_three_legs_for_removal(
+    ) {
         let (doc, leg_a_p1, leg_p1_p2, leg_p2_b, a_center, b_center) = three_leg_wire();
-        let drag = TraceDrag::start(&doc, leg_p1_p2).expect("a track leg with a net must be draggable");
+        let drag =
+            TraceDrag::start(&doc, leg_p1_p2).expect("a track leg with a net must be draggable");
         assert_eq!(drag.left_anchor, a_center);
         assert_eq!(drag.right_anchor, b_center);
         assert_eq!(drag.to_remove.len(), 3);
@@ -1167,11 +1470,19 @@ mod tests {
     }
 
     #[test]
-    fn start_on_the_leg_touching_a_pad_pins_that_side_to_the_pad_itself_with_nothing_to_remove_there() {
+    fn start_on_the_leg_touching_a_pad_pins_that_side_to_the_pad_itself_with_nothing_to_remove_there(
+    ) {
         let (doc, leg_a_p1, leg_p1_p2, _leg_p2_b, a_center, _b_center) = three_leg_wire();
         let drag = TraceDrag::start(&doc, leg_a_p1).unwrap();
-        assert_eq!(drag.left_anchor, a_center, "the pad end is already the pinned point");
-        assert_eq!(drag.to_remove.len(), 2, "the grabbed leg plus its one neighbor, but nothing beyond the pad");
+        assert_eq!(
+            drag.left_anchor, a_center,
+            "the pad end is already the pinned point"
+        );
+        assert_eq!(
+            drag.to_remove.len(),
+            2,
+            "the grabbed leg plus its one neighbor, but nothing beyond the pad"
+        );
         assert!(drag.to_remove.contains(&leg_a_p1));
         assert!(drag.to_remove.contains(&leg_p1_p2));
     }
@@ -1185,16 +1496,54 @@ mod tests {
         let via_point = Point::new(0, 5 * MM);
         // Via first, then stubs -- `try_add_via` refuses landing on a
         // track that is already there (same-net included).
-        doc.try_add_via(via_point, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL).unwrap();
-        doc.add_track_path(&[a_center, via_point], net, LayerId::FCu, 250_000, NetClass::C);
-        doc.add_track_path(&[via_point, b_center], net, LayerId::BCu, 250_000, NetClass::C);
-        let leg_on_fcu = doc.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Track { layer: LayerId::FCu, .. })).unwrap().0;
-        let via_id = doc.node.iter_with_ids().find(|(_, i)| matches!(i, Item::Via { .. })).unwrap().0;
+        doc.try_add_via(via_point, net, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL)
+            .unwrap();
+        doc.add_track_path(
+            &[a_center, via_point],
+            net,
+            LayerId::FCu,
+            250_000,
+            NetClass::C,
+        );
+        doc.add_track_path(
+            &[via_point, b_center],
+            net,
+            LayerId::BCu,
+            250_000,
+            NetClass::C,
+        );
+        let leg_on_fcu = doc
+            .node
+            .iter_with_ids()
+            .find(|(_, i)| {
+                matches!(
+                    i,
+                    Item::Track {
+                        layer: LayerId::FCu,
+                        ..
+                    }
+                )
+            })
+            .unwrap()
+            .0;
+        let via_id = doc
+            .node
+            .iter_with_ids()
+            .find(|(_, i)| matches!(i, Item::Via { .. }))
+            .unwrap()
+            .0;
 
         let drag = TraceDrag::start(&doc, leg_on_fcu).unwrap();
         assert_eq!(drag.left_anchor, a_center);
-        assert_eq!(drag.right_anchor, via_point, "the via's own center pins this side, exactly where it already sits");
-        assert_eq!(drag.to_remove, vec![leg_on_fcu], "the via itself must never be a removal candidate");
+        assert_eq!(
+            drag.right_anchor, via_point,
+            "the via's own center pins this side, exactly where it already sits"
+        );
+        assert_eq!(
+            drag.to_remove,
+            vec![leg_on_fcu],
+            "the via itself must never be a removal candidate"
+        );
         assert!(!drag.to_remove.contains(&via_id));
     }
 
@@ -1205,16 +1554,27 @@ mod tests {
         let cursor = Point::new(0, 5 * MM);
         drag.update(&doc, cursor);
         let (path, clear) = drag.live();
-        assert!(clear, "dragging straight down over open board must stay clear");
+        assert!(
+            clear,
+            "dragging straight down over open board must stay clear"
+        );
         let path = path.to_vec();
         assert_eq!(*path.first().unwrap(), a_center);
         assert_eq!(*path.last().unwrap(), b_center);
-        assert!(path.contains(&cursor), "the new path must actually pass through the dragged point");
+        assert!(
+            path.contains(&cursor),
+            "the new path must actually pass through the dragged point"
+        );
         // Every leg must itself be a clean 45/90-degree segment.
         for leg in path.windows(2) {
             let dx = (leg[1].x - leg[0].x).abs();
             let dy = (leg[1].y - leg[0].y).abs();
-            assert!(dx == 0 || dy == 0 || dx == dy, "leg {:?} -> {:?} is not on the 45-degree grid", leg[0], leg[1]);
+            assert!(
+                dx == 0 || dy == 0 || dx == dy,
+                "leg {:?} -> {:?} is not on the 45-degree grid",
+                leg[0],
+                leg[1]
+            );
         }
     }
 
@@ -1231,7 +1591,10 @@ mod tests {
         let mut drag = TraceDrag::start(&doc, leg_p1_p2).unwrap();
         drag.update(&doc, Point::new(0, 5 * MM));
         let (_, clear) = drag.live();
-        assert!(!clear, "dragging straight through an unrelated net's wall must be refused");
+        assert!(
+            !clear,
+            "dragging straight through an unrelated net's wall must be refused"
+        );
     }
 
     #[test]
@@ -1249,17 +1612,25 @@ mod tests {
             net: Some(NetId(7777)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let mut drag = TraceDrag::start(&doc, leg_p1_p2).unwrap();
         drag.update(&doc, cursor);
         let (path, clear) = drag.live();
-        assert!(clear, "the mirrored right-half elbow must rescue this drag instead of going red");
+        assert!(
+            clear,
+            "the mirrored right-half elbow must rescue this drag instead of going red"
+        );
 
         // Left half unchanged (diagonal-first), right half mirrored
         // (straight along x from b, then diagonal down into the cursor).
-        let left_m = (cursor.x - a_center.x).abs().min((cursor.y - a_center.y).abs());
-        let right_m = (cursor.x - b_center.x).abs().min((cursor.y - b_center.y).abs());
+        let left_m = (cursor.x - a_center.x)
+            .abs()
+            .min((cursor.y - a_center.y).abs());
+        let right_m = (cursor.x - b_center.x)
+            .abs()
+            .min((cursor.y - b_center.y).abs());
         let expected = vec![
             a_center,
             Point::new(a_center.x + left_m, cursor.y),
@@ -1267,7 +1638,10 @@ mod tests {
             Point::new(cursor.x + right_m, cursor.y + right_m),
             b_center,
         ];
-        assert_eq!(path, expected, "expected the diagonal-first left half joined to the straight-first right half");
+        assert_eq!(
+            path, expected,
+            "expected the diagonal-first left half joined to the straight-first right half"
+        );
     }
 
     #[test]
@@ -1281,19 +1655,35 @@ mod tests {
 
         assert!(drag.commit(&mut doc));
         for id in [leg_a_p1, leg_p1_p2, leg_p2_b] {
-            assert!(doc.node.get(id).is_none(), "every leg the drag consumed must be gone");
+            assert!(
+                doc.node.get(id).is_none(),
+                "every leg the drag consumed must be gone"
+            );
         }
         let remaining: Vec<(Point, Point)> = doc
             .node
             .iter()
             .filter_map(|item| match item {
-                Item::Track { shape, net: Some(n), .. } if *n == drag.net() => Some((shape.a, shape.b)),
+                Item::Track {
+                    shape,
+                    net: Some(n),
+                    ..
+                } if *n == drag.net() => Some((shape.a, shape.b)),
                 _ => None,
             })
             .collect();
-        assert_eq!(remaining.len(), expected_path.len() - 1, "one Item::Track per leg of the previewed path");
+        assert_eq!(
+            remaining.len(),
+            expected_path.len() - 1,
+            "one Item::Track per leg of the previewed path"
+        );
         for leg in expected_path.windows(2) {
-            assert!(remaining.contains(&(leg[0], leg[1])), "leg {:?} -> {:?} missing after commit", leg[0], leg[1]);
+            assert!(
+                remaining.contains(&(leg[0], leg[1])),
+                "leg {:?} -> {:?} missing after commit",
+                leg[0],
+                leg[1]
+            );
         }
     }
 
@@ -1302,7 +1692,10 @@ mod tests {
         let (mut doc, _leg_a_p1, leg_p1_p2, _leg_p2_b, ..) = three_leg_wire();
         let drag = TraceDrag::start(&doc, leg_p1_p2).unwrap(); // never update()d: no preview yet
         let before = doc.node.len();
-        assert!(!drag.commit(&mut doc), "committing before any update() must be refused");
+        assert!(
+            !drag.commit(&mut doc),
+            "committing before any update() must be refused"
+        );
         assert_eq!(doc.node.len(), before);
     }
 }

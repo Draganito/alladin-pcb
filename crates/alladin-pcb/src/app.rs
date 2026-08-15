@@ -22,9 +22,9 @@ use alladin_render::{Camera, LayerToggles};
 use eframe::egui::{self, Color32, Stroke};
 
 use crate::board_doc::{
-    BoardDoc, CopperWeight, FootprintId, LayerCount, NewBoardParams, SilkDotId, SilkTextId, ZoneId, ZoneRecord,
-    DEFAULT_SILK_DOT_DIAMETER, DEFAULT_SILK_TEXT_HEIGHT, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL, SILK_DOT_DIAMETER_STEPS_MM,
-    SILK_TEXT_HEIGHT_STEPS_MM,
+    BoardDoc, CopperWeight, FootprintId, LayerCount, NewBoardParams, SilkDotId, SilkTextId, ZoneId,
+    ZoneRecord, DEFAULT_SILK_DOT_DIAMETER, DEFAULT_SILK_TEXT_HEIGHT, DEFAULT_VIA_DIAMETER,
+    DEFAULT_VIA_DRILL, SILK_DOT_DIAMETER_STEPS_MM, SILK_TEXT_HEIGHT_STEPS_MM,
 };
 use crate::footprint::{self, world_items, FootprintTemplate, PadShapeKind};
 use crate::parts_db::PartsDb;
@@ -230,7 +230,11 @@ enum PendingDelete {
     /// `delete_part_requested` out-param) plus its display name, purely
     /// so the confirmation prompt can name the part instead of a bare
     /// id.
-    Part { index: usize, db_id: i64, name: String },
+    Part {
+        index: usize,
+        db_id: i64,
+        name: String,
+    },
     /// A category tree header's delete click -- the exact prefix
     /// [`crate::parts_db::PartsDb::delete_category_tree`] would be
     /// given, plus how many parts it would actually remove (already
@@ -547,7 +551,9 @@ pub(crate) struct EditorState {
     /// The in-progress background download, if any -- see
     /// `crate::lcsc::fetch_in_background`. Polled once per frame with
     /// `try_recv()`; `None` when no download is running.
-    lcsc_fetch: Option<std::sync::mpsc::Receiver<Result<crate::lcsc::FetchedPart, crate::lcsc::FetchError>>>,
+    lcsc_fetch: Option<
+        std::sync::mpsc::Receiver<Result<crate::lcsc::FetchedPart, crate::lcsc::FetchError>>,
+    >,
     /// The outcome of the *last* download/save attempt (`true` = ok),
     /// shown until the next attempt replaces it -- same convention as
     /// `net_message`/`route_message`/`io_message`.
@@ -578,6 +584,8 @@ struct AddPartForm {
     pin_count: u32,
     pitch_mm: f32,
     pad_radius_mm: f32,
+    /// Plated drill in mm; `0` means SMD (no hole).
+    hole_diameter_mm: f32,
     description: String,
     /// Free-text `parts_db` category (see
     /// [`crate::parts_db::PartRecord::category`]'s doc comment) --
@@ -594,6 +602,7 @@ impl Default for AddPartForm {
             pin_count: 2,
             pitch_mm: 2.54,
             pad_radius_mm: 0.45,
+            hole_diameter_mm: 0.0,
             description: String::new(),
             category: String::new(),
         }
@@ -607,7 +616,14 @@ impl Default for AddPartForm {
 /// swallowed on purpose -- a broken/missing parts file should degrade to
 /// "just the built-ins available this session", not stop the editor from
 /// opening at all.
-pub(crate) fn load_templates(parts_db: &PartsDb) -> (Vec<FootprintTemplate>, Vec<Option<i64>>, Vec<Option<String>>, Vec<Option<String>>) {
+pub(crate) fn load_templates(
+    parts_db: &PartsDb,
+) -> (
+    Vec<FootprintTemplate>,
+    Vec<Option<i64>>,
+    Vec<Option<String>>,
+    Vec<Option<String>>,
+) {
     let mut templates = footprint::builtin_templates();
     let mut origin: Vec<Option<i64>> = vec![None; templates.len()];
     let mut hover: Vec<Option<String>> = vec![None; templates.len()];
@@ -615,7 +631,9 @@ pub(crate) fn load_templates(parts_db: &PartsDb) -> (Vec<FootprintTemplate>, Vec
     if let Ok(parts) = parts_db.list_parts() {
         for part in parts {
             let tooltip = match &part.lcsc_code {
-                Some(code) if !part.description.is_empty() => Some(format!("{code}: {}", part.description)),
+                Some(code) if !part.description.is_empty() => {
+                    Some(format!("{code}: {}", part.description))
+                }
                 Some(code) => Some(code.clone()),
                 None if !part.description.is_empty() => Some(part.description.clone()),
                 None => None,
@@ -643,15 +661,26 @@ pub(crate) fn load_templates(parts_db: &PartsDb) -> (Vec<FootprintTemplate>, Vec
 /// *no* sub-category (a plain `"Resistors"`-style category, or
 /// "Uncategorized" itself) -- rendered directly under the top-level
 /// header rather than one more empty-titled nested header.
-fn group_templates_by_category(template_origin: &[Option<i64>], template_category: &[Option<String>]) -> BTreeMap<String, BTreeMap<String, Vec<usize>>> {
+fn group_templates_by_category(
+    template_origin: &[Option<i64>],
+    template_category: &[Option<String>],
+) -> BTreeMap<String, BTreeMap<String, Vec<usize>>> {
     let mut tree: BTreeMap<String, BTreeMap<String, Vec<usize>>> = BTreeMap::new();
     for (i, origin) in template_origin.iter().enumerate() {
         if origin.is_none() {
             continue;
         }
-        let full_category = template_category[i].as_deref().unwrap_or(crate::parts_db::UNCATEGORIZED_LABEL);
-        let (top, sub) = full_category.split_once('/').map_or((full_category, ""), |(top, sub)| (top, sub));
-        tree.entry(top.to_string()).or_default().entry(sub.to_string()).or_default().push(i);
+        let full_category = template_category[i]
+            .as_deref()
+            .unwrap_or(crate::parts_db::UNCATEGORIZED_LABEL);
+        let (top, sub) = full_category
+            .split_once('/')
+            .map_or((full_category, ""), |(top, sub)| (top, sub));
+        tree.entry(top.to_string())
+            .or_default()
+            .entry(sub.to_string())
+            .or_default()
+            .push(i);
     }
     tree
 }
@@ -687,7 +716,11 @@ fn place_part_row(
             changed = true;
         }
         if let Some(db_id) = template_origin[i] {
-            if ui.small_button("\u{2716}").on_hover_text("Remove from parts database").clicked() {
+            if ui
+                .small_button("\u{2716}")
+                .on_hover_text("Remove from parts database")
+                .clicked()
+            {
                 *delete_part_requested = Some((i, db_id, templates[i].name.clone()));
             }
         }
@@ -704,7 +737,11 @@ fn place_part_row(
 /// only ever creates same-net records for the same layer in one go), so
 /// the first one found wins for the returned `NetId` if they don't.
 fn detect_plane_zones(doc: &BoardDoc, layer: LayerId) -> (Vec<ZoneId>, Option<NetId>) {
-    let matches: Vec<&ZoneRecord> = doc.zones.iter().filter(|z| z.layer == layer && doc.outline.iter().any(|o| *o == z.outline)).collect();
+    let matches: Vec<&ZoneRecord> = doc
+        .zones
+        .iter()
+        .filter(|z| z.layer == layer && doc.outline.iter().any(|o| *o == z.outline))
+        .collect();
     let net = matches.first().map(|z| z.net);
     (matches.into_iter().map(|z| z.id).collect(), net)
 }
@@ -821,7 +858,10 @@ impl EditorState {
     /// mutated mid-flight cannot leave a half-applied board (individual
     /// BoardDoc mutators still preferably leave state untouched on
     /// failure; this restore is the safety net).
-    fn try_mutate_doc<E>(&mut self, f: impl FnOnce(&mut BoardDoc) -> Result<(), E>) -> Result<(), E> {
+    fn try_mutate_doc<E>(
+        &mut self,
+        f: impl FnOnce(&mut BoardDoc) -> Result<(), E>,
+    ) -> Result<(), E> {
         let before = self.doc.clone();
         match f(&mut self.doc) {
             Ok(()) => {
@@ -837,7 +877,10 @@ impl EditorState {
 
     /// Like [`Self::try_mutate_doc`] for fallible ops that return a
     /// value on success (e.g. `connect_pads` → `NetId`).
-    fn try_mutate_doc_ok<T, E>(&mut self, f: impl FnOnce(&mut BoardDoc) -> Result<T, E>) -> Result<T, E> {
+    fn try_mutate_doc_ok<T, E>(
+        &mut self,
+        f: impl FnOnce(&mut BoardDoc) -> Result<T, E>,
+    ) -> Result<T, E> {
         let before = self.doc.clone();
         match f(&mut self.doc) {
             Ok(v) => {
@@ -938,8 +981,16 @@ impl EditorState {
     /// name `BoardDoc` stored for it (see `PlacedFootprint::template_name`'s
     /// doc comment for why `BoardDoc` itself doesn't hold this mapping).
     fn template_for(&self, id: FootprintId) -> Option<(usize, &FootprintTemplate)> {
-        let name = &self.doc.footprints.iter().find(|f| f.id == id)?.template_name;
-        self.templates.iter().enumerate().find(|(_, t)| &t.name == name)
+        let name = &self
+            .doc
+            .footprints
+            .iter()
+            .find(|f| f.id == id)?
+            .template_name;
+        self.templates
+            .iter()
+            .enumerate()
+            .find(|(_, t)| &t.name == name)
     }
 
     /// A footprint under the cursor takes priority (matching this
@@ -955,9 +1006,23 @@ impl EditorState {
         if let Some(id) = self.doc.footprint_at(board_pos) {
             self.clear_selection();
             self.selected = Some(id);
-            let Some((template_index, _)) = self.template_for(id) else { return };
-            let position = self.doc.footprints.iter().find(|f| f.id == id).unwrap().position;
-            let rotation_deg = self.doc.footprints.iter().find(|f| f.id == id).unwrap().rotation_deg;
+            let Some((template_index, _)) = self.template_for(id) else {
+                return;
+            };
+            let position = self
+                .doc
+                .footprints
+                .iter()
+                .find(|f| f.id == id)
+                .unwrap()
+                .position;
+            let rotation_deg = self
+                .doc
+                .footprints
+                .iter()
+                .find(|f| f.id == id)
+                .unwrap()
+                .rotation_deg;
             self.dragging = Some(Dragging {
                 id,
                 template_index,
@@ -986,8 +1051,19 @@ impl EditorState {
         if let Some(id) = self.doc.silk_dot_at(board_pos) {
             self.clear_selection();
             self.selected_silk_dot = Some(id);
-            let position = self.doc.silk_dots.iter().find(|d| d.id == id).unwrap().position;
-            self.silk_dot_dragging = Some(SilkDotDrag { id, grab_offset: position.sub(board_pos), candidate_position: position, valid: true });
+            let position = self
+                .doc
+                .silk_dots
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .position;
+            self.silk_dot_dragging = Some(SilkDotDrag {
+                id,
+                grab_offset: position.sub(board_pos),
+                candidate_position: position,
+                valid: true,
+            });
             return;
         }
         let tolerance = self.snap_threshold_px(5.0);
@@ -1006,20 +1082,45 @@ impl EditorState {
         let grid_spacing = self.grid_spacing;
         let grid_snap_enabled = self.grid_snap_enabled;
         if let Some(dragging) = &mut self.dragging {
-            let candidate = snap_to_grid_point(board_pos.add(dragging.grab_offset), grid_spacing, grid_snap_enabled);
+            let candidate = snap_to_grid_point(
+                board_pos.add(dragging.grab_offset),
+                grid_spacing,
+                grid_snap_enabled,
+            );
             dragging.candidate_position = candidate;
             let template = &self.templates[dragging.template_index];
-            dragging.valid = self.doc.check_placement(template, candidate, dragging.rotation_deg, Some(dragging.id)).is_ok();
+            dragging.valid = self
+                .doc
+                .check_placement(
+                    template,
+                    candidate,
+                    dragging.rotation_deg,
+                    Some(dragging.id),
+                )
+                .is_ok();
             return;
         }
         if let Some(drag) = &mut self.silk_text_dragging {
-            let candidate = snap_to_grid_point(board_pos.add(drag.grab_offset), grid_spacing, grid_snap_enabled);
+            let candidate = snap_to_grid_point(
+                board_pos.add(drag.grab_offset),
+                grid_spacing,
+                grid_snap_enabled,
+            );
             drag.candidate_position = candidate;
-            drag.valid = self.doc.check_silk_text_move(drag.id, candidate, drag.rotation_deg).is_ok();
+            drag.valid = self
+                .doc
+                .check_silk_text_move(drag.id, candidate, drag.rotation_deg)
+                .is_ok();
             return;
         }
-        let Some(drag) = &mut self.silk_dot_dragging else { return };
-        let candidate = snap_to_grid_point(board_pos.add(drag.grab_offset), grid_spacing, grid_snap_enabled);
+        let Some(drag) = &mut self.silk_dot_dragging else {
+            return;
+        };
+        let candidate = snap_to_grid_point(
+            board_pos.add(drag.grab_offset),
+            grid_spacing,
+            grid_snap_enabled,
+        );
         drag.candidate_position = candidate;
         drag.valid = self.doc.check_silk_dot_move(drag.id, candidate).is_ok();
     }
@@ -1031,13 +1132,21 @@ impl EditorState {
                 .footprints
                 .iter()
                 .find(|f| f.id == dragging.id)
-                .is_some_and(|f| f.position == dragging.candidate_position && (f.rotation_deg - dragging.rotation_deg).abs() < f64::EPSILON);
+                .is_some_and(|f| {
+                    f.position == dragging.candidate_position
+                        && (f.rotation_deg - dragging.rotation_deg).abs() < f64::EPSILON
+                });
             if unchanged {
                 return;
             }
             let template = self.templates[dragging.template_index].clone();
             let _ = self.try_mutate_doc(|doc| {
-                doc.try_move_footprint(dragging.id, &template, dragging.candidate_position, dragging.rotation_deg)
+                doc.try_move_footprint(
+                    dragging.id,
+                    &template,
+                    dragging.candidate_position,
+                    dragging.rotation_deg,
+                )
             });
             return;
         }
@@ -1047,15 +1156,27 @@ impl EditorState {
                 .silk_texts
                 .iter()
                 .find(|t| t.id == drag.id)
-                .is_some_and(|t| t.position == drag.candidate_position && (t.rotation_deg - drag.rotation_deg).abs() < f64::EPSILON);
+                .is_some_and(|t| {
+                    t.position == drag.candidate_position
+                        && (t.rotation_deg - drag.rotation_deg).abs() < f64::EPSILON
+                });
             if unchanged {
                 return;
             }
-            let _ = self.try_mutate_doc(|doc| doc.try_move_silk_text(drag.id, drag.candidate_position, drag.rotation_deg));
+            let _ = self.try_mutate_doc(|doc| {
+                doc.try_move_silk_text(drag.id, drag.candidate_position, drag.rotation_deg)
+            });
             return;
         }
-        let Some(drag) = self.silk_dot_dragging.take() else { return };
-        let unchanged = self.doc.silk_dots.iter().find(|d| d.id == drag.id).is_some_and(|d| d.position == drag.candidate_position);
+        let Some(drag) = self.silk_dot_dragging.take() else {
+            return;
+        };
+        let unchanged = self
+            .doc
+            .silk_dots
+            .iter()
+            .find(|d| d.id == drag.id)
+            .is_some_and(|d| d.position == drag.candidate_position);
         if unchanged {
             return;
         }
@@ -1072,7 +1193,9 @@ impl EditorState {
     fn add_pin_stitching_via_at(&mut self, pad_id: ItemId) {
         use crate::board_doc::PinStitchingViaError;
         let (diameter, drill, stub_width) = (self.via_diameter, self.via_drill, self.trace_width);
-        match self.try_mutate_doc_ok(|doc| doc.try_add_pin_stitching_via(pad_id, diameter, drill, stub_width)) {
+        match self.try_mutate_doc_ok(|doc| {
+            doc.try_add_pin_stitching_via(pad_id, diameter, drill, stub_width)
+        }) {
             Ok(_) => {
                 self.pending_pin_via = None;
                 self.io_message = None;
@@ -1096,7 +1219,11 @@ impl EditorState {
     /// exactly like an ordinary [`Self::begin_drag`] move, until the
     /// user finds a spot where both fit and clicks to commit (see
     /// [`Self::finish_pending_pin_via`]).
-    fn begin_pin_via_relocation(&mut self, pad_id: ItemId, reason: crate::board_doc::PinStitchingViaError) {
+    fn begin_pin_via_relocation(
+        &mut self,
+        pad_id: ItemId,
+        reason: crate::board_doc::PinStitchingViaError,
+    ) {
         // Every early return below is a "shouldn't happen" case at
         // this point (`add_pin_stitching_via_at` already filtered out
         // the one real, common reason `pad_net`/the template lookup
@@ -1108,7 +1235,12 @@ impl EditorState {
             self.io_message = Some(format!("Couldn't add a via there: {reason}"));
             return;
         };
-        let Some(footprint) = self.doc.footprints.iter().find(|f| f.pad_item_ids.contains(&pad_id)) else {
+        let Some(footprint) = self
+            .doc
+            .footprints
+            .iter()
+            .find(|f| f.pad_item_ids.contains(&pad_id))
+        else {
             self.io_message = Some(format!("Couldn't add a via there: {reason}"));
             return;
         };
@@ -1119,7 +1251,10 @@ impl EditorState {
             self.io_message = Some(format!("Couldn't add a via there: {reason}"));
             return;
         };
-        let Some(via_candidate) = self.doc.pin_stitching_via_candidate(pad_id, self.via_diameter) else {
+        let Some(via_candidate) = self
+            .doc
+            .pin_stitching_via_candidate(pad_id, self.via_diameter)
+        else {
             self.io_message = Some(format!("Couldn't add a via there: {reason}"));
             return;
         };
@@ -1145,12 +1280,26 @@ impl EditorState {
     }
 
     fn update_pending_pin_via(&mut self, board_pos: Point) {
-        let Some(pending) = &mut self.pending_pin_via else { return };
+        let Some(pending) = &mut self.pending_pin_via else {
+            return;
+        };
         let candidate = board_pos.add(pending.grab_offset);
         pending.candidate_position = candidate;
         let template = &self.templates[pending.template_index];
-        let footprint_ok = self.doc.check_placement(template, candidate, pending.rotation_deg, Some(pending.footprint_id)).is_ok();
-        let via_ok = self.doc.via_would_fit(candidate.add(pending.via_offset), pending.net, pending.diameter);
+        let footprint_ok = self
+            .doc
+            .check_placement(
+                template,
+                candidate,
+                pending.rotation_deg,
+                Some(pending.footprint_id),
+            )
+            .is_ok();
+        let via_ok = self.doc.via_would_fit(
+            candidate.add(pending.via_offset),
+            pending.net,
+            pending.diameter,
+        );
         pending.valid = footprint_ok && via_ok;
     }
 
@@ -1163,18 +1312,35 @@ impl EditorState {
     /// end in the first place, so the only way out is a valid drop or
     /// Escape.
     fn finish_pending_pin_via(&mut self) {
-        let Some(pending) = &self.pending_pin_via else { return };
+        let Some(pending) = &self.pending_pin_via else {
+            return;
+        };
         if !pending.valid {
             return;
         }
         let pending = self.pending_pin_via.take().unwrap();
         let template = &self.templates[pending.template_index];
         let before = self.doc.clone();
-        if self.doc.try_move_footprint(pending.footprint_id, template, pending.candidate_position, pending.rotation_deg).is_err() {
-            self.io_message = Some("Couldn't place the part there after all -- try again.".to_string());
+        if self
+            .doc
+            .try_move_footprint(
+                pending.footprint_id,
+                template,
+                pending.candidate_position,
+                pending.rotation_deg,
+            )
+            .is_err()
+        {
+            self.io_message =
+                Some("Couldn't place the part there after all -- try again.".to_string());
             return;
         }
-        match self.doc.try_add_pin_stitching_via(pending.pad_id, pending.diameter, pending.drill, pending.stub_width) {
+        match self.doc.try_add_pin_stitching_via(
+            pending.pad_id,
+            pending.diameter,
+            pending.drill,
+            pending.stub_width,
+        ) {
             Ok(_) => {
                 self.record_undo(before);
                 self.io_message = None;
@@ -1193,7 +1359,9 @@ impl EditorState {
     }
 
     fn update_trace_drag(&mut self, board_pos: Point) {
-        let Some(drag) = &mut self.trace_dragging else { return };
+        let Some(drag) = &mut self.trace_dragging else {
+            return;
+        };
         drag.update(&self.doc, board_pos);
     }
 
@@ -1206,7 +1374,9 @@ impl EditorState {
     /// replaced with fresh ones), and re-selecting the result isn't
     /// worth the complexity for a first cut of this gesture.
     fn finish_trace_drag(&mut self) {
-        let Some(drag) = self.trace_dragging.take() else { return };
+        let Some(drag) = self.trace_dragging.take() else {
+            return;
+        };
         let before = self.doc.clone();
         if drag.commit(&mut self.doc) {
             self.record_undo(before);
@@ -1238,7 +1408,9 @@ impl EditorState {
             return;
         }
         self.last_reload_check_secs = now_secs;
-        let Some(path) = self.file_path.clone() else { return };
+        let Some(path) = self.file_path.clone() else {
+            return;
+        };
         if file_mtime(&path) != self.disk_mtime {
             // Bumped before reload so a slow zone-heavy load can't
             // re-trigger the same mtime change on every following frame.
@@ -1254,7 +1426,8 @@ impl EditorState {
             self.zone_message = Some("Reload from disk failed -- keeping the last good board (will retry on the next external change).".to_string());
             return;
         };
-        let (templates, template_origin, template_hover, template_category) = load_templates(parts_db);
+        let (templates, template_origin, template_hover, template_category) =
+            load_templates(parts_db);
         self.dragging = None;
         self.trace_dragging = None;
         self.routing = None;
@@ -1293,16 +1466,22 @@ impl EditorState {
     /// ever actually does anything on a given call.
     fn rotate_selected(&mut self) {
         if let Some(id) = self.selected {
-            let Some((template_index, _)) = self.template_for(id) else { return };
+            let Some((template_index, _)) = self.template_for(id) else {
+                return;
+            };
             let footprint = self.doc.footprints.iter().find(|f| f.id == id).unwrap();
             let position = footprint.position;
             let new_rotation = (footprint.rotation_deg + 90.0) % 360.0;
             let template = self.templates[template_index].clone();
-            let _ = self.try_mutate_doc(|doc| doc.try_move_footprint(id, &template, position, new_rotation));
+            let _ = self.try_mutate_doc(|doc| {
+                doc.try_move_footprint(id, &template, position, new_rotation)
+            });
             return;
         }
         if let Some(id) = self.selected_silk_text {
-            let Some(text) = self.doc.silk_texts.iter().find(|t| t.id == id) else { return };
+            let Some(text) = self.doc.silk_texts.iter().find(|t| t.id == id) else {
+                return;
+            };
             let position = text.position;
             let new_rotation = (text.rotation_deg + 90.0) % 360.0;
             let _ = self.try_mutate_doc(|doc| doc.try_move_silk_text(id, position, new_rotation));
@@ -1347,12 +1526,22 @@ impl EditorState {
         };
 
         match self.routing.take() {
-            None => match RoutingDrag::start_with_options(&self.doc, pad_id, self.trace_width, self.via_diameter, self.via_drill) {
+            None => match RoutingDrag::start_with_options(
+                &self.doc,
+                pad_id,
+                self.trace_width,
+                self.via_diameter,
+                self.via_drill,
+            ) {
                 Some(drag) => {
                     self.routing = Some(drag);
                     self.route_message = None;
                 }
-                None => self.route_message = Some("This pin has no net yet \u{2014} connect it to one first.".to_string()),
+                None => {
+                    self.route_message = Some(
+                        "This pin has no net yet \u{2014} connect it to one first.".to_string(),
+                    )
+                }
             },
             Some(drag) if pad_id == drag.from_pad => {
                 self.routing = Some(drag); // clicked the start pin again: keep dragging
@@ -1364,7 +1553,9 @@ impl EditorState {
                     self.record_undo(before);
                     self.route_message = None;
                 } else {
-                    self.route_message = drag.blocked_reason(&self.doc, board_pos).or(Some("can't connect these two pins".to_string()));
+                    self.route_message = drag
+                        .blocked_reason(&self.doc, board_pos)
+                        .or(Some("can't connect these two pins".to_string()));
                     self.routing = Some(drag); // keep the session alive so the user can try elsewhere
                 }
             }
@@ -1397,7 +1588,10 @@ impl EditorState {
             return;
         }
         let tolerance = self.snap_threshold_px(5.0);
-        let item = self.doc.track_at(board_pos, tolerance).or_else(|| self.doc.via_at(board_pos, tolerance));
+        let item = self
+            .doc
+            .track_at(board_pos, tolerance)
+            .or_else(|| self.doc.via_at(board_pos, tolerance));
         self.clear_selection();
         self.selected_item = item;
     }
@@ -1424,16 +1618,27 @@ impl EditorState {
     /// picked, it stays picked until the tool changes or Escape is
     /// pressed, even after a misplaced click.
     fn handle_place_via_click(&mut self, board_pos: Point) {
-        if let Some(net) = self.doc.pad_at(board_pos).and_then(|id| self.doc.pad_net(id).ok().flatten()) {
+        if let Some(net) = self
+            .doc
+            .pad_at(board_pos)
+            .and_then(|id| self.doc.pad_net(id).ok().flatten())
+        {
             self.via_net = Some(net);
             self.via_message = None;
             return;
         }
         match self.via_net {
-            None => self.via_message = Some("Click a pin that already has a net first, to pick which net to stitch.".to_string()),
+            None => {
+                self.via_message = Some(
+                    "Click a pin that already has a net first, to pick which net to stitch."
+                        .to_string(),
+                )
+            }
             Some(net) => {
                 let (diameter, drill) = (self.via_diameter, self.via_drill);
-                match self.try_mutate_doc_ok(|doc| doc.try_add_stitching_via(board_pos, net, diameter, drill)) {
+                match self.try_mutate_doc_ok(|doc| {
+                    doc.try_add_stitching_via(board_pos, net, diameter, drill)
+                }) {
                     Ok(_) => self.via_message = None,
                     Err(e) => self.via_message = Some(e.to_string()),
                 }
@@ -1473,12 +1678,24 @@ impl EditorState {
     /// plus which axes actually snapped, so the caller can draw a guide
     /// line only for those.
     fn snap_matrix_center(&self, candidate: Point) -> (Point, bool, bool) {
-        let Some(bounds) = self.board_bounds() else { return (candidate, false, false) };
-        let center = Point::new((bounds.min.x + bounds.max.x) / 2, (bounds.min.y + bounds.max.y) / 2);
+        let Some(bounds) = self.board_bounds() else {
+            return (candidate, false, false);
+        };
+        let center = Point::new(
+            (bounds.min.x + bounds.max.x) / 2,
+            (bounds.min.y + bounds.max.y) / 2,
+        );
         let threshold = self.snap_threshold_px(8.0) as f64;
         let snap_x = (candidate.x - center.x).abs() as f64 <= threshold;
         let snap_y = (candidate.y - center.y).abs() as f64 <= threshold;
-        (Point::new(if snap_x { center.x } else { candidate.x }, if snap_y { center.y } else { candidate.y }), snap_x, snap_y)
+        (
+            Point::new(
+                if snap_x { center.x } else { candidate.x },
+                if snap_y { center.y } else { candidate.y },
+            ),
+            snap_x,
+            snap_y,
+        )
     }
 
     /// The full set of ghost/commit positions for the currently
@@ -1490,7 +1707,13 @@ impl EditorState {
     fn matrix_ghost_positions(&self, center: Point) -> Vec<Point> {
         let pitch_x = (self.matrix_pitch_x_mm as f64 * MM as f64).round() as alladin_geom::Unit;
         let pitch_y = (self.matrix_pitch_y_mm as f64 * MM as f64).round() as alladin_geom::Unit;
-        BoardDoc::matrix_positions(self.matrix_rows.max(1), self.matrix_cols.max(1), pitch_x, pitch_y, center)
+        BoardDoc::matrix_positions(
+            self.matrix_rows.max(1),
+            self.matrix_cols.max(1),
+            pitch_x,
+            pitch_y,
+            center,
+        )
     }
 
     /// One click in [`Tool::DrawZone`] mode: with fewer than three
@@ -1530,7 +1753,13 @@ impl EditorState {
         let before = self.doc.clone();
         match self.doc.add_zone(outline.clone(), layer, net) {
             Ok(id) => {
-                let island_count = self.doc.zones.iter().find(|z| z.id == id).map(|z| z.item_ids.len()).unwrap_or(0);
+                let island_count = self
+                    .doc
+                    .zones
+                    .iter()
+                    .find(|z| z.id == id)
+                    .map(|z| z.item_ids.len())
+                    .unwrap_or(0);
                 self.record_undo(before);
                 self.zone_message = Some(if island_count > 0 {
                     format!("Zone filled into {island_count} island(s).")
@@ -1616,7 +1845,12 @@ impl EditorState {
                 }
                 let _ = tx.send(ZoneRefillEvent::Finished { doc, errors });
             });
-            self.zone_refill = Some(ZoneRefillJob::Background { before, rx, done: 0, total });
+            self.zone_refill = Some(ZoneRefillJob::Background {
+                before,
+                rx,
+                done: 0,
+                total,
+            });
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1641,7 +1875,13 @@ impl EditorState {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let ZoneRefillJob::Cooperative { before, mut remaining, mut done, total, mut errors } = job;
+            let ZoneRefillJob::Cooperative {
+                before,
+                mut remaining,
+                mut done,
+                total,
+                mut errors,
+            } = job;
             if let Some(id) = remaining.first().copied() {
                 remaining.remove(0);
                 if let Err(e) = self.doc.refill_zone(id) {
@@ -1655,16 +1895,31 @@ impl EditorState {
                 self.zone_message = Some(if errors.is_empty() {
                     "Zones refilled.".to_string()
                 } else {
-                    format!("Zones refilled with {} thermal error(s): {}", errors.len(), errors[0])
+                    format!(
+                        "Zones refilled with {} thermal error(s): {}",
+                        errors.len(),
+                        errors[0]
+                    )
                 });
             } else {
-                self.zone_refill = Some(ZoneRefillJob::Cooperative { before, remaining, done, total, errors });
+                self.zone_refill = Some(ZoneRefillJob::Cooperative {
+                    before,
+                    remaining,
+                    done,
+                    total,
+                    errors,
+                });
             }
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let ZoneRefillJob::Background { before, rx, mut done, mut total } = job;
+            let ZoneRefillJob::Background {
+                before,
+                rx,
+                mut done,
+                mut total,
+            } = job;
             loop {
                 match rx.try_recv() {
                     Ok(ZoneRefillEvent::Progress { done: d, total: t }) => {
@@ -1679,18 +1934,28 @@ impl EditorState {
                         self.zone_message = Some(if errors.is_empty() {
                             "Zones refilled.".to_string()
                         } else {
-                            format!("Zones refilled with {} thermal error(s): {}", errors.len(), errors[0])
+                            format!(
+                                "Zones refilled with {} thermal error(s): {}",
+                                errors.len(),
+                                errors[0]
+                            )
                         });
                         break;
                     }
                     Err(mpsc::TryRecvError::Empty) => {
-                        self.zone_refill = Some(ZoneRefillJob::Background { before, rx, done, total });
+                        self.zone_refill = Some(ZoneRefillJob::Background {
+                            before,
+                            rx,
+                            done,
+                            total,
+                        });
                         break;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
                         self.doc = before;
                         self.sync_plane_zones_from_doc();
-                        self.zone_message = Some("Zone refill failed (worker ended unexpectedly).".to_string());
+                        self.zone_message =
+                            Some("Zone refill failed (worker ended unexpectedly).".to_string());
                         break;
                     }
                 }
@@ -1710,7 +1975,13 @@ impl EditorState {
             &self.template_origin,
             parts_db,
         ));
-        match export_manufacturing_files_to_dir(&self.doc, &self.templates, &self.file_path, &out_dir, &bom_csv) {
+        match export_manufacturing_files_to_dir(
+            &self.doc,
+            &self.templates,
+            &self.file_path,
+            &out_dir,
+            &bom_csv,
+        ) {
             Ok(files) => {
                 self.io_message = Some(format!(
                     "Wrote manufacturing files:\n  {}\n  {}\n  {}",
@@ -1722,9 +1993,6 @@ impl EditorState {
             Err(e) => self.io_message = Some(format!("Couldn't export manufacturing files: {e}")),
         }
     }
-
-
-
 }
 
 pub struct PcbApp {
@@ -1756,7 +2024,6 @@ struct WasmPending {
     import_parts: Option<mpsc::Receiver<crate::web_io::PickedFile>>,
     import_dxf: Option<mpsc::Receiver<crate::web_io::PickedFile>>,
 }
-
 
 /// Opens the user's persistent parts library at its default per-user
 /// path, falling back to a throwaway in-memory one (with a warning, not
@@ -1791,8 +2058,15 @@ impl PcbApp {
             Some(path) => match load_from_path(&path, &templates, &parts_db) {
                 Ok((doc, _)) => {
                     remember_last_board(&path);
-                    let (templates, template_origin, template_hover, template_category) = load_templates(&parts_db);
-                    let mut state = EditorState::new(doc, templates, template_origin, template_hover, template_category);
+                    let (templates, template_origin, template_hover, template_category) =
+                        load_templates(&parts_db);
+                    let mut state = EditorState::new(
+                        doc,
+                        templates,
+                        template_origin,
+                        template_hover,
+                        template_category,
+                    );
                     state.set_file_path(path);
                     Screen::Editor(state)
                 }
@@ -1838,7 +2112,10 @@ impl PcbApp {
                     true,
                     format!(
                         "Outline from {name}: {:.1}×{:.1} mm, {} vertices ({})",
-                        outline.width_mm, outline.height_mm, outline.vertex_count, outline.source_kind
+                        outline.width_mm,
+                        outline.height_mm,
+                        outline.vertex_count,
+                        outline.source_kind
                     ),
                 ));
                 self.new_board_dxf_label = Some(name.to_string());
@@ -1915,8 +2192,9 @@ pub(crate) fn save_to_path(
     template_origin: &[Option<i64>],
     parts_db: &PartsDb,
 ) -> Result<(), String> {
-    let embedded = crate::parts_transfer::snapshots_used_on_board(doc, templates, template_origin, parts_db)
-        .map_err(|e| e.to_string())?;
+    let embedded =
+        crate::parts_transfer::snapshots_used_on_board(doc, templates, template_origin, parts_db)
+            .map_err(|e| e.to_string())?;
     write_atomic(path, crate::persistence::to_json(doc, &embedded).as_bytes())
 }
 
@@ -1949,12 +2227,14 @@ pub(crate) fn load_board_json(
     templates: &[FootprintTemplate],
     parts_db: &PartsDb,
 ) -> Result<(BoardDoc, Option<(usize, usize)>), String> {
-    let (mut doc, embedded) = crate::persistence::from_json(json, templates).map_err(|e| e.to_string())?;
+    let (mut doc, embedded) =
+        crate::persistence::from_json(json, templates).map_err(|e| e.to_string())?;
     let merge = if embedded.is_empty() {
         None
     } else {
         let (imported, skipped) =
-            crate::parts_transfer::merge_snapshots_into_db(parts_db, &embedded).map_err(|e| e.to_string())?;
+            crate::parts_transfer::merge_snapshots_into_db(parts_db, &embedded)
+                .map_err(|e| e.to_string())?;
         Some((imported, skipped))
     };
     // Prefer embedded geometry for courtyards of parts not yet in the
@@ -1987,16 +2267,19 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-
 #[cfg(target_arch = "wasm32")]
 fn remember_last_board(_path: &std::path::Path) {}
 
 #[cfg(target_arch = "wasm32")]
-fn last_board_path() -> Option<std::path::PathBuf> { None }
+fn last_board_path() -> Option<std::path::PathBuf> {
+    None
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn board_file_dialog() -> rfd::FileDialog {
-    rfd::FileDialog::new().add_filter("Aladin PCB board", &["json"]).set_file_name("board.json")
+    rfd::FileDialog::new()
+        .add_filter("Aladin PCB board", &["json"])
+        .set_file_name("board.json")
 }
 
 /// GUI counterpart of [`crate::app::export_manufacturing_files_write`]
@@ -2009,8 +2292,19 @@ fn export_manufacturing_files_to_dir(
     out_dir: &std::path::Path,
     bom_csv_contents: &str,
 ) -> Result<crate::native_gerber::ManufacturingFiles, String> {
-    let stem = file_path.as_ref().and_then(|p| p.file_stem()).and_then(|s| s.to_str()).unwrap_or("board");
-    crate::native_gerber::export_manufacturing_files_native(doc, templates, stem, out_dir, bom_csv_contents).map_err(|e| e.to_string())
+    let stem = file_path
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .unwrap_or("board");
+    crate::native_gerber::export_manufacturing_files_native(
+        doc,
+        templates,
+        stem,
+        out_dir,
+        bom_csv_contents,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// A modal "are you sure?" prompt for whatever "Place part" panel
@@ -2025,30 +2319,45 @@ fn export_manufacturing_files_to_dir(
 /// `delete_category_requested`) only ever stage a [`PendingDelete`]
 /// here, never delete anything themselves. Draws nothing at all when
 /// nothing is pending.
-fn draw_delete_confirmation_window(ctx: &egui::Context, state: &mut EditorState, parts_db: &PartsDb) {
+fn draw_delete_confirmation_window(
+    ctx: &egui::Context,
+    state: &mut EditorState,
+    parts_db: &PartsDb,
+) {
     let Some(pending) = &state.pending_delete else {
         return;
     };
     let (title, body) = match pending {
-        PendingDelete::Part { name, .. } => ("Delete part?".to_string(), format!("Remove \"{name}\" from your parts database?\n\nThis cannot be undone.")),
-        PendingDelete::Category { prefix, count } => {
-            ("Delete category?".to_string(), format!("Delete all {count} part(s) under \"{prefix}\"?\n\nThis cannot be undone."))
-        }
+        PendingDelete::Part { name, .. } => (
+            "Delete part?".to_string(),
+            format!("Remove \"{name}\" from your parts database?\n\nThis cannot be undone."),
+        ),
+        PendingDelete::Category { prefix, count } => (
+            "Delete category?".to_string(),
+            format!("Delete all {count} part(s) under \"{prefix}\"?\n\nThis cannot be undone."),
+        ),
     };
     let mut confirmed = false;
     let mut cancelled = false;
-    egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).show(ctx, |ui| {
-        ui.label(body);
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Cancel").clicked() {
-                cancelled = true;
-            }
-            if ui.add(egui::Button::new("Yes, delete").fill(Color32::from_rgb(160, 50, 50))).clicked() {
-                confirmed = true;
-            }
+    egui::Window::new(title)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.label(body);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    cancelled = true;
+                }
+                if ui
+                    .add(egui::Button::new("Yes, delete").fill(Color32::from_rgb(160, 50, 50)))
+                    .clicked()
+                {
+                    confirmed = true;
+                }
+            });
         });
-    });
 
     if confirmed {
         if let Some(pending) = state.pending_delete.take() {
@@ -2091,7 +2400,8 @@ fn apply_confirmed_delete(state: &mut EditorState, parts_db: &PartsDb, pending: 
                 // exactly like opening a board does -- same reasoning
                 // as dropping out of placement mode after a
                 // single-part delete above, just for a whole batch.
-                let (templates, template_origin, template_hover, template_category) = load_templates(parts_db);
+                let (templates, template_origin, template_hover, template_category) =
+                    load_templates(parts_db);
                 state.templates = templates;
                 state.template_origin = template_origin;
                 state.template_hover = template_hover;
@@ -2099,12 +2409,20 @@ fn apply_confirmed_delete(state: &mut EditorState, parts_db: &PartsDb, pending: 
                 state.tool = Tool::Select;
                 state.io_message = Some(format!("Deleted {deleted} part(s) from \"{prefix}\"."));
             }
-            Err(e) => state.io_message = Some(format!("Couldn't delete category \"{prefix}\": {e}")),
+            Err(e) => {
+                state.io_message = Some(format!("Couldn't delete category \"{prefix}\": {e}"))
+            }
         },
     }
 }
 
-fn draw_ghost(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, items: &[Item], valid: bool) {
+fn draw_ghost(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    items: &[Item],
+    valid: bool,
+) {
     let color = if valid {
         Color32::from_rgba_unmultiplied(80, 220, 120, 170)
     } else {
@@ -2121,7 +2439,8 @@ fn draw_ghost(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, items:
                 // pad's real shape once `check_placement` (which does use
                 // the true outline, see `board_doc.rs`) accepts it.
                 let center = camera.board_to_screen(rect, shape.center());
-                let radius_px = (shape.bounding_radius() as f32 / MM as f32 * camera.pixels_per_mm).max(1.0);
+                let radius_px =
+                    (shape.bounding_radius() as f32 / MM as f32 * camera.pixels_per_mm).max(1.0);
                 painter.circle_filled(center, radius_px, color);
                 painter.circle_stroke(center, radius_px, Stroke::new(1.5, Color32::WHITE));
             }
@@ -2183,7 +2502,13 @@ fn silk_stroke_width_px(text: &crate::board_doc::SilkText, camera: &Camera) -> f
 /// egui draws butt-capped lines, fabs expect round-capped ones; small
 /// discs on every segment end close that gap (and double as smooth
 /// joints between a polyline's segments).
-fn draw_silk_text_strokes(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, text: &crate::board_doc::SilkText, color: Color32) {
+fn draw_silk_text_strokes(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    text: &crate::board_doc::SilkText,
+    color: Color32,
+) {
     let width_px = silk_stroke_width_px(text, camera);
     let stroke = Stroke::new(width_px, color);
     for segment in text.stroke_segments() {
@@ -2202,15 +2527,34 @@ fn draw_silk_text_strokes(painter: &egui::Painter, rect: egui::Rect, camera: &Ca
 /// ink exactly, descenders included) -- mapped through the camera like
 /// every other board-space shape, so it tracks pan/zoom/rotation for
 /// free.
-fn silk_text_outline_px(rect: egui::Rect, camera: &Camera, text: &crate::board_doc::SilkText) -> Vec<egui::Pos2> {
-    text.bounding_rect().points.iter().map(|&p| camera.board_to_screen(rect, p)).collect()
+fn silk_text_outline_px(
+    rect: egui::Rect,
+    camera: &Camera,
+    text: &crate::board_doc::SilkText,
+) -> Vec<egui::Pos2> {
+    text.bounding_rect()
+        .points
+        .iter()
+        .map(|&p| camera.board_to_screen(rect, p))
+        .collect()
 }
 
 /// Draws one already-placed [`crate::board_doc::SilkText`] -- just the
 /// strokes themselves, no box: the yellow selection ring already
 /// shows the outline on demand.
-fn draw_silk_text(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, text: &crate::board_doc::SilkText) {
-    draw_silk_text_strokes(painter, rect, camera, text, Color32::from_rgb(220, 220, 220));
+fn draw_silk_text(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    text: &crate::board_doc::SilkText,
+) {
+    draw_silk_text_strokes(
+        painter,
+        rect,
+        camera,
+        text,
+        Color32::from_rgb(220, 220, 220),
+    );
 }
 
 /// [`draw_silk_text`]'s live, red/green placement-validity preview for
@@ -2218,7 +2562,13 @@ fn draw_silk_text(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, te
 /// convention [`draw_ghost`] already uses for a footprint/via ghost.
 /// The glyph strokes themselves carry the validity color; the thin
 /// outline around them is just a grab-frame affordance.
-fn draw_silk_text_ghost(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, text: &crate::board_doc::SilkText, valid: bool) {
+fn draw_silk_text_ghost(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    text: &crate::board_doc::SilkText,
+    valid: bool,
+) {
     let color = if valid {
         Color32::from_rgba_unmultiplied(80, 220, 120, 220)
     } else {
@@ -2233,7 +2583,13 @@ fn draw_silk_text_ghost(painter: &egui::Painter, rect: egui::Rect, camera: &Came
 /// [`crate::board_doc::SilkDot`] or a footprint's pin-1 marker --
 /// identical ink either way) in `color`, exactly the circle the export
 /// prints: center + radius through the camera, no cosmetic inflation.
-fn draw_silk_dot_circle(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, circle: &alladin_geom::Circle, color: Color32) {
+fn draw_silk_dot_circle(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    circle: &alladin_geom::Circle,
+    color: Color32,
+) {
     let center = camera.board_to_screen(rect, circle.center);
     let radius_px = (circle.radius as f32 / MM as f32 * camera.pixels_per_mm).max(1.5);
     painter.circle_filled(center, radius_px, color);
@@ -2242,7 +2598,13 @@ fn draw_silk_dot_circle(painter: &egui::Painter, rect: egui::Rect, camera: &Came
 /// [`draw_silk_dot_circle`]'s red/green placement-validity ghost for
 /// [`Tool::PlaceSilkDot`] and an in-progress dot drag -- same color
 /// convention as [`draw_silk_text_ghost`].
-fn draw_silk_dot_ghost(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, circle: &alladin_geom::Circle, valid: bool) {
+fn draw_silk_dot_ghost(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    circle: &alladin_geom::Circle,
+    valid: bool,
+) {
     let color = if valid {
         Color32::from_rgba_unmultiplied(80, 220, 120, 220)
     } else {
@@ -2261,13 +2623,23 @@ fn pad_ring_radius_px(shape: &PadShape, camera: &Camera) -> f32 {
     (shape.bounding_radius() as f32 / MM as f32 * camera.pixels_per_mm).max(1.0) + 4.0
 }
 
-fn draw_selection_ring(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, node: &Node, item_ids: &[ItemId]) {
+fn draw_selection_ring(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    node: &Node,
+    item_ids: &[ItemId],
+) {
     for &id in item_ids {
         match node.get(id) {
             Some(Item::Pad { shape, .. }) => {
                 let center = camera.board_to_screen(rect, shape.center());
                 let radius_px = pad_ring_radius_px(shape, camera);
-                painter.circle_stroke(center, radius_px, Stroke::new(2.0, Color32::from_rgb(255, 220, 0)));
+                painter.circle_stroke(
+                    center,
+                    radius_px,
+                    Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
+                );
             }
             // A pure mounting-hole footprint (see `PlacedFootprint::hole_item_ids`'s
             // doc comment) has no pads for the arm above to ever match --
@@ -2277,8 +2649,13 @@ fn draw_selection_ring(painter: &egui::Painter, rect: egui::Rect, camera: &Camer
             // itself, drag-to-move, and Delete all already worked.
             Some(Item::Hole { position, drill }) => {
                 let center = camera.board_to_screen(rect, *position);
-                let radius_px = (*drill as f32 / 2.0 / MM as f32 * camera.pixels_per_mm).max(1.0) + 3.0;
-                painter.circle_stroke(center, radius_px, Stroke::new(2.0, Color32::from_rgb(255, 220, 0)));
+                let radius_px =
+                    (*drill as f32 / 2.0 / MM as f32 * camera.pixels_per_mm).max(1.0) + 3.0;
+                painter.circle_stroke(
+                    center,
+                    radius_px,
+                    Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
+                );
             }
             _ => {}
         }
@@ -2292,19 +2669,27 @@ fn draw_selection_ring(painter: &egui::Painter, rect: egui::Rect, camera: &Camer
 /// electrically-continuous wire the click landed on, not just that one
 /// bent leg), so it's obvious at a glance exactly how much
 /// Delete/Backspace is about to remove.
-fn draw_item_selection_highlight(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, doc: &BoardDoc, id: ItemId) {
+fn draw_item_selection_highlight(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    doc: &BoardDoc,
+    id: ItemId,
+) {
     let color = Color32::from_rgb(255, 220, 0);
     for wire_id in doc.connected_wire(id) {
         match doc.node.get(wire_id) {
             Some(Item::Track { shape, .. }) => {
                 let a = camera.board_to_screen(rect, shape.a);
                 let b = camera.board_to_screen(rect, shape.b);
-                let width_px = (shape.width as f32 / MM as f32 * camera.pixels_per_mm).max(1.0) + 4.0;
+                let width_px =
+                    (shape.width as f32 / MM as f32 * camera.pixels_per_mm).max(1.0) + 4.0;
                 painter.line_segment([a, b], Stroke::new(width_px, color.gamma_multiply(0.5)));
             }
             Some(Item::Via { shape, .. }) => {
                 let center = camera.board_to_screen(rect, shape.center);
-                let radius_px = (shape.radius as f32 / MM as f32 * camera.pixels_per_mm).max(1.0) + 4.0;
+                let radius_px =
+                    (shape.radius as f32 / MM as f32 * camera.pixels_per_mm).max(1.0) + 4.0;
                 painter.circle_stroke(center, radius_px, Stroke::new(2.5, color));
             }
             _ => {}
@@ -2316,11 +2701,21 @@ fn draw_item_selection_highlight(painter: &egui::Painter, rect: egui::Rect, came
 /// [`Tool::Connect`] two-click gesture -- otherwise identical to
 /// [`draw_selection_ring`] but visually distinct (cyan, not the
 /// footprint-selection yellow) since the two mean different things.
-fn draw_pending_pin(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, node: &Node, pad_id: ItemId) {
+fn draw_pending_pin(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    node: &Node,
+    pad_id: ItemId,
+) {
     if let Some(Item::Pad { shape, .. }) = node.get(pad_id) {
         let center = camera.board_to_screen(rect, shape.center());
         let radius_px = pad_ring_radius_px(shape, camera);
-        painter.circle_stroke(center, radius_px, Stroke::new(2.5, Color32::from_rgb(80, 220, 255)));
+        painter.circle_stroke(
+            center,
+            radius_px,
+            Stroke::new(2.5, Color32::from_rgb(80, 220, 255)),
+        );
     }
 }
 
@@ -2328,14 +2723,22 @@ fn draw_pending_pin(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, 
 /// started from (cyan ring), every corner already fixed as a solid line
 /// in the net's colour, and the free-steered snapped-angle live end --
 /// solid while clear, dashed red while blocked.
-fn draw_routing_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, doc: &BoardDoc, routing: &crate::routing::RoutingDrag) {
+fn draw_routing_preview(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    doc: &BoardDoc,
+    routing: &crate::routing::RoutingDrag,
+) {
     draw_pending_pin(painter, rect, camera, &doc.node, routing.from_pad);
     if let Some(target) = routing.hover_target {
         draw_pending_pin(painter, rect, camera, &doc.node, target);
     }
     let net_color = alladin_render::net_color(Some(routing.net())).gamma_multiply(0.85);
 
-    let fixed_path: Vec<Point> = std::iter::once(routing.origin()).chain(routing.fixed_points()).collect();
+    let fixed_path: Vec<Point> = std::iter::once(routing.origin())
+        .chain(routing.fixed_points())
+        .collect();
     for leg in fixed_path.windows(2) {
         let from = camera.board_to_screen(rect, leg[0]);
         let to = camera.board_to_screen(rect, leg[1]);
@@ -2346,7 +2749,11 @@ fn draw_routing_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Came
     if live_legs.is_empty() {
         return;
     }
-    let live_color = if live_clear { net_color } else { Color32::from_rgb(230, 70, 70) };
+    let live_color = if live_clear {
+        net_color
+    } else {
+        Color32::from_rgb(230, 70, 70)
+    };
     let mut last = camera.board_to_screen(rect, *fixed_path.last().unwrap());
     for &point in live_legs {
         let to = camera.board_to_screen(rect, point);
@@ -2362,13 +2769,22 @@ fn draw_routing_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Came
 /// original legs it would replace are hidden from the normal item
 /// render for the duration (see [`crate::routing::TraceDrag::removed_ids`]),
 /// so this is the only thing drawn for that wire until the drag ends.
-fn draw_trace_drag_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, drag: &crate::routing::TraceDrag) {
+fn draw_trace_drag_preview(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    drag: &crate::routing::TraceDrag,
+) {
     let (path, clear) = drag.live();
     if path.len() < 2 {
         return;
     }
     let net_color = alladin_render::net_color(Some(drag.net())).gamma_multiply(0.85);
-    let color = if clear { net_color } else { Color32::from_rgb(230, 70, 70) };
+    let color = if clear {
+        net_color
+    } else {
+        Color32::from_rgb(230, 70, 70)
+    };
     for leg in path.windows(2) {
         let from = camera.board_to_screen(rect, leg[0]);
         let to = camera.board_to_screen(rect, leg[1]);
@@ -2383,12 +2799,21 @@ fn draw_trace_drag_preview(painter: &egui::Painter, rect: egui::Rect, camera: &C
 /// first vertex is drawn as a small ring once at least a triangle's
 /// worth of points exist, matching [`EditorState::handle_draw_zone_click`]'s
 /// "click back here to close" gesture.
-fn draw_zone_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, points: &[Point], hover_board: Option<Point>) {
+fn draw_zone_preview(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    points: &[Point],
+    hover_board: Option<Point>,
+) {
     if points.is_empty() {
         return;
     }
     let color = Color32::from_rgb(255, 200, 60);
-    let screen_points: Vec<egui::Pos2> = points.iter().map(|&p| camera.board_to_screen(rect, p)).collect();
+    let screen_points: Vec<egui::Pos2> = points
+        .iter()
+        .map(|&p| camera.board_to_screen(rect, p))
+        .collect();
     for pair in screen_points.windows(2) {
         painter.line_segment([pair[0], pair[1]], Stroke::new(2.0, color));
     }
@@ -2397,7 +2822,10 @@ fn draw_zone_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Camera,
     }
     if let (Some(&last), Some(hover)) = (screen_points.last(), hover_board) {
         let hover_screen = camera.board_to_screen(rect, hover);
-        painter.line_segment([last, hover_screen], Stroke::new(1.5, color.gamma_multiply(0.6)));
+        painter.line_segment(
+            [last, hover_screen],
+            Stroke::new(1.5, color.gamma_multiply(0.6)),
+        );
     }
     if points.len() >= 3 {
         painter.circle_stroke(screen_points[0], 6.0, Stroke::new(2.0, color));
@@ -2411,7 +2839,14 @@ fn draw_zone_preview(painter: &egui::Painter, rect: egui::Rect, camera: &Camera,
 /// horizontal line when it snapped `y`, either or both at once. Purely
 /// visual feedback for "this axis is now centered" -- the actual
 /// snapping already happened before this is called.
-fn draw_matrix_snap_guides(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, bounds: alladin_geom::Aabb, snap_x: bool, snap_y: bool) {
+fn draw_matrix_snap_guides(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    bounds: alladin_geom::Aabb,
+    snap_x: bool,
+    snap_y: bool,
+) {
     let color = Color32::from_rgba_unmultiplied(255, 220, 0, 180);
     let stroke = Stroke::new(1.5, color);
     if snap_x {
@@ -2460,10 +2895,20 @@ fn rotate_and_place(offset: (f64, f64), center: Point, sin: f64, cos: f64) -> Po
     let (x, y) = offset;
     let wx = x * cos - y * sin;
     let wy = x * sin + y * cos;
-    Point::new(center.x + wx.round() as alladin_geom::Unit, center.y + wy.round() as alladin_geom::Unit)
+    Point::new(
+        center.x + wx.round() as alladin_geom::Unit,
+        center.y + wy.round() as alladin_geom::Unit,
+    )
 }
 
-fn rotated_rect_points(center: Point, width: alladin_geom::Unit, height: alladin_geom::Unit, rotation_deg: f64, camera: &Camera, rect: egui::Rect) -> Vec<egui::Pos2> {
+fn rotated_rect_points(
+    center: Point,
+    width: alladin_geom::Unit,
+    height: alladin_geom::Unit,
+    rotation_deg: f64,
+    camera: &Camera,
+    rect: egui::Rect,
+) -> Vec<egui::Pos2> {
     let (hw, hh) = (width as f64 / 2.0, height as f64 / 2.0);
     let rad = rotation_deg.to_radians();
     let (sin, cos) = rad.sin_cos();
@@ -2473,7 +2918,14 @@ fn rotated_rect_points(center: Point, width: alladin_geom::Unit, height: alladin
         .collect()
 }
 
-fn rotated_ellipse_points(center: Point, width: alladin_geom::Unit, height: alladin_geom::Unit, rotation_deg: f64, camera: &Camera, rect: egui::Rect) -> Vec<egui::Pos2> {
+fn rotated_ellipse_points(
+    center: Point,
+    width: alladin_geom::Unit,
+    height: alladin_geom::Unit,
+    rotation_deg: f64,
+    camera: &Camera,
+    rect: egui::Rect,
+) -> Vec<egui::Pos2> {
     const SEGMENTS: usize = 24;
     let (a, b) = (width as f64 / 2.0, height as f64 / 2.0);
     let rad = rotation_deg.to_radians();
@@ -2481,7 +2933,10 @@ fn rotated_ellipse_points(center: Point, width: alladin_geom::Unit, height: alla
     (0..SEGMENTS)
         .map(|i| {
             let t = (i as f64 / SEGMENTS as f64) * std::f64::consts::TAU;
-            camera.board_to_screen(rect, rotate_and_place((a * t.cos(), b * t.sin()), center, sin, cos))
+            camera.board_to_screen(
+                rect,
+                rotate_and_place((a * t.cos(), b * t.sin()), center, sin, cos),
+            )
         })
         .collect()
 }
@@ -2553,7 +3008,12 @@ fn polygon_area_abs(poly: &Polygon) -> f64 {
 /// separate hole polygons) and painted back over in the canvas
 /// background colour, so a mounting-hole-sized cutout still reads as a
 /// hole rather than vanishing into the green fill.
-fn draw_board_substrate(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, outline: &[Polygon]) {
+fn draw_board_substrate(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    outline: &[Polygon],
+) {
     let Some(board_index) = outline
         .iter()
         .enumerate()
@@ -2567,7 +3027,11 @@ fn draw_board_substrate(painter: &egui::Painter, rect: egui::Rect, camera: &Came
         if poly.points.len() < 3 {
             continue;
         }
-        let fill = if i == board_index { SOLDERMASK_GREEN } else { CANVAS_BACKGROUND };
+        let fill = if i == board_index {
+            SOLDERMASK_GREEN
+        } else {
+            CANVAS_BACKGROUND
+        };
         fill_polygon_mesh(painter, rect, camera, poly, fill);
     }
 }
@@ -2584,7 +3048,11 @@ fn fill_polygon_mesh(
     if tris.is_empty() {
         // Degenerate / untriangulable: last-resort convex fill (may be wrong
         // for concave shapes, but better than drawing nothing).
-        let points: Vec<egui::Pos2> = poly.points.iter().map(|&p| camera.board_to_screen(rect, p)).collect();
+        let points: Vec<egui::Pos2> = poly
+            .points
+            .iter()
+            .map(|&p| camera.board_to_screen(rect, p))
+            .collect();
         painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
         return;
     }
@@ -2632,7 +3100,11 @@ fn draw_placement_grid(painter: &egui::Painter, rect: egui::Rect, camera: &Camer
     while y <= max_y {
         let mut x = start_x;
         while x <= max_x {
-            painter.circle_filled(camera.board_to_screen(rect, Point::new(x, y)), 1.0, dot_color);
+            painter.circle_filled(
+                camera.board_to_screen(rect, Point::new(x, y)),
+                1.0,
+                dot_color,
+            );
             x += spacing;
         }
         y += spacing;
@@ -2642,22 +3114,58 @@ fn draw_placement_grid(painter: &egui::Painter, rect: egui::Rect, camera: &Camer
 /// Draws one pad with its *true* shape rather than always a plain
 /// circle -- see `footprint.rs`'s doc comment for why collision
 /// geometry and rendered shape are allowed to differ like this.
-fn draw_pad_shape(painter: &egui::Painter, rect: egui::Rect, camera: &Camera, geometry: &PadGeometry, paint: &PadPaint) {
-    let (stroke_color, stroke_width) = if paint.highlight { (Color32::from_rgb(255, 210, 0), 2.5) } else { (Color32::from_rgb(20, 20, 20), 1.0) };
+fn draw_pad_shape(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    camera: &Camera,
+    geometry: &PadGeometry,
+    paint: &PadPaint,
+) {
+    let (stroke_color, stroke_width) = if paint.highlight {
+        (Color32::from_rgb(255, 210, 0), 2.5)
+    } else {
+        (Color32::from_rgb(20, 20, 20), 1.0)
+    };
     match geometry.shape {
         PadShapeKind::Circle => {
             let center_px = camera.board_to_screen(rect, geometry.center);
             let radius_px = (geometry.radius as f32 / MM as f32 * camera.pixels_per_mm).max(1.0);
             painter.circle_filled(center_px, radius_px, paint.fill);
-            painter.circle_stroke(center_px, radius_px, Stroke::new(stroke_width, stroke_color));
+            painter.circle_stroke(
+                center_px,
+                radius_px,
+                Stroke::new(stroke_width, stroke_color),
+            );
         }
         PadShapeKind::Rect { width, height } => {
-            let points = rotated_rect_points(geometry.center, width, height, geometry.rotation_deg, camera, rect);
-            painter.add(egui::Shape::convex_polygon(points, paint.fill, Stroke::new(stroke_width, stroke_color)));
+            let points = rotated_rect_points(
+                geometry.center,
+                width,
+                height,
+                geometry.rotation_deg,
+                camera,
+                rect,
+            );
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                paint.fill,
+                Stroke::new(stroke_width, stroke_color),
+            ));
         }
         PadShapeKind::Oval { width, height } => {
-            let points = rotated_ellipse_points(geometry.center, width, height, geometry.rotation_deg, camera, rect);
-            painter.add(egui::Shape::convex_polygon(points, paint.fill, Stroke::new(stroke_width, stroke_color)));
+            let points = rotated_ellipse_points(
+                geometry.center,
+                width,
+                height,
+                geometry.rotation_deg,
+                camera,
+                rect,
+            );
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                paint.fill,
+                Stroke::new(stroke_width, stroke_color),
+            ));
         }
     }
 }
@@ -2691,15 +3199,32 @@ fn draw_footprint_details(
         }
         let template = templates.iter().find(|t| t.name == fp.template_name);
         for (index, &pad_id) in fp.pad_item_ids.iter().enumerate() {
-            let Some(Item::Pad { shape, net, layer, .. }) = doc.node.get(pad_id) else { continue };
-            if *layer == LayerId::BCu && !layers.back_layer {
+            let Some(Item::Pad {
+                shape,
+                net,
+                layer,
+                hole_diameter,
+                ..
+            }) = doc.node.get(pad_id)
+            else {
+                continue;
+            };
+            let is_pth = hole_diameter.is_some();
+            if *layer == LayerId::BCu && !layers.back_layer && !is_pth {
                 continue;
             }
-            let fill = alladin_render::net_highlight_dim(alladin_render::layer_tint(*layer, alladin_render::net_color(*net)), *net, highlight_net);
+            let fill = alladin_render::net_highlight_dim(
+                alladin_render::layer_tint(*layer, alladin_render::net_color(*net)),
+                *net,
+                highlight_net,
+            );
             let pad_template = template.and_then(|t| t.pads.get(index));
-            let kind = pad_template.map(|p| p.shape).unwrap_or(PadShapeKind::Circle);
+            let kind = pad_template
+                .map(|p| p.shape)
+                .unwrap_or(PadShapeKind::Circle);
             let number = pad_template.map(|p| p.number.as_str()).unwrap_or("");
-            let total_rotation = fp.rotation_deg + pad_template.map(|p| p.rotation_deg).unwrap_or(0.0);
+            let total_rotation =
+                fp.rotation_deg + pad_template.map(|p| p.rotation_deg).unwrap_or(0.0);
             let is_pin_one = number == "1";
             // `bounding_radius()` only actually gets drawn for
             // `PadShapeKind::Circle` (see `draw_pad_shape`'s `match`) --
@@ -2707,11 +3232,40 @@ fn draw_footprint_details(
             // radius, so this is not an approximation for the case that
             // matters here. `Rect`/`Oval` pads instead use `kind`'s own
             // `width`/`height` below, never this field.
-            let geometry = PadGeometry { center: shape.center(), radius: shape.bounding_radius(), shape: kind, rotation_deg: total_rotation };
-            draw_pad_shape(painter, rect, camera, &geometry, &PadPaint { fill, highlight: is_pin_one });
+            let geometry = PadGeometry {
+                center: shape.center(),
+                radius: shape.bounding_radius(),
+                shape: kind,
+                rotation_deg: total_rotation,
+            };
+            draw_pad_shape(
+                painter,
+                rect,
+                camera,
+                &geometry,
+                &PadPaint {
+                    fill,
+                    highlight: is_pin_one,
+                },
+            );
+            if let Some(drill) = hole_diameter {
+                let center_px = camera.board_to_screen(rect, shape.center());
+                let radius_px = (*drill as f32 / 2.0 / MM as f32 * camera.pixels_per_mm).max(1.0);
+                painter.circle_stroke(
+                    center_px,
+                    radius_px,
+                    Stroke::new(1.2, Color32::from_gray(40)),
+                );
+            }
             if !number.is_empty() {
                 let center_px = camera.board_to_screen(rect, shape.center());
-                painter.text(center_px, egui::Align2::CENTER_CENTER, number, egui::FontId::proportional(10.0), Color32::BLACK);
+                painter.text(
+                    center_px,
+                    egui::Align2::CENTER_CENTER,
+                    number,
+                    egui::FontId::proportional(10.0),
+                    Color32::BLACK,
+                );
             }
         }
 
@@ -2726,13 +3280,21 @@ fn draw_footprint_details(
             let label = crate::board_doc::SilkText {
                 id: crate::board_doc::SilkTextId(usize::MAX),
                 text: fp.reference.clone(),
-                position: Point::new(0, local_y).rotated(fp.rotation_deg).add(fp.position),
+                position: Point::new(0, local_y)
+                    .rotated(fp.rotation_deg)
+                    .add(fp.position),
                 rotation_deg: fp.rotation_deg,
                 layer: LayerId::FCu,
                 height: (1.27 * MM as f64) as Unit,
                 line_width: JlcpcbDfm::MIN_SILK_LINE_WIDTH,
             };
-            draw_silk_text_strokes(painter, rect, camera, &label, Color32::from_rgb(225, 225, 225));
+            draw_silk_text_strokes(
+                painter,
+                rect,
+                camera,
+                &label,
+                Color32::from_rgb(225, 225, 225),
+            );
         }
 
         // A faint dashed-looking (deliberately thin, low-alpha)
@@ -2742,7 +3304,13 @@ fn draw_footprint_details(
         // part's pins poke outside its own real body, and whether two
         // neighbouring bodies are crowding each other, without that
         // requiring the placement/DRC rejection to already have fired.
-        alladin_render::draw_polygon_outline(painter, rect, camera, &fp.courtyard, Stroke::new(1.0, Color32::from_rgba_unmultiplied(180, 180, 190, 130)));
+        alladin_render::draw_polygon_outline(
+            painter,
+            rect,
+            camera,
+            &fp.courtyard,
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(180, 180, 190, 130)),
+        );
     }
 }
 
@@ -2758,7 +3326,8 @@ impl eframe::App for PcbApp {
         // window focus, so an AI driving the GUI headlessly/in the
         // background is never at the mercy of "is anyone moving the
         // mouse right now".
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
 
         #[cfg(not(target_arch = "wasm32"))]
         while let Ok(query) = self.mcp_rx.try_recv() {
@@ -2778,10 +3347,19 @@ impl eframe::App for PcbApp {
                         match String::from_utf8(bytes) {
                             Ok(json) => match load_board_json(&json, &templates, &self.parts_db) {
                                 Ok((doc, merge)) => {
-                                    let (templates, template_origin, template_hover, template_category) =
-                                        load_templates(&self.parts_db);
-                                    let mut opened =
-                                        EditorState::new(doc, templates, template_origin, template_hover, template_category);
+                                    let (
+                                        templates,
+                                        template_origin,
+                                        template_hover,
+                                        template_category,
+                                    ) = load_templates(&self.parts_db);
+                                    let mut opened = EditorState::new(
+                                        doc,
+                                        templates,
+                                        template_origin,
+                                        template_hover,
+                                        template_category,
+                                    );
                                     opened.set_file_path(PathBuf::from(name));
                                     if let Some((n, skip)) = merge {
                                         if n > 0 || skip > 0 {
@@ -2793,7 +3371,8 @@ impl eframe::App for PcbApp {
                                 }
                                 Err(e) => {
                                     if let Screen::Editor(state) = &mut self.screen {
-                                        state.io_message = Some(format!("Couldn't open board: {e}"));
+                                        state.io_message =
+                                            Some(format!("Couldn't open board: {e}"));
                                     }
                                 }
                             },
@@ -2819,34 +3398,43 @@ impl eframe::App for PcbApp {
             }
             if let Some(rx) = self.wasm_pending.import_parts.take() {
                 match rx.try_recv() {
-                    Ok(crate::web_io::PickedFile::Ok { bytes, .. }) => match String::from_utf8(bytes) {
-                        Ok(json) => match crate::parts_transfer::import_library_json(&self.parts_db, &json) {
-                            Ok((n, skip)) => {
-                                if let Screen::Editor(state) = &mut self.screen {
-                                    let (templates, origin, hover, category) = load_templates(&self.parts_db);
-                                    state.templates = templates;
-                                    state.template_origin = origin;
-                                    state.template_hover = hover;
-                                    state.template_category = category;
-                                    state.lcsc_message =
+                    Ok(crate::web_io::PickedFile::Ok { bytes, .. }) => {
+                        match String::from_utf8(bytes) {
+                            Ok(json) => match crate::parts_transfer::import_library_json(
+                                &self.parts_db,
+                                &json,
+                            ) {
+                                Ok((n, skip)) => {
+                                    if let Screen::Editor(state) = &mut self.screen {
+                                        let (templates, origin, hover, category) =
+                                            load_templates(&self.parts_db);
+                                        state.templates = templates;
+                                        state.template_origin = origin;
+                                        state.template_hover = hover;
+                                        state.template_category = category;
+                                        state.lcsc_message =
                                         Some((true, format!("Imported {n} part(s), skipped {skip} duplicate(s).")));
+                                    }
                                 }
-                            }
+                                Err(e) => {
+                                    if let Screen::Editor(state) = &mut self.screen {
+                                        state.lcsc_message =
+                                            Some((false, format!("Couldn't import parts: {e}")));
+                                    }
+                                }
+                            },
                             Err(e) => {
                                 if let Screen::Editor(state) = &mut self.screen {
-                                    state.lcsc_message = Some((false, format!("Couldn't import parts: {e}")));
+                                    state.lcsc_message =
+                                        Some((false, format!("Couldn't import parts: {e}")));
                                 }
                             }
-                        },
-                        Err(e) => {
-                            if let Screen::Editor(state) = &mut self.screen {
-                                state.lcsc_message = Some((false, format!("Couldn't import parts: {e}")));
-                            }
                         }
-                    },
+                    }
                     Ok(crate::web_io::PickedFile::Err(e)) => {
                         if let Screen::Editor(state) = &mut self.screen {
-                            state.lcsc_message = Some((false, format!("Couldn't import parts: {e}")));
+                            state.lcsc_message =
+                                Some((false, format!("Couldn't import parts: {e}")));
                         }
                     }
                     Ok(crate::web_io::PickedFile::Cancelled) => {}
@@ -2865,7 +3453,8 @@ impl eframe::App for PcbApp {
                     Ok(crate::web_io::PickedFile::Err(e)) => {
                         self.new_board_dxf = None;
                         self.new_board_dxf_label = None;
-                        self.new_board_dxf_message = Some((false, format!("Couldn't import DXF: {e}")));
+                        self.new_board_dxf_message =
+                            Some((false, format!("Couldn't import DXF: {e}")));
                     }
                     Ok(crate::web_io::PickedFile::Cancelled) => {}
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -3001,19 +3590,29 @@ impl eframe::App for PcbApp {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 if import_dxf {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("DXF outline", &["dxf"]).pick_file() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("DXF outline", &["dxf"])
+                        .pick_file()
+                    {
                         match std::fs::read(&path) {
                             Ok(bytes) => {
-                                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("outline.dxf").to_string();
+                                let name = path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("outline.dxf")
+                                    .to_string();
                                 pending_dxf_file = Some((name, bytes));
                             }
-                            Err(e) => pending_dxf_read_err = Some(format!("Couldn't read DXF: {e}")),
+                            Err(e) => {
+                                pending_dxf_read_err = Some(format!("Couldn't read DXF: {e}"))
+                            }
                         }
                     }
                 }
                 #[cfg(target_arch = "wasm32")]
                 if import_dxf {
-                    self.wasm_pending.import_dxf = Some(crate::web_io::pick_file("DXF outline", &["dxf"]));
+                    self.wasm_pending.import_dxf =
+                        Some(crate::web_io::pick_file("DXF outline", &["dxf"]));
                 }
 
                 if create_requested {
@@ -3024,7 +3623,8 @@ impl eframe::App for PcbApp {
                     } else {
                         params.create()
                     };
-                    let (templates, template_origin, template_hover, template_category) = load_templates(&self.parts_db);
+                    let (templates, template_origin, template_hover, template_category) =
+                        load_templates(&self.parts_db);
                     pending_screen = Some(Screen::Editor(EditorState::new(
                         doc,
                         templates,
@@ -3042,12 +3642,22 @@ impl eframe::App for PcbApp {
                                 remember_last_board(&path);
                                 let (templates, template_origin, template_hover, template_category) =
                                     load_templates(&self.parts_db);
-                                let mut opened = EditorState::new(doc, templates, template_origin, template_hover, template_category);
+                                let mut opened = EditorState::new(
+                                    doc,
+                                    templates,
+                                    template_origin,
+                                    template_hover,
+                                    template_category,
+                                );
                                 opened.set_file_path(path);
                                 if let Some((n, skip)) = merge {
                                     if n > 0 || skip > 0 {
-                                        opened.lcsc_message =
-                                            Some((true, format!("Board parts: imported {n}, already had {skip}.")));
+                                        opened.lcsc_message = Some((
+                                            true,
+                                            format!(
+                                                "Board parts: imported {n}, already had {skip}."
+                                            ),
+                                        ));
                                     }
                                 }
                                 pending_screen = Some(Screen::Editor(opened));
@@ -3058,7 +3668,8 @@ impl eframe::App for PcbApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 if open_from_new {
-                    self.wasm_pending.open_board = Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
+                    self.wasm_pending.open_board =
+                        Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
                 }
             }
             Screen::Editor(state) => {
@@ -3094,7 +3705,8 @@ impl eframe::App for PcbApp {
                 // time the editor is open, at a deliberately low,
                 // barely-perceptible-lag cadence rather than every
                 // single frame.
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(300));
                 if !state.zone_refill_active() {
                     state.maybe_reload_from_disk(&self.parts_db, ui.input(|i| i.time));
                 }
@@ -3116,8 +3728,15 @@ impl eframe::App for PcbApp {
                                 part.category.as_deref(),
                             ) {
                                 Ok(record) => {
-                                    state.lcsc_message = Some((true, format!("{} ({}) added to your parts database.", record.template.name, part.lcsc_code)));
-                                    let tooltip = format!("{}: {}", part.lcsc_code, part.description);
+                                    state.lcsc_message = Some((
+                                        true,
+                                        format!(
+                                            "{} ({}) added to your parts database.",
+                                            record.template.name, part.lcsc_code
+                                        ),
+                                    ));
+                                    let tooltip =
+                                        format!("{}: {}", part.lcsc_code, part.description);
                                     state.templates.push(record.template);
                                     state.template_origin.push(Some(record.id));
                                     state.template_hover.push(Some(tooltip));
@@ -3128,16 +3747,32 @@ impl eframe::App for PcbApp {
                                 Err(crate::parts_db::PartsDbError::DuplicateLcscCode(code)) => {
                                     // Already downloaded before -- select it for placing instead of
                                     // just reporting a dead-end error.
-                                    let existing = state.template_origin.iter().position(|origin| {
-                                        origin.and_then(|id| self.parts_db.find_by_lcsc_code(&code).ok().flatten().map(|r| r.id == id)).unwrap_or(false)
-                                    });
+                                    let existing =
+                                        state.template_origin.iter().position(|origin| {
+                                            origin
+                                                .and_then(|id| {
+                                                    self.parts_db
+                                                        .find_by_lcsc_code(&code)
+                                                        .ok()
+                                                        .flatten()
+                                                        .map(|r| r.id == id)
+                                                })
+                                                .unwrap_or(false)
+                                        });
                                     if let Some(index) = existing {
                                         state.tool = Tool::Place(index);
                                         state.clear_selection();
                                     }
                                     state.lcsc_message = Some((true, format!("{code} is already in your parts database \u{2014} selected for placing.")));
                                 }
-                                Err(e) => state.lcsc_message = Some((false, format!("Downloaded, but couldn't save to the database: {e}"))),
+                                Err(e) => {
+                                    state.lcsc_message = Some((
+                                        false,
+                                        format!(
+                                            "Downloaded, but couldn't save to the database: {e}"
+                                        ),
+                                    ))
+                                }
                             }
                         }
                         Ok(Err(e)) => {
@@ -3147,7 +3782,8 @@ impl eframe::App for PcbApp {
                         Err(std::sync::mpsc::TryRecvError::Empty) => {}
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             state.lcsc_fetch = None;
-                            state.lcsc_message = Some((false, "the download thread ended unexpectedly".to_string()));
+                            state.lcsc_message =
+                                Some((false, "the download thread ended unexpectedly".to_string()));
                         }
                     }
                 }
@@ -3189,7 +3825,10 @@ impl eframe::App for PcbApp {
                     } else if undo_pressed {
                         if state.routing.is_some() {
                             state.routing = None;
-                            state.route_message = Some("Route cancelled \u{2014} Ctrl+Z undoes committed board changes.".to_string());
+                            state.route_message = Some(
+                                "Route cancelled \u{2014} Ctrl+Z undoes committed board changes."
+                                    .to_string(),
+                            );
                         } else if !state.undo() {
                             state.io_message = Some("Nothing to undo.".to_string());
                         } else {
@@ -3205,10 +3844,19 @@ impl eframe::App for PcbApp {
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::R)) {
                     match state.tool {
-                        Tool::Place(_) => state.place_rotation_deg = (state.place_rotation_deg + 90.0) % 360.0,
-                        Tool::PlaceSilkText => state.silk_text_place_rotation_deg = (state.silk_text_place_rotation_deg + 90.0) % 360.0,
+                        Tool::Place(_) => {
+                            state.place_rotation_deg = (state.place_rotation_deg + 90.0) % 360.0
+                        }
+                        Tool::PlaceSilkText => {
+                            state.silk_text_place_rotation_deg =
+                                (state.silk_text_place_rotation_deg + 90.0) % 360.0
+                        }
                         Tool::Select => state.rotate_selected(),
-                        Tool::Connect | Tool::Route | Tool::PlaceVia | Tool::DrawZone | Tool::PlaceSilkDot => {}
+                        Tool::Connect
+                        | Tool::Route
+                        | Tool::PlaceVia
+                        | Tool::DrawZone
+                        | Tool::PlaceSilkDot => {}
                     }
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -3251,7 +3899,9 @@ impl eframe::App for PcbApp {
                 // call, so this never shadows the "delete selected
                 // footprint/trace" gesture below); otherwise it falls
                 // through to that gesture, same as Delete.
-                if ui.input(|i| i.key_pressed(egui::Key::Backspace)) && matches!((state.tool, &state.routing), (Tool::Route, Some(_))) {
+                if ui.input(|i| i.key_pressed(egui::Key::Backspace))
+                    && matches!((state.tool, &state.routing), (Tool::Route, Some(_)))
+                {
                     if let Some(routing) = &mut state.routing {
                         state.route_message = if routing.undo_last_corner() {
                             None
@@ -3259,7 +3909,9 @@ impl eframe::App for PcbApp {
                             Some("no fixed corner to undo yet".to_string())
                         };
                     }
-                } else if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+                } else if ui.input(|i| {
+                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                }) {
                     if let Some(id) = state.selected.take() {
                         state.mutate_doc(|doc| {
                             doc.remove_footprint(id);
@@ -3669,6 +4321,10 @@ impl eframe::App for PcbApp {
                                 // caught later by some future DRC pass.
                                 ui.add(egui::DragValue::new(&mut form.pad_radius_mm).range(0.125..=5.0).speed(0.01));
                                 ui.end_row();
+                                ui.label("Hole Ø (mm)");
+                                ui.add(egui::DragValue::new(&mut form.hole_diameter_mm).range(0.0..=4.0).speed(0.05))
+                                    .on_hover_text("0 = SMD (no drill). >0 = plated through-hole on both copper layers.");
+                                ui.end_row();
                                 ui.label("Description");
                                 ui.text_edit_singleline(&mut form.description);
                                 ui.end_row();
@@ -3774,17 +4430,52 @@ impl eframe::App for PcbApp {
                     }
 
                     if let Some(id) = state.selected {
-                        if let Some(fp) = state.doc.footprints.iter().find(|f| f.id == id) {
+                        let selected_fp = state.doc.footprints.iter().find(|f| f.id == id).map(|fp| {
+                            let pad_conns: Vec<ZoneConnection> = fp
+                                .pad_item_ids
+                                .iter()
+                                .filter_map(|&pid| match state.doc.node.get(pid) {
+                                    Some(Item::Pad { zone_connection, .. }) => Some(*zone_connection),
+                                    _ => None,
+                                })
+                                .collect();
+                            (fp.reference.clone(), fp.position, fp.rotation_deg, fp.pin1_marker.is_some(), pad_conns)
+                        });
+                        if let Some((reference, position, rotation_deg, marker_was_on, pad_conns)) = selected_fp {
                             ui.separator();
-                            ui.label(format!("Selected: {}", fp.reference));
+                            ui.label(format!("Selected: {reference}"));
                             ui.label(format!(
                                 "Position: ({:.2}, {:.2}) mm",
-                                fp.position.x as f64 / MM as f64,
-                                fp.position.y as f64 / MM as f64
+                                position.x as f64 / MM as f64,
+                                position.y as f64 / MM as f64
                             ));
-                            ui.label(format!("Rotation: {:.0}\u{b0}", fp.rotation_deg));
+                            ui.label(format!("Rotation: {:.0}\u{b0}", rotation_deg));
                             ui.label("Drag it on the board to move. R to rotate, Del to remove.");
-                            let mut marker_on = fp.pin1_marker.is_some();
+                            if !pad_conns.is_empty() {
+                                let mixed = pad_conns.windows(2).any(|w| w[0] != w[1]);
+                                let current = pad_conns[0];
+                                ui.horizontal(|ui| {
+                                    ui.label("Pour:");
+                                    if ui
+                                        .selectable_label(!mixed && current == ZoneConnection::Thermal, "Thermal")
+                                        .on_hover_text("Annular gap + spokes into a same-net plane (easier to solder). PTH applies this on F.Cu and B.Cu.")
+                                        .clicked()
+                                    {
+                                        let _ = state.try_mutate_doc(|doc| doc.set_footprint_zone_connection(id, ZoneConnection::Thermal));
+                                    }
+                                    if ui
+                                        .selectable_label(!mixed && current == ZoneConnection::Solid, "Solid")
+                                        .on_hover_text("Full copper flood into a same-net plane (better for higher current).")
+                                        .clicked()
+                                    {
+                                        let _ = state.try_mutate_doc(|doc| doc.set_footprint_zone_connection(id, ZoneConnection::Solid));
+                                    }
+                                    if mixed {
+                                        ui.label("(mixed)");
+                                    }
+                                });
+                            }
+                            let mut marker_on = marker_was_on;
                             if ui
                                 .checkbox(&mut marker_on, "Pin-1-Punkt (Silk)")
                                 .on_hover_text("Druckt einen kleinen Punkt neben Pad 1 dieses Bauteils auf den Silkscreen \u{2014} wandert bei Verschieben/Drehen automatisch mit.")
@@ -4150,7 +4841,8 @@ impl eframe::App for PcbApp {
                 draw_delete_confirmation_window(ui.ctx(), state, &self.parts_db);
 
                 egui::CentralPanel::default().show(ui, |ui| {
-                    let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+                    let (rect, response) =
+                        ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
                     if !state.fitted {
                         if let Some(bounds) = state.board_bounds() {
@@ -4159,18 +4851,38 @@ impl eframe::App for PcbApp {
                         state.fitted = true;
                     }
 
-                    let hover_board = response.hover_pos().map(|p| state.camera.screen_to_board(rect, p));
+                    let hover_board = response
+                        .hover_pos()
+                        .map(|p| state.camera.screen_to_board(rect, p));
                     state.last_hover_board = hover_board;
 
-                    let hover_pad_tooltip = hover_board.and_then(|p| state.doc.pad_at(p)).and_then(|pad_id| {
-                        let footprint = state.doc.footprints.iter().find(|f| f.pad_item_ids.contains(&pad_id))?;
-                        let index = footprint.pad_item_ids.iter().position(|&id| id == pad_id)?;
-                        let pad_template = state.templates.iter().find(|t| t.name == footprint.template_name)?.pads.get(index)?;
-                        Some(match &pad_template.pin_name {
-                            Some(name) => format!("{}.{}  ({name})", footprint.reference, pad_template.number),
-                            None => format!("{}.{}", footprint.reference, pad_template.number),
-                        })
-                    });
+                    let hover_pad_tooltip =
+                        hover_board
+                            .and_then(|p| state.doc.pad_at(p))
+                            .and_then(|pad_id| {
+                                let footprint = state
+                                    .doc
+                                    .footprints
+                                    .iter()
+                                    .find(|f| f.pad_item_ids.contains(&pad_id))?;
+                                let index =
+                                    footprint.pad_item_ids.iter().position(|&id| id == pad_id)?;
+                                let pad_template = state
+                                    .templates
+                                    .iter()
+                                    .find(|t| t.name == footprint.template_name)?
+                                    .pads
+                                    .get(index)?;
+                                Some(match &pad_template.pin_name {
+                                    Some(name) => format!(
+                                        "{}.{}  ({name})",
+                                        footprint.reference, pad_template.number
+                                    ),
+                                    None => {
+                                        format!("{}.{}", footprint.reference, pad_template.number)
+                                    }
+                                })
+                            });
                     let response = match hover_pad_tooltip {
                         Some(text) => response.on_hover_text(text),
                         None => response,
@@ -4202,7 +4914,8 @@ impl eframe::App for PcbApp {
                     if board_locked {
                         // Still allow pan while pours recompute.
                         if response.dragged() {
-                            state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
+                            state.camera.center_mm -=
+                                state.camera.screen_delta_to_board_mm(response.drag_delta());
                         }
                     } else if state.pending_pin_via.is_some() {
                         // The footprint+via unit follows the cursor
@@ -4218,140 +4931,190 @@ impl eframe::App for PcbApp {
                         }
                     } else {
                         match state.tool {
-                        Tool::Place(index) => {
-                            if response.dragged() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if response.clicked() {
-                                if let Some(board_pos) = hover_board {
-                                    let board_pos = snap_to_grid_point(board_pos, state.grid_spacing, state.grid_snap_enabled);
-                                    let template = state.templates[index].clone();
-                                    let rotation = state.place_rotation_deg;
-                                    if state.matrix_rows.max(1) * state.matrix_cols.max(1) > 1 {
-                                        let (center, _, _) = state.snap_matrix_center(board_pos);
-                                        let positions = state.matrix_ghost_positions(center);
-                                        let _ = state.try_mutate_doc(|doc| doc.place_matrix(&template, &positions, rotation).map(|_| ()));
-                                    } else {
-                                        let _ = state.try_mutate_doc(|doc| doc.try_place_footprint(&template, board_pos, rotation).map(|_| ()));
-                                    }
+                            Tool::Place(index) => {
+                                if response.dragged() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
                                 }
-                            }
-                        }
-                        Tool::PlaceSilkText => {
-                            if response.dragged() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if response.clicked() {
-                                if let Some(board_pos) = hover_board {
-                                    let board_pos = snap_to_grid_point(board_pos, state.grid_spacing, state.grid_snap_enabled);
-                                    let text = state.silk_text_input.clone();
-                                    let (rot, layer, height) = (state.silk_text_place_rotation_deg, state.silk_layer, state.silk_text_height);
-                                    match state.try_mutate_doc_ok(|doc| doc.try_place_silk_text(&text, board_pos, rot, layer, height)) {
-                                        Ok(_) => {
-                                            state.silk_text_message = None;
-                                            // 0deg is silk text's standard: a one-off
-                                            // rotation applies to the text it was made
-                                            // for, never silently to the next one too.
-                                            state.silk_text_place_rotation_deg = 0.0;
+                                if response.clicked() {
+                                    if let Some(board_pos) = hover_board {
+                                        let board_pos = snap_to_grid_point(
+                                            board_pos,
+                                            state.grid_spacing,
+                                            state.grid_snap_enabled,
+                                        );
+                                        let template = state.templates[index].clone();
+                                        let rotation = state.place_rotation_deg;
+                                        if state.matrix_rows.max(1) * state.matrix_cols.max(1) > 1 {
+                                            let (center, _, _) =
+                                                state.snap_matrix_center(board_pos);
+                                            let positions = state.matrix_ghost_positions(center);
+                                            let _ = state.try_mutate_doc(|doc| {
+                                                doc.place_matrix(&template, &positions, rotation)
+                                                    .map(|_| ())
+                                            });
+                                        } else {
+                                            let _ = state.try_mutate_doc(|doc| {
+                                                doc.try_place_footprint(
+                                                    &template, board_pos, rotation,
+                                                )
+                                                .map(|_| ())
+                                            });
                                         }
-                                        Err(e) => state.silk_text_message = Some(e.to_string()),
                                     }
                                 }
                             }
-                        }
-                        Tool::PlaceSilkDot => {
-                            if response.dragged() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if response.clicked() {
-                                if let Some(board_pos) = hover_board {
-                                    let board_pos = snap_to_grid_point(board_pos, state.grid_spacing, state.grid_snap_enabled);
-                                    let (diameter, layer) = (state.silk_dot_diameter, state.silk_layer);
-                                    match state.try_mutate_doc_ok(|doc| doc.try_place_silk_dot(board_pos, diameter, layer)) {
-                                        Ok(_) => state.silk_dot_message = None,
-                                        Err(e) => state.silk_dot_message = Some(e.to_string()),
-                                    }
-                                }
-                            }
-                        }
-                        Tool::Select => {
-                            if response.drag_started() {
-                                if let Some(board_pos) = hover_board {
-                                    state.begin_drag(board_pos);
-                                }
-                            }
-                            if state.dragging.is_some() || state.silk_text_dragging.is_some() {
+                            Tool::PlaceSilkText => {
                                 if response.dragged() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
+                                }
+                                if response.clicked() {
                                     if let Some(board_pos) = hover_board {
-                                        state.update_drag(board_pos);
+                                        let board_pos = snap_to_grid_point(
+                                            board_pos,
+                                            state.grid_spacing,
+                                            state.grid_snap_enabled,
+                                        );
+                                        let text = state.silk_text_input.clone();
+                                        let (rot, layer, height) = (
+                                            state.silk_text_place_rotation_deg,
+                                            state.silk_layer,
+                                            state.silk_text_height,
+                                        );
+                                        match state.try_mutate_doc_ok(|doc| {
+                                            doc.try_place_silk_text(
+                                                &text, board_pos, rot, layer, height,
+                                            )
+                                        }) {
+                                            Ok(_) => {
+                                                state.silk_text_message = None;
+                                                // 0deg is silk text's standard: a one-off
+                                                // rotation applies to the text it was made
+                                                // for, never silently to the next one too.
+                                                state.silk_text_place_rotation_deg = 0.0;
+                                            }
+                                            Err(e) => state.silk_text_message = Some(e.to_string()),
+                                        }
                                     }
                                 }
-                                if response.drag_stopped() {
-                                    state.finish_drag();
-                                }
-                            } else if state.trace_dragging.is_some() {
+                            }
+                            Tool::PlaceSilkDot => {
                                 if response.dragged() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
+                                }
+                                if response.clicked() {
                                     if let Some(board_pos) = hover_board {
-                                        state.update_trace_drag(board_pos);
+                                        let board_pos = snap_to_grid_point(
+                                            board_pos,
+                                            state.grid_spacing,
+                                            state.grid_snap_enabled,
+                                        );
+                                        let (diameter, layer) =
+                                            (state.silk_dot_diameter, state.silk_layer);
+                                        match state.try_mutate_doc_ok(|doc| {
+                                            doc.try_place_silk_dot(board_pos, diameter, layer)
+                                        }) {
+                                            Ok(_) => state.silk_dot_message = None,
+                                            Err(e) => state.silk_dot_message = Some(e.to_string()),
+                                        }
                                     }
                                 }
-                                if response.drag_stopped() {
-                                    state.finish_trace_drag();
+                            }
+                            Tool::Select => {
+                                if response.drag_started() {
+                                    if let Some(board_pos) = hover_board {
+                                        state.begin_drag(board_pos);
+                                    }
                                 }
-                            } else if response.dragged() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if response.clicked() {
-                                if let Some(board_pos) = hover_board {
-                                    state.handle_select_click(board_pos);
+                                if state.dragging.is_some() || state.silk_text_dragging.is_some() {
+                                    if response.dragged() {
+                                        if let Some(board_pos) = hover_board {
+                                            state.update_drag(board_pos);
+                                        }
+                                    }
+                                    if response.drag_stopped() {
+                                        state.finish_drag();
+                                    }
+                                } else if state.trace_dragging.is_some() {
+                                    if response.dragged() {
+                                        if let Some(board_pos) = hover_board {
+                                            state.update_trace_drag(board_pos);
+                                        }
+                                    }
+                                    if response.drag_stopped() {
+                                        state.finish_trace_drag();
+                                    }
+                                } else if response.dragged() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
                                 }
-                            }
-                        }
-                        Tool::Connect => {
-                            if response.dragged() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if response.clicked() {
-                                let pad_id = hover_board.and_then(|p| state.doc.pad_at(p));
-                                let unassign = ui.input(|i| i.modifiers.shift);
-                                state.handle_connect_click(pad_id, unassign);
-                            }
-                        }
-                        Tool::Route => {
-                            if response.dragged() && state.routing.is_none() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if let (Some(routing), Some(board_pos)) = (&mut state.routing, hover_board) {
-                                routing.update(&state.doc, board_pos);
-                            }
-                            if response.clicked() {
-                                if let Some(board_pos) = hover_board {
-                                    state.handle_route_click(board_pos);
-                                } else {
-                                    state.routing = None;
-                                }
-                            }
-                        }
-                        Tool::PlaceVia => {
-                            if response.dragged() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if response.clicked() {
-                                if let Some(board_pos) = hover_board {
-                                    state.handle_place_via_click(board_pos);
+                                if response.clicked() {
+                                    if let Some(board_pos) = hover_board {
+                                        state.handle_select_click(board_pos);
+                                    }
                                 }
                             }
-                        }
-                        Tool::DrawZone => {
-                            if response.dragged() {
-                                state.camera.center_mm -= state.camera.screen_delta_to_board_mm(response.drag_delta());
-                            }
-                            if response.clicked() {
-                                if let Some(board_pos) = hover_board {
-                                    state.handle_draw_zone_click(board_pos);
+                            Tool::Connect => {
+                                if response.dragged() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
+                                }
+                                if response.clicked() {
+                                    let pad_id = hover_board.and_then(|p| state.doc.pad_at(p));
+                                    let unassign = ui.input(|i| i.modifiers.shift);
+                                    state.handle_connect_click(pad_id, unassign);
                                 }
                             }
-                        }
+                            Tool::Route => {
+                                if response.dragged() && state.routing.is_none() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
+                                }
+                                if let (Some(routing), Some(board_pos)) =
+                                    (&mut state.routing, hover_board)
+                                {
+                                    routing.update(&state.doc, board_pos);
+                                }
+                                if response.clicked() {
+                                    if let Some(board_pos) = hover_board {
+                                        state.handle_route_click(board_pos);
+                                    } else {
+                                        state.routing = None;
+                                    }
+                                }
+                            }
+                            Tool::PlaceVia => {
+                                if response.dragged() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
+                                }
+                                if response.clicked() {
+                                    if let Some(board_pos) = hover_board {
+                                        state.handle_place_via_click(board_pos);
+                                    }
+                                }
+                            }
+                            Tool::DrawZone => {
+                                if response.dragged() {
+                                    state.camera.center_mm -= state
+                                        .camera
+                                        .screen_delta_to_board_mm(response.drag_delta());
+                                }
+                                if response.clicked() {
+                                    if let Some(board_pos) = hover_board {
+                                        state.handle_draw_zone_click(board_pos);
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -4387,10 +5150,30 @@ impl eframe::App for PcbApp {
                     // of generically here, so every pad gets its *real*
                     // shape/number/pin-1 marker rather than a plain circle --
                     // see that function's doc comment.
-                    let board_layers = LayerToggles { pads: false, ..state.layers };
-                    alladin_render::draw_board(&painter, rect, &state.camera, &state.doc.outline, &items, &board_layers, state.highlighted_net);
+                    let board_layers = LayerToggles {
+                        pads: false,
+                        ..state.layers
+                    };
+                    alladin_render::draw_board(
+                        &painter,
+                        rect,
+                        &state.camera,
+                        &state.doc.outline,
+                        &items,
+                        &board_layers,
+                        state.highlighted_net,
+                    );
                     let dragging_id = state.dragging.as_ref().map(|d| d.id);
-                    draw_footprint_details(&painter, rect, &state.camera, &state.doc, &state.templates, &state.layers, dragging_id, state.highlighted_net);
+                    draw_footprint_details(
+                        &painter,
+                        rect,
+                        &state.camera,
+                        &state.doc,
+                        &state.templates,
+                        &state.layers,
+                        dragging_id,
+                        state.highlighted_net,
+                    );
                     // The one currently being dragged (if any) is
                     // skipped here -- it's drawn instead by the
                     // red/green `draw_silk_text_ghost` below, following
@@ -4406,7 +5189,13 @@ impl eframe::App for PcbApp {
                     let dragging_silk_dot_id = state.silk_dot_dragging.as_ref().map(|d| d.id);
                     for dot in &state.doc.silk_dots {
                         if Some(dot.id) != dragging_silk_dot_id {
-                            draw_silk_dot_circle(&painter, rect, &state.camera, &dot.circle(), Color32::from_rgb(220, 220, 220));
+                            draw_silk_dot_circle(
+                                &painter,
+                                rect,
+                                &state.camera,
+                                &dot.circle(),
+                                Color32::from_rgb(220, 220, 220),
+                            );
                         }
                     }
                     // Pin-1 markers: same silk-white ink as free dots --
@@ -4414,7 +5203,13 @@ impl eframe::App for PcbApp {
                     // so the preview doesn't invent a difference either.
                     for fp in &state.doc.footprints {
                         if let Some(circle) = fp.pin1_marker_circle() {
-                            draw_silk_dot_circle(&painter, rect, &state.camera, &circle, Color32::from_rgb(220, 220, 220));
+                            draw_silk_dot_circle(
+                                &painter,
+                                rect,
+                                &state.camera,
+                                &circle,
+                                Color32::from_rgb(220, 220, 220),
+                            );
                         }
                     }
                     if state.show_ratsnest {
@@ -4428,7 +5223,13 @@ impl eframe::App for PcbApp {
                         draw_routing_preview(&painter, rect, &state.camera, &state.doc, routing);
                     }
                     if let Tool::DrawZone = state.tool {
-                        draw_zone_preview(&painter, rect, &state.camera, &state.zone_points, hover_board);
+                        draw_zone_preview(
+                            &painter,
+                            rect,
+                            &state.camera,
+                            &state.zone_points,
+                            hover_board,
+                        );
                     }
                     if let Some(drag) = &state.trace_dragging {
                         draw_trace_drag_preview(&painter, rect, &state.camera, drag);
@@ -4437,21 +5238,41 @@ impl eframe::App for PcbApp {
                     if let Some(id) = state.selected {
                         if state.dragging.is_none() {
                             if let Some(fp) = state.doc.footprints.iter().find(|f| f.id == id) {
-                                let ring_ids: Vec<ItemId> = fp.pad_item_ids.iter().chain(&fp.hole_item_ids).copied().collect();
-                                draw_selection_ring(&painter, rect, &state.camera, &state.doc.node, &ring_ids);
+                                let ring_ids: Vec<ItemId> = fp
+                                    .pad_item_ids
+                                    .iter()
+                                    .chain(&fp.hole_item_ids)
+                                    .copied()
+                                    .collect();
+                                draw_selection_ring(
+                                    &painter,
+                                    rect,
+                                    &state.camera,
+                                    &state.doc.node,
+                                    &ring_ids,
+                                );
                             }
                         }
                     }
                     if let Some(id) = state.selected_item {
                         if state.trace_dragging.is_none() {
-                            draw_item_selection_highlight(&painter, rect, &state.camera, &state.doc, id);
+                            draw_item_selection_highlight(
+                                &painter,
+                                rect,
+                                &state.camera,
+                                &state.doc,
+                                id,
+                            );
                         }
                     }
                     if let Some(id) = state.selected_silk_text {
                         if state.silk_text_dragging.is_none() {
                             if let Some(text) = state.doc.silk_texts.iter().find(|t| t.id == id) {
                                 let points = silk_text_outline_px(rect, &state.camera, text);
-                                painter.add(egui::Shape::closed_line(points, Stroke::new(2.0, Color32::from_rgb(255, 220, 0))));
+                                painter.add(egui::Shape::closed_line(
+                                    points,
+                                    Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
+                                ));
                             }
                         }
                     }
@@ -4459,39 +5280,85 @@ impl eframe::App for PcbApp {
                         if state.silk_dot_dragging.is_none() {
                             if let Some(dot) = state.doc.silk_dots.iter().find(|d| d.id == id) {
                                 let center = state.camera.board_to_screen(rect, dot.position);
-                                let radius_px = (dot.diameter as f32 / 2.0 / MM as f32 * state.camera.pixels_per_mm).max(1.5) + 3.0;
-                                painter.circle_stroke(center, radius_px, Stroke::new(2.0, Color32::from_rgb(255, 220, 0)));
+                                let radius_px = (dot.diameter as f32 / 2.0 / MM as f32
+                                    * state.camera.pixels_per_mm)
+                                    .max(1.5)
+                                    + 3.0;
+                                painter.circle_stroke(
+                                    center,
+                                    radius_px,
+                                    Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
+                                );
                             }
                         }
                     }
 
                     if let Tool::Place(i) = state.tool {
                         if let Some(board_pos) = hover_board {
-                            let board_pos = snap_to_grid_point(board_pos, state.grid_spacing, state.grid_snap_enabled);
+                            let board_pos = snap_to_grid_point(
+                                board_pos,
+                                state.grid_spacing,
+                                state.grid_snap_enabled,
+                            );
                             let template = &state.templates[i];
                             if state.matrix_rows.max(1) * state.matrix_cols.max(1) > 1 {
                                 let (center, snap_x, snap_y) = state.snap_matrix_center(board_pos);
                                 let positions = state.matrix_ghost_positions(center);
-                                let valid = state.doc.check_matrix_placement(template, &positions, state.place_rotation_deg).is_ok();
-                                let ghost_items: Vec<Item> =
-                                    positions.iter().flat_map(|&p| world_items(template, p, state.place_rotation_deg)).collect();
+                                let valid = state
+                                    .doc
+                                    .check_matrix_placement(
+                                        template,
+                                        &positions,
+                                        state.place_rotation_deg,
+                                    )
+                                    .is_ok();
+                                let ghost_items: Vec<Item> = positions
+                                    .iter()
+                                    .flat_map(|&p| {
+                                        world_items(template, p, state.place_rotation_deg)
+                                    })
+                                    .collect();
                                 draw_ghost(&painter, rect, &state.camera, &ghost_items, valid);
                                 if let Some(bounds) = state.board_bounds() {
-                                    draw_matrix_snap_guides(&painter, rect, &state.camera, bounds, snap_x, snap_y);
+                                    draw_matrix_snap_guides(
+                                        &painter,
+                                        rect,
+                                        &state.camera,
+                                        bounds,
+                                        snap_x,
+                                        snap_y,
+                                    );
                                 }
                             } else {
-                                let ghost_items = world_items(template, board_pos, state.place_rotation_deg);
-                                let valid = state.doc.check_placement(template, board_pos, state.place_rotation_deg, None).is_ok();
+                                let ghost_items =
+                                    world_items(template, board_pos, state.place_rotation_deg);
+                                let valid = state
+                                    .doc
+                                    .check_placement(
+                                        template,
+                                        board_pos,
+                                        state.place_rotation_deg,
+                                        None,
+                                    )
+                                    .is_ok();
                                 draw_ghost(&painter, rect, &state.camera, &ghost_items, valid);
                             }
                         }
                     }
                     if let Tool::PlaceSilkText = state.tool {
                         if let Some(board_pos) = hover_board {
-                            let board_pos = snap_to_grid_point(board_pos, state.grid_spacing, state.grid_snap_enabled);
+                            let board_pos = snap_to_grid_point(
+                                board_pos,
+                                state.grid_spacing,
+                                state.grid_snap_enabled,
+                            );
                             let ghost = crate::board_doc::SilkText {
                                 id: crate::board_doc::SilkTextId(0),
-                                text: if state.silk_text_input.trim().is_empty() { "?".to_string() } else { state.silk_text_input.clone() },
+                                text: if state.silk_text_input.trim().is_empty() {
+                                    "?".to_string()
+                                } else {
+                                    state.silk_text_input.clone()
+                                },
                                 position: board_pos,
                                 rotation_deg: state.silk_text_place_rotation_deg,
                                 layer: state.silk_layer,
@@ -4501,26 +5368,50 @@ impl eframe::App for PcbApp {
                             let valid = !state.silk_text_input.trim().is_empty()
                                 && state
                                     .doc
-                                    .check_silk_text_placement(&state.silk_text_input, board_pos, state.silk_text_place_rotation_deg, state.silk_layer, state.silk_text_height)
+                                    .check_silk_text_placement(
+                                        &state.silk_text_input,
+                                        board_pos,
+                                        state.silk_text_place_rotation_deg,
+                                        state.silk_layer,
+                                        state.silk_text_height,
+                                    )
                                     .is_ok();
                             draw_silk_text_ghost(&painter, rect, &state.camera, &ghost, valid);
                         }
                     }
                     if let Tool::PlaceSilkDot = state.tool {
                         if let Some(board_pos) = hover_board {
-                            let board_pos = snap_to_grid_point(board_pos, state.grid_spacing, state.grid_snap_enabled);
-                            let circle = alladin_geom::Circle::new(board_pos, state.silk_dot_diameter / 2);
-                            let valid = state.doc.check_silk_dot_placement(board_pos, state.silk_dot_diameter, state.silk_layer).is_ok();
+                            let board_pos = snap_to_grid_point(
+                                board_pos,
+                                state.grid_spacing,
+                                state.grid_snap_enabled,
+                            );
+                            let circle =
+                                alladin_geom::Circle::new(board_pos, state.silk_dot_diameter / 2);
+                            let valid = state
+                                .doc
+                                .check_silk_dot_placement(
+                                    board_pos,
+                                    state.silk_dot_diameter,
+                                    state.silk_layer,
+                                )
+                                .is_ok();
                             draw_silk_dot_ghost(&painter, rect, &state.camera, &circle, valid);
                         }
                     }
                     if let Some(dragging) = &state.dragging {
                         let template = &state.templates[dragging.template_index];
-                        let ghost_items = world_items(template, dragging.candidate_position, dragging.rotation_deg);
+                        let ghost_items = world_items(
+                            template,
+                            dragging.candidate_position,
+                            dragging.rotation_deg,
+                        );
                         draw_ghost(&painter, rect, &state.camera, &ghost_items, dragging.valid);
                     }
                     if let Some(drag) = &state.silk_text_dragging {
-                        if let Some(original) = state.doc.silk_texts.iter().find(|t| t.id == drag.id) {
+                        if let Some(original) =
+                            state.doc.silk_texts.iter().find(|t| t.id == drag.id)
+                        {
                             let ghost = crate::board_doc::SilkText {
                                 id: drag.id,
                                 text: original.text.clone(),
@@ -4534,20 +5425,29 @@ impl eframe::App for PcbApp {
                         }
                     }
                     if let Some(drag) = &state.silk_dot_dragging {
-                        if let Some(original) = state.doc.silk_dots.iter().find(|d| d.id == drag.id) {
-                            let circle = alladin_geom::Circle::new(drag.candidate_position, original.diameter / 2);
+                        if let Some(original) = state.doc.silk_dots.iter().find(|d| d.id == drag.id)
+                        {
+                            let circle = alladin_geom::Circle::new(
+                                drag.candidate_position,
+                                original.diameter / 2,
+                            );
                             draw_silk_dot_ghost(&painter, rect, &state.camera, &circle, drag.valid);
                         }
                     }
                     if let Some(pending) = &state.pending_pin_via {
                         let template = &state.templates[pending.template_index];
-                        let mut ghost_items = world_items(template, pending.candidate_position, pending.rotation_deg);
+                        let mut ghost_items =
+                            world_items(template, pending.candidate_position, pending.rotation_deg);
                         let via_center = pending.candidate_position.add(pending.via_offset);
                         ghost_items.push(Item::Pad {
-                            shape: PadShape::Circle(alladin_geom::Circle::new(via_center, pending.diameter / 2)),
+                            shape: PadShape::Circle(alladin_geom::Circle::new(
+                                via_center,
+                                pending.diameter / 2,
+                            )),
                             net: None,
                             layer: LayerId::FCu,
                             zone_connection: ZoneConnection::Thermal,
+                            hole_diameter: None,
                         });
                         draw_ghost(&painter, rect, &state.camera, &ghost_items, pending.valid);
                     }
@@ -4567,9 +5467,18 @@ impl eframe::App for PcbApp {
                 }
                 if create_part_requested {
                     if let Some(form) = state.add_part_form.take() {
-                        let template =
-                            footprint::straight_row_template(form.name.clone(), form.reference_prefix.clone(), form.pin_count, form.pitch_mm as f64, form.pad_radius_mm as f64);
-                        let category = (!form.category.trim().is_empty()).then(|| form.category.trim().to_string());
+                        let hole =
+                            (form.hole_diameter_mm > 0.0).then_some(form.hole_diameter_mm as f64);
+                        let template = footprint::straight_row_template_with_hole(
+                            form.name.clone(),
+                            form.reference_prefix.clone(),
+                            form.pin_count,
+                            form.pitch_mm as f64,
+                            form.pad_radius_mm as f64,
+                            hole,
+                        );
+                        let category = (!form.category.trim().is_empty())
+                            .then(|| form.category.trim().to_string());
                         match self.parts_db.insert_part_categorized(
                             &form.name,
                             &form.reference_prefix,
@@ -4584,7 +5493,11 @@ impl eframe::App for PcbApp {
                             Ok(record) => {
                                 state.templates.push(record.template);
                                 state.template_origin.push(Some(record.id));
-                                state.template_hover.push(if form.description.is_empty() { None } else { Some(form.description.clone()) });
+                                state.template_hover.push(if form.description.is_empty() {
+                                    None
+                                } else {
+                                    Some(form.description.clone())
+                                });
                                 state.template_category.push(record.category);
                             }
                             Err(e) => state.io_message = Some(format!("Couldn't save part: {e}")),
@@ -4601,12 +5514,22 @@ impl eframe::App for PcbApp {
                                 remember_last_board(&path);
                                 let (templates, template_origin, template_hover, template_category) =
                                     load_templates(&self.parts_db);
-                                let mut opened = EditorState::new(doc, templates, template_origin, template_hover, template_category);
+                                let mut opened = EditorState::new(
+                                    doc,
+                                    templates,
+                                    template_origin,
+                                    template_hover,
+                                    template_category,
+                                );
                                 opened.set_file_path(path);
                                 if let Some((n, skip)) = merge {
                                     if n > 0 || skip > 0 {
-                                        opened.lcsc_message =
-                                            Some((true, format!("Board parts: imported {n}, already had {skip}.")));
+                                        opened.lcsc_message = Some((
+                                            true,
+                                            format!(
+                                                "Board parts: imported {n}, already had {skip}."
+                                            ),
+                                        ));
                                     }
                                 }
                                 pending_screen = Some(Screen::Editor(opened));
@@ -4619,11 +5542,16 @@ impl eframe::App for PcbApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 if open_requested {
-                    self.wasm_pending.open_board = Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
+                    self.wasm_pending.open_board =
+                        Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 if save_requested || save_as_requested {
-                    let path = if save_as_requested { None } else { state.file_path.clone() };
+                    let path = if save_as_requested {
+                        None
+                    } else {
+                        state.file_path.clone()
+                    };
                     let path = path.or_else(|| board_file_dialog().save_file());
                     if let Some(path) = path {
                         match save_to_path(
@@ -4693,10 +5621,17 @@ impl eframe::App for PcbApp {
                         &bom_csv,
                     ) {
                         Ok(bytes) => {
-                            crate::web_io::download_bytes(&format!("{stem}_manufacturing.zip"), bytes);
-                            state.io_message = Some(format!("Download started: {stem}_manufacturing.zip"));
+                            crate::web_io::download_bytes(
+                                &format!("{stem}_manufacturing.zip"),
+                                bytes,
+                            );
+                            state.io_message =
+                                Some(format!("Download started: {stem}_manufacturing.zip"));
                         }
-                        Err(e) => state.io_message = Some(format!("Couldn't export manufacturing files: {e}")),
+                        Err(e) => {
+                            state.io_message =
+                                Some(format!("Couldn't export manufacturing files: {e}"))
+                        }
                     }
                 }
 
@@ -4796,7 +5731,6 @@ fn handle_mcp_query(query: crate::mcp::McpQuery, screen: &mut Screen, parts_db: 
     }
 }
 
-
 /// A short JSON `{ "note": ... }` every `*_json` builder below returns
 /// verbatim while still on [`Screen::NewBoard`] -- there's no board yet
 /// for any of them to describe.
@@ -4808,16 +5742,32 @@ fn no_board_open_json() -> serde_json::Value {
 /// A net's human-readable name, or `"?"` if the id no longer resolves.
 #[cfg(not(target_arch = "wasm32"))]
 fn net_name(doc: &BoardDoc, id: NetId) -> &str {
-    doc.nets.iter().find(|n| n.id == id).map(|n| n.name.as_str()).unwrap_or("?")
+    doc.nets
+        .iter()
+        .find(|n| n.id == id)
+        .map(|n| n.name.as_str())
+        .unwrap_or("?")
 }
 
 /// Resolves a pad `ItemId` back to `{footprint, pin, pin_name}`.
 #[cfg(not(target_arch = "wasm32"))]
-fn describe_pad(doc: &BoardDoc, templates: &[FootprintTemplate], pad_id: ItemId) -> Option<serde_json::Value> {
-    let footprint = doc.footprints.iter().find(|f| f.pad_item_ids.contains(&pad_id))?;
+fn describe_pad(
+    doc: &BoardDoc,
+    templates: &[FootprintTemplate],
+    pad_id: ItemId,
+) -> Option<serde_json::Value> {
+    let footprint = doc
+        .footprints
+        .iter()
+        .find(|f| f.pad_item_ids.contains(&pad_id))?;
     let index = footprint.pad_item_ids.iter().position(|&id| id == pad_id)?;
-    let pad_template = templates.iter().find(|t| t.name == footprint.template_name).and_then(|t| t.pads.get(index));
-    let pin = pad_template.map(|p| p.number.clone()).unwrap_or_else(|| (index + 1).to_string());
+    let pad_template = templates
+        .iter()
+        .find(|t| t.name == footprint.template_name)
+        .and_then(|t| t.pads.get(index));
+    let pin = pad_template
+        .map(|p| p.number.clone())
+        .unwrap_or_else(|| (index + 1).to_string());
     let pin_name = pad_template.and_then(|p| p.pin_name.clone());
     Some(serde_json::json!({ "footprint": footprint.reference, "pin": pin, "pin_name": pin_name }))
 }
@@ -4878,27 +5828,41 @@ fn mm_arg(v: f64) -> Unit {
 /// stepper existed, at some other height entirely) instead of doing
 /// nothing.
 fn silk_text_height_step(current: Unit, delta: i32) -> Unit {
-    let steps: Vec<Unit> = SILK_TEXT_HEIGHT_STEPS_MM.iter().map(|&mm_value| mm_arg(mm_value)).collect();
+    let steps: Vec<Unit> = SILK_TEXT_HEIGHT_STEPS_MM
+        .iter()
+        .map(|&mm_value| mm_arg(mm_value))
+        .collect();
     let current_index = steps.iter().position(|&s| s == current).unwrap_or_else(|| {
-        steps.iter().enumerate().min_by_key(|(_, &s)| (s - current).abs()).map(|(i, _)| i).unwrap_or(0)
+        steps
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, &s)| (s - current).abs())
+            .map(|(i, _)| i)
+            .unwrap_or(0)
     });
     let new_index = (current_index as i32 + delta).clamp(0, steps.len() as i32 - 1) as usize;
     steps[new_index]
 }
-
 
 /// [`silk_text_height_step`]'s exact counterpart for a silk dot's
 /// diameter, over [`SILK_DOT_DIAMETER_STEPS_MM`] -- same clamped,
 /// closest-step-fallback arithmetic.
 fn silk_dot_diameter_step(current: Unit, delta: i32) -> Unit {
-    let steps: Vec<Unit> = SILK_DOT_DIAMETER_STEPS_MM.iter().map(|&mm_value| mm_arg(mm_value)).collect();
+    let steps: Vec<Unit> = SILK_DOT_DIAMETER_STEPS_MM
+        .iter()
+        .map(|&mm_value| mm_arg(mm_value))
+        .collect();
     let current_index = steps.iter().position(|&s| s == current).unwrap_or_else(|| {
-        steps.iter().enumerate().min_by_key(|(_, &s)| (s - current).abs()).map(|(i, _)| i).unwrap_or(0)
+        steps
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, &s)| (s - current).abs())
+            .map(|(i, _)| i)
+            .unwrap_or(0)
     });
     let new_index = (current_index as i32 + delta).clamp(0, steps.len() as i32 - 1) as usize;
     steps[new_index]
 }
-
 
 #[cfg(not(target_arch = "wasm32"))]
 fn nets_json(screen: &Screen) -> serde_json::Value {
@@ -4916,7 +5880,6 @@ fn nets_json(screen: &Screen) -> serde_json::Value {
         .collect();
     serde_json::json!({ "nets": nets })
 }
-
 
 #[cfg(not(target_arch = "wasm32"))]
 fn footprints_json(screen: &Screen) -> serde_json::Value {
@@ -4966,7 +5929,6 @@ fn footprints_json(screen: &Screen) -> serde_json::Value {
     serde_json::json!({ "footprints": footprints })
 }
 
-
 /// [`crate::mcp::AlladinMcp::board_summary`]'s report builder: the
 /// one-call working picture an AI needs before (and after) touching the
 /// board. `overview` is [`board_overview_json`] verbatim; `rules` are
@@ -4990,7 +5952,11 @@ fn board_summary_json(screen: &Screen) -> serde_json::Value {
         for &pad_id in &fp.pad_item_ids {
             if doc.pad_net(pad_id).ok().flatten().is_none() {
                 if let Some(pad) = describe_pad(doc, &state.templates, pad_id) {
-                    pins_without_net.push(format!("{}.{}", pad["footprint"].as_str().unwrap_or("?"), pad["pin"].as_str().unwrap_or("?")));
+                    pins_without_net.push(format!(
+                        "{}.{}",
+                        pad["footprint"].as_str().unwrap_or("?"),
+                        pad["pin"].as_str().unwrap_or("?")
+                    ));
                 }
             }
         }
@@ -5031,7 +5997,6 @@ fn board_summary_json(screen: &Screen) -> serde_json::Value {
     })
 }
 
-
 /// [`crate::mcp::McpQuery::DownloadLcscPart`]'s handler -- the network
 /// fetch already happened on the MCP thread (see
 /// `AlladinMcp::download_lcsc_part`); this just inserts the result into
@@ -5040,7 +6005,11 @@ fn board_summary_json(screen: &Screen) -> serde_json::Value {
 /// success handler, minus the GUI-only "select it for placing" side
 /// effect (an MCP call shouldn't reach into the human's active tool).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn download_lcsc_part_write(screen: &mut Screen, parts_db: &PartsDb, fetched: Result<crate::lcsc::FetchedPart, crate::lcsc::FetchError>) -> serde_json::Value {
+pub(crate) fn download_lcsc_part_write(
+    screen: &mut Screen,
+    parts_db: &PartsDb,
+    fetched: Result<crate::lcsc::FetchedPart, crate::lcsc::FetchError>,
+) -> serde_json::Value {
     let part = match fetched {
         Ok(part) => part,
         Err(e) => return error_json(e.to_string()),
@@ -5055,12 +6024,21 @@ pub(crate) fn download_lcsc_part_write(screen: &mut Screen, parts_db: &PartsDb, 
     // blocking.
     let hard = crate::footprint::template_dfm_hard_violations(&part.pads, &[]);
     if !hard.is_empty() {
-        let listed: Vec<String> = hard.iter().map(|(label, v)| format!("{label}: {v}")).collect();
-        return error_json(format!("{} refused -- its geometry violates JLCPCB DFM: {}", part.lcsc_code, listed.join("; ")));
+        let listed: Vec<String> = hard
+            .iter()
+            .map(|(label, v)| format!("{label}: {v}"))
+            .collect();
+        return error_json(format!(
+            "{} refused -- its geometry violates JLCPCB DFM: {}",
+            part.lcsc_code,
+            listed.join("; ")
+        ));
     }
     // Report-only findings still get surfaced, just without blocking.
-    let dfm_warnings: Vec<String> =
-        crate::footprint::template_dfm_violations(&part.pads, &[]).iter().map(|(label, v)| format!("{label}: {v}")).collect();
+    let dfm_warnings: Vec<String> = crate::footprint::template_dfm_violations(&part.pads, &[])
+        .iter()
+        .map(|(label, v)| format!("{label}: {v}"))
+        .collect();
     match parts_db.insert_part_categorized(
         &part.name,
         &part.reference_prefix,
@@ -5090,18 +6068,21 @@ pub(crate) fn download_lcsc_part_write(screen: &mut Screen, parts_db: &PartsDb, 
     }
 }
 
-
 /// [`crate::mcp::McpQuery::ConnectPins`]'s handler.
 #[cfg(not(target_arch = "wasm32"))]
 fn connect_pins_write(screen: &mut Screen, args: crate::mcp::ConnectPinsArgs) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let pads_a = state.doc.find_pads(&state.templates, &args.ref1, &args.pin1);
+    let pads_a = state
+        .doc
+        .find_pads(&state.templates, &args.ref1, &args.pin1);
     if pads_a.is_empty() {
         return error_json(format!("no such pin: {} pin {}", args.ref1, args.pin1));
     }
-    let pads_b = state.doc.find_pads(&state.templates, &args.ref2, &args.pin2);
+    let pads_b = state
+        .doc
+        .find_pads(&state.templates, &args.ref2, &args.pin2);
     if pads_b.is_empty() {
         return error_json(format!("no such pin: {} pin {}", args.ref2, args.pin2));
     }
@@ -5144,25 +6125,45 @@ fn connect_pins_write(screen: &mut Screen, args: crate::mcp::ConnectPinsArgs) ->
         }
         Err(e) => {
             let e: crate::board_doc::NetError = e;
-            error_json(format!("couldn't connect {}.{} to {}.{}: {e}", args.ref1, args.pin1, args.ref2, args.pin2))
+            error_json(format!(
+                "couldn't connect {}.{} to {}.{}: {e}",
+                args.ref1, args.pin1, args.ref2, args.pin2
+            ))
         }
     }
 }
-
 
 /// [`crate::mcp::McpQuery::SaveBoard`]'s handler -- same
 /// `save_to_path`/`remember_last_board`/`set_file_path` sequence as the
 /// GUI's own "Save"/"Save As" buttons.
 #[cfg(not(target_arch = "wasm32"))]
-fn save_board_write(screen: &mut Screen, parts_db: &PartsDb, args: crate::mcp::SaveBoardArgs) -> serde_json::Value {
+fn save_board_write(
+    screen: &mut Screen,
+    parts_db: &PartsDb,
+    args: crate::mcp::SaveBoardArgs,
+) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let path = match args.path.map(PathBuf::from).or_else(|| state.file_path.clone()) {
+    let path = match args
+        .path
+        .map(PathBuf::from)
+        .or_else(|| state.file_path.clone())
+    {
         Some(path) => path,
-        None => return error_json("no path given, and this board has never been saved before -- give a path"),
+        None => {
+            return error_json(
+                "no path given, and this board has never been saved before -- give a path",
+            )
+        }
     };
-    match save_to_path(&state.doc, &path, &state.templates, &state.template_origin, parts_db) {
+    match save_to_path(
+        &state.doc,
+        &path,
+        &state.templates,
+        &state.template_origin,
+        parts_db,
+    ) {
         Ok(()) => {
             remember_last_board(&path);
             state.set_file_path(path.clone());
@@ -5172,7 +6173,6 @@ fn save_board_write(screen: &mut Screen, parts_db: &PartsDb, args: crate::mcp::S
     }
 }
 
-
 /// [`crate::mcp::McpQuery::ListParts`]'s handler -- every placeable
 /// template, from the live editor's list when one is open (it also
 /// carries parts downloaded this session) or straight from the parts
@@ -5180,13 +6180,18 @@ fn save_board_write(screen: &mut Screen, parts_db: &PartsDb, args: crate::mcp::S
 #[cfg(not(target_arch = "wasm32"))]
 fn list_parts_json(screen: &Screen, parts_db: &PartsDb) -> serde_json::Value {
     let loaded;
-    let (templates, hover, category): (&[FootprintTemplate], &[Option<String>], &[Option<String>]) = match screen {
-        Screen::Editor(state) => (&state.templates, &state.template_hover, &state.template_category),
-        Screen::NewBoard(_) => {
-            loaded = load_templates(parts_db);
-            (&loaded.0, &loaded.2, &loaded.3)
-        }
-    };
+    let (templates, hover, category): (&[FootprintTemplate], &[Option<String>], &[Option<String>]) =
+        match screen {
+            Screen::Editor(state) => (
+                &state.templates,
+                &state.template_hover,
+                &state.template_category,
+            ),
+            Screen::NewBoard(_) => {
+                loaded = load_templates(parts_db);
+                (&loaded.0, &loaded.2, &loaded.3)
+            }
+        };
     let parts: Vec<_> = templates
         .iter()
         .enumerate()
@@ -5205,7 +6210,6 @@ fn list_parts_json(screen: &Screen, parts_db: &PartsDb) -> serde_json::Value {
         .collect();
     serde_json::json!({ "parts": parts })
 }
-
 
 /// [`crate::mcp::McpQuery::CheckBoard`]'s handler -- the
 /// self-verification report an AI runs after a batch of changes.
@@ -5228,7 +6232,11 @@ fn check_board_json(screen: &Screen) -> serde_json::Value {
         for &pad_id in &fp.pad_item_ids {
             if doc.pad_net(pad_id).ok().flatten().is_none() {
                 if let Some(pad) = describe_pad(doc, &state.templates, pad_id) {
-                    pins_without_net.push(format!("{}.{}", pad["footprint"].as_str().unwrap_or("?"), pad["pin"].as_str().unwrap_or("?")));
+                    pins_without_net.push(format!(
+                        "{}.{}",
+                        pad["footprint"].as_str().unwrap_or("?"),
+                        pad["pin"].as_str().unwrap_or("?")
+                    ));
                 }
             }
         }
@@ -5279,17 +6287,24 @@ fn check_board_json(screen: &Screen) -> serde_json::Value {
     })
 }
 
-
 /// [`crate::mcp::McpQuery::PlaceFootprint`]'s handler -- same
 /// [`BoardDoc::try_place_footprint`] (and therefore the same DFM
 /// gates) as the GUI's own click-to-place, through the undo helpers so
 /// Ctrl+Z takes it back.
 #[cfg(not(target_arch = "wasm32"))]
-fn place_footprint_write(screen: &mut Screen, args: crate::mcp::PlaceFootprintArgs) -> serde_json::Value {
+fn place_footprint_write(
+    screen: &mut Screen,
+    args: crate::mcp::PlaceFootprintArgs,
+) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let Some(template) = state.templates.iter().find(|t| t.name == args.template).cloned() else {
+    let Some(template) = state
+        .templates
+        .iter()
+        .find(|t| t.name == args.template)
+        .cloned()
+    else {
         return error_json(format!(
             "no template named \"{}\" in the parts library -- call list_parts for the exact names, or download_lcsc_part to add it",
             args.template
@@ -5299,28 +6314,55 @@ fn place_footprint_write(screen: &mut Screen, args: crate::mcp::PlaceFootprintAr
     let rotation = args.rotation_deg.unwrap_or(0.0);
     match state.try_mutate_doc_ok(|doc| doc.try_place_footprint(&template, position, rotation)) {
         Ok(id) => {
-            let reference = state.doc.footprints.iter().find(|f| f.id == id).map(|f| f.reference.clone()).unwrap_or_default();
+            let reference = state
+                .doc
+                .footprints
+                .iter()
+                .find(|f| f.id == id)
+                .map(|f| f.reference.clone())
+                .unwrap_or_default();
             serde_json::json!({ "ok": true, "reference": reference, "template": args.template, "x_mm": args.x_mm, "y_mm": args.y_mm, "rotation_deg": rotation })
         }
-        Err(e) => error_json(format!("couldn't place {} at ({}, {}): {e}", args.template, args.x_mm, args.y_mm)),
+        Err(e) => error_json(format!(
+            "couldn't place {} at ({}, {}): {e}",
+            args.template, args.x_mm, args.y_mm
+        )),
     }
 }
-
 
 /// [`crate::mcp::McpQuery::MoveFootprint`]'s handler -- same
 /// [`BoardDoc::try_move_footprint`] as the GUI's own drag-drop commit;
 /// on refusal the part stays exactly where it was.
 #[cfg(not(target_arch = "wasm32"))]
-fn move_footprint_write(screen: &mut Screen, args: crate::mcp::MoveFootprintArgs) -> serde_json::Value {
+fn move_footprint_write(
+    screen: &mut Screen,
+    args: crate::mcp::MoveFootprintArgs,
+) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let Some(fp) = state.doc.footprints.iter().find(|f| f.reference == args.reference) else {
-        return error_json(format!("no footprint with reference \"{}\" on the board", args.reference));
+    let Some(fp) = state
+        .doc
+        .footprints
+        .iter()
+        .find(|f| f.reference == args.reference)
+    else {
+        return error_json(format!(
+            "no footprint with reference \"{}\" on the board",
+            args.reference
+        ));
     };
     let (id, template_name, current_rotation) = (fp.id, fp.template_name.clone(), fp.rotation_deg);
-    let Some(template) = state.templates.iter().find(|t| t.name == template_name).cloned() else {
-        return error_json(format!("{}'s template \"{template_name}\" is missing from the parts library", args.reference));
+    let Some(template) = state
+        .templates
+        .iter()
+        .find(|t| t.name == template_name)
+        .cloned()
+    else {
+        return error_json(format!(
+            "{}'s template \"{template_name}\" is missing from the parts library",
+            args.reference
+        ));
     };
     // The AI moving a part out from under the human's own live drag of
     // that same part would leave the drag committing stale geometry --
@@ -5329,21 +6371,27 @@ fn move_footprint_write(screen: &mut Screen, args: crate::mcp::MoveFootprintArgs
     let position = Point::new(mm_arg(args.x_mm), mm_arg(args.y_mm));
     let rotation = args.rotation_deg.unwrap_or(current_rotation);
     match state.try_mutate_doc(|doc| doc.try_move_footprint(id, &template, position, rotation)) {
-        Ok(()) => serde_json::json!({ "ok": true, "reference": args.reference, "x_mm": args.x_mm, "y_mm": args.y_mm, "rotation_deg": rotation }),
-        Err(e) => error_json(format!("couldn't move {} to ({}, {}): {e} -- it stays where it was", args.reference, args.x_mm, args.y_mm)),
+        Ok(()) => {
+            serde_json::json!({ "ok": true, "reference": args.reference, "x_mm": args.x_mm, "y_mm": args.y_mm, "rotation_deg": rotation })
+        }
+        Err(e) => error_json(format!(
+            "couldn't move {} to ({}, {}): {e} -- it stays where it was",
+            args.reference, args.x_mm, args.y_mm
+        )),
     }
 }
 
-
 /// [`crate::mcp::McpQuery::ProbePlacement`]'s handler -- read-only DFM probe.
 #[cfg(not(target_arch = "wasm32"))]
-fn probe_placement_json(screen: &Screen, args: crate::mcp::ProbePlacementArgs) -> serde_json::Value {
+fn probe_placement_json(
+    screen: &Screen,
+    args: crate::mcp::ProbePlacementArgs,
+) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
     crate::mcp_placement::probe_placement_json(&state.doc, &state.templates, &args)
 }
-
 
 /// [`crate::mcp::McpQuery::PlaceParts`]'s handler -- atomic multi-place.
 #[cfg(not(target_arch = "wasm32"))]
@@ -5353,12 +6401,13 @@ fn place_parts_write(screen: &mut Screen, args: crate::mcp::PlacePartsArgs) -> s
     };
     state.cancel_transient_gestures();
     let templates = state.templates.clone();
-    match state.try_mutate_doc_ok(|doc| crate::mcp_placement::place_parts_on_doc(doc, &templates, &args.parts)) {
+    match state.try_mutate_doc_ok(|doc| {
+        crate::mcp_placement::place_parts_on_doc(doc, &templates, &args.parts)
+    }) {
         Ok(v) => v,
         Err(e) => error_json(format!("couldn't place_parts: {e}")),
     }
 }
-
 
 /// [`crate::mcp::McpQuery::MoveParts`]'s handler -- atomic multi-move.
 #[cfg(not(target_arch = "wasm32"))]
@@ -5368,24 +6417,37 @@ fn move_parts_write(screen: &mut Screen, args: crate::mcp::MovePartsArgs) -> ser
     };
     state.cancel_transient_gestures();
     let templates = state.templates.clone();
-    match state.try_mutate_doc_ok(|doc| crate::mcp_placement::move_parts_on_doc(doc, &templates, &args.parts)) {
+    match state.try_mutate_doc_ok(|doc| {
+        crate::mcp_placement::move_parts_on_doc(doc, &templates, &args.parts)
+    }) {
         Ok(v) => v,
         Err(e) => error_json(format!("couldn't move_parts: {e}")),
     }
 }
-
 
 /// [`crate::mcp::McpQuery::RemoveFootprint`]'s handler -- same
 /// [`BoardDoc::remove_footprint`] as the GUI's Delete key, with the
 /// same gesture/selection cleanup undo does: the removed part's
 /// `FootprintId` must not survive anywhere in transient UI state.
 #[cfg(not(target_arch = "wasm32"))]
-fn remove_footprint_write(screen: &mut Screen, args: crate::mcp::RemoveFootprintArgs) -> serde_json::Value {
+fn remove_footprint_write(
+    screen: &mut Screen,
+    args: crate::mcp::RemoveFootprintArgs,
+) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let Some(id) = state.doc.footprints.iter().find(|f| f.reference == args.reference).map(|f| f.id) else {
-        return error_json(format!("no footprint with reference \"{}\" on the board", args.reference));
+    let Some(id) = state
+        .doc
+        .footprints
+        .iter()
+        .find(|f| f.reference == args.reference)
+        .map(|f| f.id)
+    else {
+        return error_json(format!(
+            "no footprint with reference \"{}\" on the board",
+            args.reference
+        ));
     };
     state.cancel_transient_gestures();
     state.clear_selection();
@@ -5393,27 +6455,35 @@ fn remove_footprint_write(screen: &mut Screen, args: crate::mcp::RemoveFootprint
     serde_json::json!({ "ok": true, "removed": args.reference, "zones_stale": state.doc.zones_are_stale() })
 }
 
-
 /// [`crate::mcp::McpQuery::DisconnectPin`]'s handler --
 /// [`crate::mcp::McpQuery::ConnectPins`]'s inverse, via
 /// [`BoardDoc::disconnect_pad`].
 #[cfg(not(target_arch = "wasm32"))]
-fn disconnect_pin_write(screen: &mut Screen, args: crate::mcp::DisconnectPinArgs) -> serde_json::Value {
+fn disconnect_pin_write(
+    screen: &mut Screen,
+    args: crate::mcp::DisconnectPinArgs,
+) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let pads = state.doc.find_pads(&state.templates, &args.reference, &args.pin);
+    let pads = state
+        .doc
+        .find_pads(&state.templates, &args.reference, &args.pin);
     if pads.is_empty() {
         return error_json(format!("no such pin: {} pin {}", args.reference, args.pin));
     }
     // Multi-pad pins come off the net as one electrical pin, mirroring
     // connect_pins.
     match state.try_mutate_doc(|doc| pads.iter().try_for_each(|&pad| doc.disconnect_pad(pad))) {
-        Ok(()) => serde_json::json!({ "ok": true, "disconnected": format!("{}.{}", args.reference, args.pin), "pads": pads.len() }),
-        Err(e) => error_json(format!("couldn't disconnect {}.{}: {e}", args.reference, args.pin)),
+        Ok(()) => {
+            serde_json::json!({ "ok": true, "disconnected": format!("{}.{}", args.reference, args.pin), "pads": pads.len() })
+        }
+        Err(e) => error_json(format!(
+            "couldn't disconnect {}.{}: {e}",
+            args.reference, args.pin
+        )),
     }
 }
-
 
 /// [`crate::mcp::McpQuery::AddPinStitchingVia`]'s handler -- the MCP
 /// face of the GUI's right-click "Add via near pin"
@@ -5425,11 +6495,17 @@ fn disconnect_pin_write(screen: &mut Screen, args: crate::mcp::DisconnectPinArgs
 /// same-net via right next to them so re-running after a partial
 /// failure doesn't double-stitch the pads that already worked.
 #[cfg(not(target_arch = "wasm32"))]
-fn add_pin_stitching_via_write(screen: &mut Screen, args: crate::mcp::AddPinStitchingViaArgs) -> serde_json::Value {
+fn add_pin_stitching_via_write(
+    screen: &mut Screen,
+    args: crate::mcp::AddPinStitchingViaArgs,
+) -> serde_json::Value {
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let diameter = args.via_diameter_mm.map(mm_arg).unwrap_or(state.via_diameter);
+    let diameter = args
+        .via_diameter_mm
+        .map(mm_arg)
+        .unwrap_or(state.via_diameter);
     let drill = args.via_drill_mm.map(mm_arg).unwrap_or(state.via_drill);
     let stub_width = state.trace_width;
 
@@ -5521,7 +6597,6 @@ fn add_pin_stitching_via_write(screen: &mut Screen, args: crate::mcp::AddPinStit
     }
 }
 
-
 /// [`crate::mcp::McpQuery::RenameNet`]'s handler -- looks the net up by
 /// its current name (the stable thing an MCP client actually has) and
 /// delegates to [`BoardDoc::rename_net`].
@@ -5530,15 +6605,23 @@ fn rename_net_write(screen: &mut Screen, args: crate::mcp::RenameNetArgs) -> ser
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
-    let Some(id) = state.doc.nets.iter().find(|n| n.name == args.net).map(|n| n.id) else {
-        return error_json(format!("no net named \"{}\" -- get_nets lists the current names", args.net));
+    let Some(id) = state
+        .doc
+        .nets
+        .iter()
+        .find(|n| n.name == args.net)
+        .map(|n| n.id)
+    else {
+        return error_json(format!(
+            "no net named \"{}\" -- get_nets lists the current names",
+            args.net
+        ));
     };
     match state.try_mutate_doc(|doc| doc.rename_net(id, &args.new_name)) {
         Ok(()) => serde_json::json!({ "ok": true, "net": args.new_name }),
         Err(e) => error_json(format!("couldn't rename \"{}\": {e}", args.net)),
     }
 }
-
 
 /// [`crate::mcp::McpQuery::GetRoutingScene`]'s handler.
 #[cfg(not(target_arch = "wasm32"))]
@@ -5603,7 +6686,9 @@ fn ripup_wire_write(screen: &mut Screen, args: crate::mcp::RipupWireArgs) -> ser
         };
     }
     let (Some(x_mm), Some(y_mm)) = (args.x_mm, args.y_mm) else {
-        return error_json("pass net=\"...\" to rip a whole net, or x_mm and y_mm to rip the wire nearest a point");
+        return error_json(
+            "pass net=\"...\" to rip a whole net, or x_mm and y_mm to rip the wire nearest a point",
+        );
     };
     match state.try_mutate_doc_ok(|doc| crate::mcp_routing::ripup_wire_near(doc, x_mm, y_mm)) {
         Ok(v) => v,
@@ -5617,36 +6702,59 @@ fn ripup_wire_write(screen: &mut Screen, args: crate::mcp::RipupWireArgs) -> ser
 /// exact same [`crate::mcp_routing::commit_route`] gates as the
 /// commit_route tool (undo-recorded, connectivity-verified).
 #[cfg(not(target_arch = "wasm32"))]
-fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs) -> serde_json::Value {
+fn suggest_route_handle(
+    screen: &mut Screen,
+    args: crate::mcp::SuggestRouteArgs,
+) -> serde_json::Value {
     use crate::mcp_routing::{self, SuggestOptions};
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
     let Some(net_record) = state.doc.nets.iter().find(|n| n.name == args.net).cloned() else {
-        return error_json(format!("no net named \"{}\" -- get_nets lists current names", args.net));
+        return error_json(format!(
+            "no net named \"{}\" -- get_nets lists current names",
+            args.net
+        ));
     };
     let net = net_record.id;
 
-    let resolve = |pin: &Option<String>, point: &Option<Vec<f64>>, which: &str| -> Result<Point, String> {
+    let resolve = |pin: &Option<String>,
+                   point: &Option<Vec<f64>>,
+                   which: &str|
+     -> Result<Point, String> {
         if let Some(spec) = pin {
-            let (reference, number) =
-                spec.split_once('.').ok_or_else(|| format!("{which}_pin must look like \"U1.14\" (footprint reference, dot, pad number)"))?;
+            let (reference, number) = spec.split_once('.').ok_or_else(|| {
+                format!(
+                    "{which}_pin must look like \"U1.14\" (footprint reference, dot, pad number)"
+                )
+            })?;
             let pad = state
                 .doc
                 .find_pad(&state.templates, reference, number)
                 .ok_or_else(|| format!("no such pin: {reference} pin {number}"))?;
-            let (center, _, pad_net) = state.doc.pad_endpoint(pad).ok_or_else(|| format!("{spec} is not a live pad"))?;
+            let (center, _, pad_net) = state
+                .doc
+                .pad_endpoint(pad)
+                .ok_or_else(|| format!("{spec} is not a live pad"))?;
             if pad_net != Some(net) {
-                return Err(format!("{spec} is not on net {} -- connect_pins first, or route from the right pin", args.net));
+                return Err(format!(
+                    "{spec} is not on net {} -- connect_pins first, or route from the right pin",
+                    args.net
+                ));
             }
             Ok(center)
         } else if let Some(p) = point {
             if p.len() != 2 {
                 return Err(format!("{which}_mm must be [x_mm, y_mm]"));
             }
-            Ok(Point::new((p[0] * MM as f64).round() as Unit, (p[1] * MM as f64).round() as Unit))
+            Ok(Point::new(
+                (p[0] * MM as f64).round() as Unit,
+                (p[1] * MM as f64).round() as Unit,
+            ))
         } else {
-            Err(format!("give {which}_pin (\"REF.PIN\") or {which}_mm ([x, y])"))
+            Err(format!(
+                "give {which}_pin (\"REF.PIN\") or {which}_mm ([x, y])"
+            ))
         }
     };
     let start = match resolve(&args.start_pin, &args.start_mm, "start") {
@@ -5662,12 +6770,17 @@ fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs)
         Ok(l) => l,
         Err(e) => return error_json(e),
     };
-    let width = args.width_mm.map(|v| (v * MM as f64).round() as Unit).unwrap_or(crate::routing::DEFAULT_TRACE_WIDTH);
+    let width = args
+        .width_mm
+        .map(|v| (v * MM as f64).round() as Unit)
+        .unwrap_or(crate::routing::DEFAULT_TRACE_WIDTH);
     let edge_margin = match args.edge_margin_mm {
         Some(v) => {
             let margin = (v * MM as f64).round() as Unit;
             if margin < JlcpcbDfm::COPPER_TO_ROUTED_EDGE {
-                return error_json(format!("edge_margin_mm {v} is below JLCPCB's hard copper-to-edge minimum of 0.2mm"));
+                return error_json(format!(
+                    "edge_margin_mm {v} is below JLCPCB's hard copper-to-edge minimum of 0.2mm"
+                ));
             }
             margin
         }
@@ -5687,8 +6800,11 @@ fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs)
         Err(e) => return error_json(e),
     };
 
-    let points_mm: Vec<serde_json::Value> =
-        found.points.iter().map(|p| serde_json::json!([p.x as f64 / MM as f64, p.y as f64 / MM as f64])).collect();
+    let points_mm: Vec<serde_json::Value> = found
+        .points
+        .iter()
+        .map(|p| serde_json::json!([p.x as f64 / MM as f64, p.y as f64 / MM as f64]))
+        .collect();
     let layer_str = match layer {
         LayerId::FCu => "FCu",
         LayerId::BCu => "BCu",
@@ -5699,7 +6815,11 @@ fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs)
         "edge_margin_mm": edge_margin as f64 / MM as f64,
         "segments": [{ "layer": layer_str, "points_mm": points_mm }],
     });
-    let length_mm: f64 = found.points.windows(2).map(|leg| leg[0].distance(leg[1]) / MM as f64).sum();
+    let length_mm: f64 = found
+        .points
+        .windows(2)
+        .map(|leg| leg[0].distance(leg[1]) / MM as f64)
+        .sum();
     let mut result = serde_json::json!({
         "ok": true,
         "net": net_record.name,
@@ -5714,7 +6834,11 @@ fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs)
     if args.commit == Some(true) {
         let route = match mcp_routing::parse_route_candidate(&state.doc, &candidate) {
             Ok(r) => r,
-            Err(e) => return error_json(format!("internal: the suggested route failed to re-parse: {e}")),
+            Err(e) => {
+                return error_json(format!(
+                    "internal: the suggested route failed to re-parse: {e}"
+                ))
+            }
         };
         state.cancel_transient_gestures();
         match state.try_mutate_doc_ok(|doc| mcp_routing::commit_route(doc, &route)) {
@@ -5722,7 +6846,12 @@ fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs)
                 result["committed"] = serde_json::json!(true);
                 result["commit"] = v;
             }
-            Err(e) => return error_json(format!("found a path but couldn't commit it on {}: {e}", net_record.name)),
+            Err(e) => {
+                return error_json(format!(
+                    "found a path but couldn't commit it on {}: {e}",
+                    net_record.name
+                ))
+            }
         }
     }
     result
@@ -5734,7 +6863,11 @@ fn suggest_route_handle(screen: &mut Screen, args: crate::mcp::SuggestRouteArgs)
 /// silently discard the human's open board (`replace_current` must be
 /// explicitly true for that).
 #[cfg(not(target_arch = "wasm32"))]
-fn new_board_write(screen: &mut Screen, parts_db: &PartsDb, args: crate::mcp::NewBoardArgs) -> serde_json::Value {
+fn new_board_write(
+    screen: &mut Screen,
+    parts_db: &PartsDb,
+    args: crate::mcp::NewBoardArgs,
+) -> serde_json::Value {
     if matches!(screen, Screen::Editor(_)) && !args.replace_current.unwrap_or(false) {
         return error_json(
             "a board is already open -- pass replace_current=true to discard it (ask the human first: unsaved work and undo history would be gone)",
@@ -5742,12 +6875,20 @@ fn new_board_write(screen: &mut Screen, parts_db: &PartsDb, args: crate::mcp::Ne
     }
     match args.layer_count {
         None | Some(2) => {}
-        Some(n) => return error_json(format!("layer_count {n} is not supported -- only 2-layer boards work end-to-end today")),
+        Some(n) => {
+            return error_json(format!(
+                "layer_count {n} is not supported -- only 2-layer boards work end-to-end today"
+            ))
+        }
     }
     let copper_weight = match args.copper_weight_oz {
         None | Some(1) => CopperWeight::OneOz,
         Some(2) => CopperWeight::TwoOz,
-        Some(n) => return error_json(format!("copper_weight_oz {n} is not a JLCPCB profile -- use 1 or 2")),
+        Some(n) => {
+            return error_json(format!(
+                "copper_weight_oz {n} is not a JLCPCB profile -- use 1 or 2"
+            ))
+        }
     };
     let params = NewBoardParams {
         width_mm: args.width_mm as f32,
@@ -5763,10 +6904,15 @@ fn new_board_write(screen: &mut Screen, parts_db: &PartsDb, args: crate::mcp::Ne
         ));
     }
     let (templates, template_origin, template_hover, template_category) = load_templates(parts_db);
-    *screen = Screen::Editor(EditorState::new(params.create(), templates, template_origin, template_hover, template_category));
+    *screen = Screen::Editor(EditorState::new(
+        params.create(),
+        templates,
+        template_origin,
+        template_hover,
+        template_category,
+    ));
     serde_json::json!({ "ok": true, "width_mm": args.width_mm, "height_mm": args.height_mm, "layer_count": 2, "copper_weight_oz": match copper_weight { CopperWeight::OneOz => 1, CopperWeight::TwoOz => 2 } })
 }
-
 
 /// `{ "error": message }` -- the one JSON shape every write handler
 /// below returns on failure, so an MCP client can reliably check for an
@@ -5775,7 +6921,6 @@ fn new_board_write(screen: &mut Screen, parts_db: &PartsDb, args: crate::mcp::Ne
 fn error_json(message: impl Into<String>) -> serde_json::Value {
     serde_json::json!({ "error": message.into() })
 }
-
 
 /// [`no_board_open_json`]'s error-shaped twin -- every write handler
 /// above needs the `"error"` key (see [`error_json`]) rather than the
@@ -5792,7 +6937,13 @@ mod undo_tests {
     use alladin_geom::Point;
 
     fn empty_editor() -> EditorState {
-        EditorState::new(NewBoardParams::default().create(), footprint::builtin_templates(), Vec::new(), Vec::new(), Vec::new())
+        EditorState::new(
+            NewBoardParams::default().create(),
+            footprint::builtin_templates(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     #[test]
@@ -5800,7 +6951,12 @@ mod undo_tests {
         let mut state = empty_editor();
         let template = state.templates[0].clone();
         assert!(state.doc.footprints.is_empty());
-        state.try_mutate_doc(|doc| doc.try_place_footprint(&template, Point::new(0, 0), 0.0).map(|_| ())).unwrap();
+        state
+            .try_mutate_doc(|doc| {
+                doc.try_place_footprint(&template, Point::new(0, 0), 0.0)
+                    .map(|_| ())
+            })
+            .unwrap();
         assert_eq!(state.doc.footprints.len(), 1);
         assert_eq!(state.undo_stack.len(), 1);
         assert!(state.undo());
@@ -5813,10 +6969,20 @@ mod undo_tests {
     fn new_mutation_clears_redo() {
         let mut state = empty_editor();
         let template = state.templates[0].clone();
-        state.try_mutate_doc(|doc| doc.try_place_footprint(&template, Point::new(0, 0), 0.0).map(|_| ())).unwrap();
+        state
+            .try_mutate_doc(|doc| {
+                doc.try_place_footprint(&template, Point::new(0, 0), 0.0)
+                    .map(|_| ())
+            })
+            .unwrap();
         state.undo();
         assert_eq!(state.redo_stack.len(), 1);
-        state.try_mutate_doc(|doc| doc.try_place_footprint(&template, Point::new(5 * MM, 0), 0.0).map(|_| ())).unwrap();
+        state
+            .try_mutate_doc(|doc| {
+                doc.try_place_footprint(&template, Point::new(5 * MM, 0), 0.0)
+                    .map(|_| ())
+            })
+            .unwrap();
         assert!(state.redo_stack.is_empty());
         assert!(!state.redo());
     }
@@ -5839,20 +7005,39 @@ mod mcp_handler_tests {
     use alladin_geom::Point;
 
     fn editor_screen() -> Screen {
-        Screen::Editor(EditorState::new(NewBoardParams::default().create(), footprint::builtin_templates(), Vec::new(), Vec::new(), Vec::new()))
+        Screen::Editor(EditorState::new(
+            NewBoardParams::default().create(),
+            footprint::builtin_templates(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
     }
 
     /// Name of some builtin template with at least `pads` pads -- the
     /// tests below don't care which part it is, only that it's real.
     fn a_template_with_pads(screen: &Screen, pads: usize) -> String {
-        let Screen::Editor(state) = screen else { unreachable!() };
-        state.templates.iter().find(|t| t.pads.len() >= pads && t.holes.is_empty()).expect("some builtin multi-pad template").name.to_string()
+        let Screen::Editor(state) = screen else {
+            unreachable!()
+        };
+        state
+            .templates
+            .iter()
+            .find(|t| t.pads.len() >= pads && t.holes.is_empty())
+            .expect("some builtin multi-pad template")
+            .name
+            .to_string()
     }
 
     fn place(screen: &mut Screen, template: &str, x_mm: f64, y_mm: f64) -> serde_json::Value {
         place_footprint_write(
             screen,
-            crate::mcp::PlaceFootprintArgs { template: template.to_string(), x_mm, y_mm, rotation_deg: None },
+            crate::mcp::PlaceFootprintArgs {
+                template: template.to_string(),
+                x_mm,
+                y_mm,
+                rotation_deg: None,
+            },
         )
     }
 
@@ -5864,7 +7049,9 @@ mod mcp_handler_tests {
         assert_eq!(result["ok"], true, "unexpected: {result}");
         let reference = result["reference"].as_str().unwrap().to_string();
         assert!(!reference.is_empty());
-        let Screen::Editor(state) = &mut screen else { unreachable!() };
+        let Screen::Editor(state) = &mut screen else {
+            unreachable!()
+        };
         assert_eq!(state.doc.footprints.len(), 1);
         assert!(state.undo());
         assert!(state.doc.footprints.is_empty());
@@ -5888,7 +7075,9 @@ mod mcp_handler_tests {
         );
         assert_eq!(result["ok"], true, "unexpected: {result}");
         assert_eq!(result["legal"], false, "unexpected: {result}");
-        let Screen::Editor(state) = &screen else { unreachable!() };
+        let Screen::Editor(state) = &screen else {
+            unreachable!()
+        };
         assert!(state.doc.footprints.is_empty());
         assert!(state.undo_stack.is_empty());
     }
@@ -5913,7 +7102,9 @@ mod mcp_handler_tests {
         assert_eq!(result["ok"], true, "unexpected: {result}");
         assert_eq!(result["legal"], true, "unexpected: {result}");
         assert!(result["suggested"].is_object(), "unexpected: {result}");
-        let Screen::Editor(state) = &screen else { unreachable!() };
+        let Screen::Editor(state) = &screen else {
+            unreachable!()
+        };
         assert_eq!(state.doc.footprints.len(), 1, "probe must not place");
     }
 
@@ -5949,7 +7140,9 @@ mod mcp_handler_tests {
         assert_eq!(result["placed"].as_array().unwrap().len(), 2);
         assert!(result["open_bridges"]["count"].is_number());
         {
-            let Screen::Editor(state) = &mut screen else { unreachable!() };
+            let Screen::Editor(state) = &mut screen else {
+                unreachable!()
+            };
             assert_eq!(state.doc.footprints.len(), 2);
             assert!(state.doc.find_net_by_name("3V3").is_some());
             assert!(state.doc.find_net_by_name("GND").is_some());
@@ -5985,7 +7178,9 @@ mod mcp_handler_tests {
             },
         );
         assert!(result["error"].is_string(), "unexpected: {result}");
-        let Screen::Editor(state) = &screen else { unreachable!() };
+        let Screen::Editor(state) = &screen else {
+            unreachable!()
+        };
         assert!(state.doc.footprints.is_empty());
         assert!(state.undo_stack.is_empty());
     }
@@ -6015,20 +7210,38 @@ mod mcp_handler_tests {
                 ],
             },
         );
-        let r1 = placed["placed"][0]["reference"].as_str().unwrap().to_string();
-        let r2 = placed["placed"][1]["reference"].as_str().unwrap().to_string();
+        let r1 = placed["placed"][0]["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r2 = placed["placed"][1]["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let moved = move_parts_write(
             &mut screen,
             crate::mcp::MovePartsArgs {
                 parts: vec![
-                    crate::mcp::MovePartSpec { reference: r1, x_mm: -8.0, y_mm: 5.0, rotation_deg: None },
-                    crate::mcp::MovePartSpec { reference: r2, x_mm: 8.0, y_mm: 5.0, rotation_deg: Some(90.0) },
+                    crate::mcp::MovePartSpec {
+                        reference: r1,
+                        x_mm: -8.0,
+                        y_mm: 5.0,
+                        rotation_deg: None,
+                    },
+                    crate::mcp::MovePartSpec {
+                        reference: r2,
+                        x_mm: 8.0,
+                        y_mm: 5.0,
+                        rotation_deg: Some(90.0),
+                    },
                 ],
             },
         );
         assert_eq!(moved["ok"], true, "unexpected: {moved}");
         {
-            let Screen::Editor(state) = &mut screen else { unreachable!() };
+            let Screen::Editor(state) = &mut screen else {
+                unreachable!()
+            };
             assert_eq!(state.doc.footprints[0].position.y, 5 * MM);
             assert_eq!(state.doc.footprints[1].rotation_deg, 90.0);
             assert!(state.undo());
@@ -6043,9 +7256,14 @@ mod mcp_handler_tests {
         let template = a_template_with_pads(&screen, 1);
         let result = place(&mut screen, &template, 500.0, 500.0);
         assert!(result["error"].is_string(), "unexpected: {result}");
-        let Screen::Editor(state) = &screen else { unreachable!() };
+        let Screen::Editor(state) = &screen else {
+            unreachable!()
+        };
         assert!(state.doc.footprints.is_empty());
-        assert!(state.undo_stack.is_empty(), "a refused placement must not burn an undo step");
+        assert!(
+            state.undo_stack.is_empty(),
+            "a refused placement must not burn an undo step"
+        );
     }
 
     #[test]
@@ -6059,13 +7277,23 @@ mod mcp_handler_tests {
     fn move_footprint_relocates_and_keeps_rotation() {
         let mut screen = editor_screen();
         let template = a_template_with_pads(&screen, 1);
-        let reference = place(&mut screen, &template, 0.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let reference = place(&mut screen, &template, 0.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let result = move_footprint_write(
             &mut screen,
-            crate::mcp::MoveFootprintArgs { reference: reference.clone(), x_mm: 5.0, y_mm: 5.0, rotation_deg: None },
+            crate::mcp::MoveFootprintArgs {
+                reference: reference.clone(),
+                x_mm: 5.0,
+                y_mm: 5.0,
+                rotation_deg: None,
+            },
         );
         assert_eq!(result["ok"], true, "unexpected: {result}");
-        let Screen::Editor(state) = &screen else { unreachable!() };
+        let Screen::Editor(state) = &screen else {
+            unreachable!()
+        };
         let fp = &state.doc.footprints[0];
         assert_eq!(fp.position, Point::new(5 * MM, 5 * MM));
         assert_eq!(fp.rotation_deg, 0.0);
@@ -6075,10 +7303,16 @@ mod mcp_handler_tests {
     fn remove_footprint_deletes_by_reference() {
         let mut screen = editor_screen();
         let template = a_template_with_pads(&screen, 1);
-        let reference = place(&mut screen, &template, 0.0, 0.0)["reference"].as_str().unwrap().to_string();
-        let result = remove_footprint_write(&mut screen, crate::mcp::RemoveFootprintArgs { reference });
+        let reference = place(&mut screen, &template, 0.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let result =
+            remove_footprint_write(&mut screen, crate::mcp::RemoveFootprintArgs { reference });
         assert_eq!(result["ok"], true, "unexpected: {result}");
-        let Screen::Editor(state) = &screen else { unreachable!() };
+        let Screen::Editor(state) = &screen else {
+            unreachable!()
+        };
         assert!(state.doc.footprints.is_empty());
     }
 
@@ -6086,24 +7320,49 @@ mod mcp_handler_tests {
     fn connect_then_disconnect_then_rename_round_trip() {
         let mut screen = editor_screen();
         let template = a_template_with_pads(&screen, 2);
-        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"].as_str().unwrap().to_string();
-        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         let connected = connect_pins_write(
             &mut screen,
-            crate::mcp::ConnectPinsArgs { ref1: r1.clone(), pin1: "1".into(), ref2: r2.clone(), pin2: "1".into() },
+            crate::mcp::ConnectPinsArgs {
+                ref1: r1.clone(),
+                pin1: "1".into(),
+                ref2: r2.clone(),
+                pin2: "1".into(),
+            },
         );
         assert_eq!(connected["ok"], true, "unexpected: {connected}");
         let auto_name = connected["net"].as_str().unwrap().to_string();
 
-        let renamed = rename_net_write(&mut screen, crate::mcp::RenameNetArgs { net: auto_name, new_name: "DATA".into() });
+        let renamed = rename_net_write(
+            &mut screen,
+            crate::mcp::RenameNetArgs {
+                net: auto_name,
+                new_name: "DATA".into(),
+            },
+        );
         assert_eq!(renamed["ok"], true, "unexpected: {renamed}");
         {
-            let Screen::Editor(state) = &screen else { unreachable!() };
+            let Screen::Editor(state) = &screen else {
+                unreachable!()
+            };
             assert!(state.doc.nets.iter().any(|n| n.name == "DATA"));
         }
 
-        let disconnected = disconnect_pin_write(&mut screen, crate::mcp::DisconnectPinArgs { reference: r2, pin: "1".into() });
+        let disconnected = disconnect_pin_write(
+            &mut screen,
+            crate::mcp::DisconnectPinArgs {
+                reference: r2,
+                pin: "1".into(),
+            },
+        );
         assert_eq!(disconnected["ok"], true, "unexpected: {disconnected}");
         let check = check_board_json(&screen);
         // r2.1 is off the net again, so the board can't be "done".
@@ -6114,11 +7373,22 @@ mod mcp_handler_tests {
     fn add_pin_stitching_via_stitches_one_pin_then_the_batch_skips_it() {
         let mut screen = editor_screen();
         let template = a_template_with_pads(&screen, 2);
-        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"].as_str().unwrap().to_string();
-        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let connected = connect_pins_write(
             &mut screen,
-            crate::mcp::ConnectPinsArgs { ref1: r1.clone(), pin1: "1".into(), ref2: r2, pin2: "1".into() },
+            crate::mcp::ConnectPinsArgs {
+                ref1: r1.clone(),
+                pin1: "1".into(),
+                ref2: r2,
+                pin2: "1".into(),
+            },
         );
         assert_eq!(connected["ok"], true, "{connected}");
         let net = connected["net"].as_str().unwrap().to_string();
@@ -6134,7 +7404,10 @@ mod mcp_handler_tests {
             },
         );
         assert_eq!(one["ok"], true, "{one}");
-        assert!(one["via_x_mm"].is_f64() && one["via_y_mm"].is_f64(), "{one}");
+        assert!(
+            one["via_x_mm"].is_f64() && one["via_y_mm"].is_f64(),
+            "{one}"
+        );
 
         // Batch over the same net: the pad stitched above must be
         // skipped, only the other one gets a fresh via.
@@ -6154,26 +7427,58 @@ mod mcp_handler_tests {
         assert_eq!(batch["skipped_already_stitched"], 1, "{batch}");
         assert_eq!(batch["failed"].as_array().unwrap().len(), 0, "{batch}");
 
-        let Screen::Editor(state) = &mut screen else { unreachable!() };
-        assert_eq!(state.doc.node.iter().filter(|i| matches!(i, Item::Via { .. })).count(), 2);
+        let Screen::Editor(state) = &mut screen else {
+            unreachable!()
+        };
+        assert_eq!(
+            state
+                .doc
+                .node
+                .iter()
+                .filter(|i| matches!(i, Item::Via { .. }))
+                .count(),
+            2
+        );
         // The batch was one undo step: one Ctrl+Z removes exactly the
         // batch's via, the next removes the single-pin one.
         assert!(state.undo());
-        assert_eq!(state.doc.node.iter().filter(|i| matches!(i, Item::Via { .. })).count(), 1);
+        assert_eq!(
+            state
+                .doc
+                .node
+                .iter()
+                .filter(|i| matches!(i, Item::Via { .. }))
+                .count(),
+            1
+        );
         assert!(state.undo());
-        assert_eq!(state.doc.node.iter().filter(|i| matches!(i, Item::Via { .. })).count(), 0);
+        assert_eq!(
+            state
+                .doc
+                .node
+                .iter()
+                .filter(|i| matches!(i, Item::Via { .. }))
+                .count(),
+            0
+        );
     }
 
     #[test]
     fn check_board_reports_ok_only_once_everything_is_wired() {
         let mut screen = editor_screen();
         let check = check_board_json(&screen);
-        assert_eq!(check["ok"], true, "an empty board has nothing unfinished: {check}");
+        assert_eq!(
+            check["ok"], true,
+            "an empty board has nothing unfinished: {check}"
+        );
 
         let template = a_template_with_pads(&screen, 1);
         place(&mut screen, &template, 0.0, 0.0);
         let check = check_board_json(&screen);
-        assert_eq!(check["ok"], false, "an unwired pin must fail verification: {check}");
+        assert_eq!(
+            check["ok"], false,
+            "an unwired pin must fail verification: {check}"
+        );
     }
 
     #[test]
@@ -6182,14 +7487,33 @@ mod mcp_handler_tests {
         // Exactly one pad: a multi-pad part's unused pins would block a
         // straight same-net track between pin 1 of each footprint.
         let template = {
-            let Screen::Editor(state) = &screen else { unreachable!() };
-            state.templates.iter().find(|t| t.pads.len() == 1 && t.holes.is_empty()).expect("single-pad template").name.clone()
+            let Screen::Editor(state) = &screen else {
+                unreachable!()
+            };
+            state
+                .templates
+                .iter()
+                .find(|t| t.pads.len() == 1 && t.holes.is_empty())
+                .expect("single-pad template")
+                .name
+                .clone()
         };
-        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"].as_str().unwrap().to_string();
-        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"].as_str().unwrap().to_string();
+        let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r2 = place(&mut screen, &template, 8.0, 0.0)["reference"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let connected = connect_pins_write(
             &mut screen,
-            crate::mcp::ConnectPinsArgs { ref1: r1, pin1: "1".into(), ref2: r2, pin2: "1".into() },
+            crate::mcp::ConnectPinsArgs {
+                ref1: r1,
+                pin1: "1".into(),
+                ref2: r2,
+                pin2: "1".into(),
+            },
         );
         assert_eq!(connected["ok"], true, "{connected}");
         let net = connected["net"].as_str().unwrap().to_string();
@@ -6217,17 +7541,35 @@ mod mcp_handler_tests {
                 ]
             }]
         });
-        let probed = probe_route_json(&screen, crate::mcp::ProbeRouteArgs { candidates: vec![route.clone()] });
+        let probed = probe_route_json(
+            &screen,
+            crate::mcp::ProbeRouteArgs {
+                candidates: vec![route.clone()],
+            },
+        );
         assert_eq!(probed["results"][0]["ok"], true, "{probed}");
         let committed = commit_route_write(&mut screen, crate::mcp::CommitRouteArgs { route });
         assert_eq!(committed["ok"], true, "{committed}");
-        assert!(get_routing_scene_json(&screen)["open_bridges"].as_array().unwrap().is_empty());
+        assert!(get_routing_scene_json(&screen)["open_bridges"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         let ripped = ripup_wire_write(
             &mut screen,
-            crate::mcp::RipupWireArgs { x_mm: Some(0.0), y_mm: Some(0.0), net: None },
+            crate::mcp::RipupWireArgs {
+                x_mm: Some(0.0),
+                y_mm: Some(0.0),
+                net: None,
+            },
         );
         assert_eq!(ripped["ok"], true, "{ripped}");
-        assert_eq!(get_routing_scene_json(&screen)["open_bridges"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            get_routing_scene_json(&screen)["open_bridges"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -6243,11 +7585,16 @@ mod mcp_handler_tests {
             replace_current: replace,
         };
         let refused = new_board_write(&mut screen, &parts_db, args(None));
-        assert!(refused["error"].as_str().unwrap().contains("replace_current"));
+        assert!(refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("replace_current"));
 
         let created = new_board_write(&mut screen, &parts_db, args(Some(true)));
         assert_eq!(created["ok"], true, "unexpected: {created}");
-        let Screen::Editor(state) = &screen else { panic!("new_board must land in the editor") };
+        let Screen::Editor(state) = &screen else {
+            panic!("new_board must land in the editor")
+        };
         assert!(state.doc.footprints.is_empty());
     }
 
@@ -6258,8 +7605,8 @@ mod mcp_handler_tests {
         let listed = list_parts_json(&screen, &parts_db);
         let parts = listed["parts"].as_array().unwrap();
         assert_eq!(parts.len(), footprint::builtin_templates().len());
-        assert!(parts.iter().all(|p| p["name"].is_string() && p["pad_count"].is_number()));
+        assert!(parts
+            .iter()
+            .all(|p| p["name"].is_string() && p["pad_count"].is_number()));
     }
 }
-
-

@@ -126,7 +126,9 @@ impl PadTemplate {
 fn pad_longest_side(pad: &PadTemplate) -> Unit {
     match pad.shape {
         PadShapeKind::Circle => pad.radius * 2,
-        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => width.max(height),
+        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => {
+            width.max(height)
+        }
     }
 }
 
@@ -136,7 +138,9 @@ fn pad_area_nm2(pad: &PadTemplate) -> i64 {
             let d = pad.radius * 2;
             d * d
         }
-        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => width * height,
+        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => {
+            width * height
+        }
     }
 }
 
@@ -166,7 +170,8 @@ fn looks_like_exposed_pad_name(pad: &PadTemplate) -> bool {
 ///    size floor after EasyEDA rounding
 /// 5. Else Thermal
 pub fn apply_zone_connection_heuristic(pads: &mut [PadTemplate]) {
-    let mut number_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut number_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for pad in pads.iter() {
         *number_counts.entry(pad.number.clone()).or_default() += 1;
     }
@@ -174,7 +179,9 @@ pub fn apply_zone_connection_heuristic(pads: &mut [PadTemplate]) {
     let areas: Vec<i64> = pads.iter().map(pad_area_nm2).collect();
     let mut dominant_center = vec![false; pads.len()];
     if pads.len() >= 3 {
-        let (sum_x, sum_y) = pads.iter().fold((0_i64, 0_i64), |(sx, sy), p| (sx + p.offset.x, sy + p.offset.y));
+        let (sum_x, sum_y) = pads.iter().fold((0_i64, 0_i64), |(sx, sy), p| {
+            (sx + p.offset.x, sy + p.offset.y)
+        });
         let n = pads.len() as i64;
         let cx = sum_x / n;
         let cy = sum_y / n;
@@ -185,13 +192,19 @@ pub fn apply_zone_connection_heuristic(pads: &mut [PadTemplate]) {
         });
         let near = (span / 5).max(MM / 10); // ≤20% of half-span, min 0.1mm
         for i in 0..pads.len() {
-            let mut others: Vec<i64> = areas.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, a)| *a).collect();
+            let mut others: Vec<i64> = areas
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, a)| *a)
+                .collect();
             others.sort_unstable();
             let median = others[others.len() / 2];
             if median <= 0 {
                 continue;
             }
-            let near_center = (pads[i].offset.x - cx).abs() <= near && (pads[i].offset.y - cy).abs() <= near;
+            let near_center =
+                (pads[i].offset.x - cx).abs() <= near && (pads[i].offset.y - cy).abs() <= near;
             if near_center && areas[i] >= median.saturating_mul(4) {
                 dominant_center[i] = true;
             }
@@ -312,24 +325,40 @@ fn union_courtyards(a: Courtyard, b: Courtyard) -> Courtyard {
     let b_max = Point::new(b.center.x + b.width / 2, b.center.y + b.height / 2);
     let min = Point::new(a_min.x.min(b_min.x), a_min.y.min(b_min.y));
     let max = Point::new(a_max.x.max(b_max.x), a_max.y.max(b_max.y));
-    Courtyard { center: Point::new((min.x + max.x) / 2, (min.y + max.y) / 2), width: max.x - min.x, height: max.y - min.y }
+    Courtyard {
+        center: Point::new((min.x + max.x) / 2, (min.y + max.y) / 2),
+        width: max.x - min.x,
+        height: max.y - min.y,
+    }
 }
 
 /// Every plated or mechanical drill this template would place at
 /// `position`/`rotation_deg` -- PTH pads (`hole_diameter`) plus NPTH
 /// [`HoleTemplate`]s. Used by assembly lead-to-hole gates; not emitted
 /// into `Node` as separate `Item::Hole`s for PTH (those stay pads).
-pub fn world_assembly_drills(template: &FootprintTemplate, position: Point, rotation_deg: f64) -> Vec<Circle> {
+pub fn world_assembly_drills(
+    template: &FootprintTemplate,
+    position: Point,
+    rotation_deg: f64,
+) -> Vec<Circle> {
     let mut drills = Vec::new();
     for pad in &template.pads {
-        let Some(drill) = pad.hole_diameter else { continue };
+        let Some(drill) = pad.hole_diameter else {
+            continue;
+        };
         if drill <= 0 {
             continue;
         }
-        drills.push(Circle::new(pad_world_position(pad.offset, position, rotation_deg), drill / 2));
+        drills.push(Circle::new(
+            pad_world_position(pad.offset, position, rotation_deg),
+            drill / 2,
+        ));
     }
     for hole in &template.holes {
-        drills.push(Circle::new(pad_world_position(hole.offset, position, rotation_deg), hole.drill / 2));
+        drills.push(Circle::new(
+            pad_world_position(hole.offset, position, rotation_deg),
+            hole.drill / 2,
+        ));
     }
     drills
 }
@@ -348,7 +377,9 @@ fn mm(v: f64) -> Unit {
 fn pad_local_corners(pad: &PadTemplate) -> [Point; 4] {
     let (half_w, half_h) = match pad.shape {
         PadShapeKind::Circle => (pad.radius, pad.radius),
-        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => (width / 2, height / 2),
+        PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => {
+            (width / 2, height / 2)
+        }
     };
     [
         Point::new(-half_w, -half_h),
@@ -384,8 +415,14 @@ pub fn fallback_courtyard(pads: &[PadTemplate], holes: &[HoleTemplate]) -> Court
     }
     for hole in holes {
         for corner in [
-            Point::new(hole.offset.x - hole.drill / 2, hole.offset.y - hole.drill / 2),
-            Point::new(hole.offset.x + hole.drill / 2, hole.offset.y + hole.drill / 2),
+            Point::new(
+                hole.offset.x - hole.drill / 2,
+                hole.offset.y - hole.drill / 2,
+            ),
+            Point::new(
+                hole.offset.x + hole.drill / 2,
+                hole.offset.y + hole.drill / 2,
+            ),
         ] {
             any = true;
             min.x = min.x.min(corner.x);
@@ -395,9 +432,17 @@ pub fn fallback_courtyard(pads: &[PadTemplate], holes: &[HoleTemplate]) -> Court
         }
     }
     if !any {
-        return Courtyard { center: Point::new(0, 0), width: 0, height: 0 };
+        return Courtyard {
+            center: Point::new(0, 0),
+            width: 0,
+            height: 0,
+        };
     }
-    Courtyard { center: Point::new((min.x + max.x) / 2, (min.y + max.y) / 2), width: max.x - min.x, height: max.y - min.y }
+    Courtyard {
+        center: Point::new((min.x + max.x) / 2, (min.y + max.y) / 2),
+        width: max.x - min.x,
+        height: max.y - min.y,
+    }
 }
 
 /// The world-space courtyard rectangle of `template` placed at
@@ -408,7 +453,11 @@ pub fn fallback_courtyard(pads: &[PadTemplate], holes: &[HoleTemplate]) -> Court
 /// collidable/DRC item (a routed track legitimately runs underneath
 /// one) -- `crate::board_doc`'s own body-vs-body overlap check is the
 /// only consumer.
-pub fn world_courtyard(template: &FootprintTemplate, position: Point, rotation_deg: f64) -> Polygon {
+pub fn world_courtyard(
+    template: &FootprintTemplate,
+    position: Point,
+    rotation_deg: f64,
+) -> Polygon {
     let courtyard = template.courtyard();
     let center = pad_world_position(courtyard.center, position, rotation_deg);
     pad_outline_polygon(courtyard.width, courtyard.height, 0, rotation_deg, center)
@@ -456,7 +505,10 @@ pub fn builtin_templates() -> Vec<FootprintTemplate> {
                     let row_side = if i < 4 { -1.0 } else { 1.0 };
                     let index_in_row = if i < 4 { i } else { 7 - i };
                     PadTemplate::circle(
-                        Point::new(row_side as Unit * mm(2.65), mm(1.27) * (index_in_row as Unit) - mm(1.27 * 1.5)),
+                        Point::new(
+                            row_side as Unit * mm(2.65),
+                            mm(1.27) * (index_in_row as Unit) - mm(1.27 * 1.5),
+                        ),
                         mm(0.3),
                         LayerId::FCu,
                         (i + 1).to_string(),
@@ -467,27 +519,68 @@ pub fn builtin_templates() -> Vec<FootprintTemplate> {
             exclude_from_bom: false,
             explicit_courtyard: None,
         },
-        wire_pad_template(),
+        smd_solder_pad_template(LayerId::FCu),
+        smd_solder_pad_template(LayerId::BCu),
+        wire_pad_template(
+            "Wire pad (PTH, 1.0mm hole)",
+            mm(1.0),
+            mm(1.0),
+            ZoneConnection::Thermal,
+        ),
+        wire_pad_template(
+            "Wire pad (solder, 2mm)",
+            mm(1.25),
+            mm(1.5),
+            ZoneConnection::Thermal,
+        ),
+        wire_pad_template(
+            "Wire pad (PTH, 2.0mm hole)",
+            mm(1.6),
+            mm(2.0),
+            ZoneConnection::Solid,
+        ),
         mounting_hole_template("M2", mm(2.2)),
         mounting_hole_template("M2.5", mm(2.7)),
         mounting_hole_template("M3", mm(3.2)),
     ]
 }
 
-/// A single through-hole solder pad for a wire connection (power input,
-/// ground strap, Litze poked through and soldered, ...) -- the "Lötpads
-/// für Strom usw." gap: a board frequently needs *somewhere* to land a
-/// bare wire that isn't a real LCSC part. Copper is a 2.5 mm circle with
-/// a 1.5 mm plated drill (0.5 mm annular ring, above
-/// [`JlcpcbDfm::MIN_PTH_ANNULAR_RING`]) so ~0.75 mm² Litze fits for
-/// multi-amp LED feeds. The template name keeps the historical
-/// `"…2mm"` suffix for board compatibility. `exclude_from_bom: true`: a
-/// bare solder pad is never a purchasable BOM line.
-fn wire_pad_template() -> FootprintTemplate {
-    let mut pad = PadTemplate::circle(Point::new(0, 0), mm(1.25), LayerId::FCu, "1");
-    pad.hole_diameter = Some(mm(1.5));
+/// SMD solder / test pad (no drill) on one copper face — surface-solder
+/// a thin wire or use as a probe point. 1.5 mm copper, Thermal so a
+/// same-net pour stays solderable. `exclude_from_bom: true`.
+fn smd_solder_pad_template(layer: LayerId) -> FootprintTemplate {
+    let side = match layer {
+        LayerId::FCu => "F.Cu",
+        LayerId::BCu => "B.Cu",
+    };
+    let pad = PadTemplate::circle(Point::new(0, 0), mm(0.75), layer, "1");
     FootprintTemplate {
-        name: "Wire pad (solder, 2mm)".to_string(),
+        name: format!("Solder pad (SMD, 1.5mm, {side})"),
+        reference_prefix: "P".to_string(),
+        pads: vec![pad],
+        holes: Vec::new(),
+        exclude_from_bom: true,
+        explicit_courtyard: None,
+    }
+}
+
+/// A single PTH solder pad for a wire (power, ground strap, Litze).
+/// `copper_radius` / `drill` are already in internal units. The
+/// historical `"Wire pad (solder, 2mm)"` name (2.5 mm copper / 1.5 mm
+/// drill, Thermal) is kept for board compatibility. Large current pads
+/// (`Wire pad (PTH, 2.0mm hole)`) default to Solid so the pour can
+/// carry amps; S/M stay Thermal for hand soldering. `exclude_from_bom`.
+fn wire_pad_template(
+    name: &str,
+    copper_radius: Unit,
+    drill: Unit,
+    zone_connection: ZoneConnection,
+) -> FootprintTemplate {
+    let mut pad = PadTemplate::circle(Point::new(0, 0), copper_radius, LayerId::FCu, "1");
+    pad.hole_diameter = Some(drill);
+    pad.zone_connection = zone_connection;
+    FootprintTemplate {
+        name: name.to_string(),
         reference_prefix: "W".to_string(),
         pads: vec![pad],
         holes: Vec::new(),
@@ -508,7 +601,10 @@ fn mounting_hole_template(screw_size: &str, drill: Unit) -> FootprintTemplate {
         name: format!("Mounting hole ({screw_size}, NPTH)"),
         reference_prefix: "H".to_string(),
         pads: Vec::new(),
-        holes: vec![HoleTemplate { offset: Point::new(0, 0), drill }],
+        holes: vec![HoleTemplate {
+            offset: Point::new(0, 0),
+            drill,
+        }],
         exclude_from_bom: true,
         explicit_courtyard: None,
     }
@@ -520,14 +616,58 @@ fn mounting_hole_template(screw_size: &str, drill: Unit) -> FootprintTemplate {
 /// to let a user register their own simple through-hole parts
 /// (resistors, headers, ...) by hand; full LCSC/EasyEDA downloads live
 /// in `crate::lcsc`.
-pub fn straight_row_template(name: String, reference_prefix: String, pin_count: u32, pitch_mm: f64, pad_radius_mm: f64) -> FootprintTemplate {
+pub fn straight_row_template(
+    name: String,
+    reference_prefix: String,
+    pin_count: u32,
+    pitch_mm: f64,
+    pad_radius_mm: f64,
+) -> FootprintTemplate {
+    straight_row_template_with_hole(
+        name,
+        reference_prefix,
+        pin_count,
+        pitch_mm,
+        pad_radius_mm,
+        None,
+    )
+}
+
+/// [`straight_row_template`] plus an optional plated drill on every pad
+/// (`None` = SMD). Used by the "Add part..." form when the user types a
+/// hole diameter.
+pub fn straight_row_template_with_hole(
+    name: String,
+    reference_prefix: String,
+    pin_count: u32,
+    pitch_mm: f64,
+    pad_radius_mm: f64,
+    hole_diameter_mm: Option<f64>,
+) -> FootprintTemplate {
     let pitch = mm(pitch_mm);
     let radius = mm(pad_radius_mm);
+    let hole = hole_diameter_mm.filter(|d| *d > 0.0).map(mm);
     let span = pitch * (pin_count.max(1) as Unit - 1);
     let pads = (0..pin_count.max(1))
-        .map(|i| PadTemplate::circle(Point::new(pitch * i as Unit - span / 2, 0), radius, LayerId::FCu, (i + 1).to_string()))
+        .map(|i| {
+            let mut pad = PadTemplate::circle(
+                Point::new(pitch * i as Unit - span / 2, 0),
+                radius,
+                LayerId::FCu,
+                (i + 1).to_string(),
+            );
+            pad.hole_diameter = hole;
+            pad
+        })
         .collect();
-    FootprintTemplate { name, reference_prefix, pads, holes: Vec::new(), exclude_from_bom: false, explicit_courtyard: None }
+    FootprintTemplate {
+        name,
+        reference_prefix,
+        pads,
+        holes: Vec::new(),
+        exclude_from_bom: false,
+        explicit_courtyard: None,
+    }
 }
 
 /// Rotates `offset` by `rotation_deg` (counter-clockwise, board-space
@@ -540,7 +680,10 @@ pub fn pad_world_position(offset: Point, position: Point, rotation_deg: f64) -> 
     let (sin, cos) = rad.sin_cos();
     let x = offset.x as f64 * cos - offset.y as f64 * sin;
     let y = offset.x as f64 * sin + offset.y as f64 * cos;
-    Point::new(position.x + x.round() as Unit, position.y + y.round() as Unit)
+    Point::new(
+        position.x + x.round() as Unit,
+        position.y + y.round() as Unit,
+    )
 }
 
 /// Number of straight segments used to polygonize each rounded corner
@@ -572,9 +715,26 @@ const PAD_POLYGON_SAFETY_FACTOR: f64 = 1.02;
 /// (`corner_radius = 0`, a plain sharp-cornered rectangle) and `Oval`
 /// (`corner_radius = min(width, height) / 2`, a full stadium shape)
 /// cases in [`world_items`].
-fn pad_outline_polygon(width: Unit, height: Unit, corner_radius: Unit, rotation_deg: f64, center: Point) -> Polygon {
-    let local = Polygon::rounded_rect(width, height, corner_radius, PAD_POLYGON_SEGMENTS_PER_CORNER);
-    Polygon::new(local.points.into_iter().map(|p| p.rotated(rotation_deg).add(center)).collect())
+fn pad_outline_polygon(
+    width: Unit,
+    height: Unit,
+    corner_radius: Unit,
+    rotation_deg: f64,
+    center: Point,
+) -> Polygon {
+    let local = Polygon::rounded_rect(
+        width,
+        height,
+        corner_radius,
+        PAD_POLYGON_SEGMENTS_PER_CORNER,
+    );
+    Polygon::new(
+        local
+            .points
+            .into_iter()
+            .map(|p| p.rotated(rotation_deg).add(center))
+            .collect(),
+    )
 }
 
 /// Every pad of `template`, placed in world space at `position` rotated
@@ -597,22 +757,38 @@ pub fn world_items(template: &FootprintTemplate, position: Point, rotation_deg: 
         let total_rotation = pad.rotation_deg + rotation_deg;
         let shape = match pad.shape {
             PadShapeKind::Circle => PadShape::Circle(Circle::new(center, pad.radius)),
-            PadShapeKind::Rect { width, height } => {
-                PadShape::Polygon { outline: pad_outline_polygon(width, height, 0, total_rotation, center), center }
-            }
+            PadShapeKind::Rect { width, height } => PadShape::Polygon {
+                outline: pad_outline_polygon(width, height, 0, total_rotation, center),
+                center,
+            },
             PadShapeKind::Oval { width, height } => {
                 let width = (width as f64 * PAD_POLYGON_SAFETY_FACTOR).round() as Unit;
                 let height = (height as f64 * PAD_POLYGON_SAFETY_FACTOR).round() as Unit;
                 let corner_radius = width.min(height) / 2;
-                PadShape::Polygon { outline: pad_outline_polygon(width, height, corner_radius, total_rotation, center), center }
+                PadShape::Polygon {
+                    outline: pad_outline_polygon(
+                        width,
+                        height,
+                        corner_radius,
+                        total_rotation,
+                        center,
+                    ),
+                    center,
+                }
             }
         };
-        Item::Pad { shape, net: None, layer: pad.layer, zone_connection: pad.zone_connection }
+        Item::Pad {
+            shape,
+            net: None,
+            layer: pad.layer,
+            zone_connection: pad.zone_connection,
+            hole_diameter: pad.hole_diameter,
+        }
     });
-    let hole_items = template
-        .holes
-        .iter()
-        .map(|hole| Item::Hole { position: pad_world_position(hole.offset, position, rotation_deg), drill: hole.drill });
+    let hole_items = template.holes.iter().map(|hole| Item::Hole {
+        position: pad_world_position(hole.offset, position, rotation_deg),
+        drill: hole.drill,
+    });
     pad_items.chain(hole_items).collect()
 }
 
@@ -625,12 +801,17 @@ pub fn world_items(template: &FootprintTemplate, position: Point, rotation_deg: 
 /// or a rect/oval's narrower side; a through-hole pad's ring is
 /// measured against that same conservative number (a hole is assumed
 /// centred -- Alladin's pad model has no per-pad hole offset).
-pub fn template_dfm_violations(pads: &[PadTemplate], holes: &[HoleTemplate]) -> Vec<(String, DfmViolation)> {
+pub fn template_dfm_violations(
+    pads: &[PadTemplate],
+    holes: &[HoleTemplate],
+) -> Vec<(String, DfmViolation)> {
     let mut violations = Vec::new();
     for pad in pads {
         let min_dimension = match pad.shape {
             PadShapeKind::Circle => pad.radius * 2,
-            PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => width.min(height),
+            PadShapeKind::Rect { width, height } | PadShapeKind::Oval { width, height } => {
+                width.min(height)
+            }
         };
         let checked = match pad.hole_diameter {
             None => JlcpcbDfm::check_smd_pad(min_dimension),
@@ -664,10 +845,18 @@ pub fn template_dfm_violations(pads: &[PadTemplate], holes: &[HoleTemplate]) -> 
 ///
 /// The rules kept here (drill floor, drill >= pad, NPTH floor) are
 /// model-independent facts a fab cannot ignore.
-pub fn template_dfm_hard_violations(pads: &[PadTemplate], holes: &[HoleTemplate]) -> Vec<(String, DfmViolation)> {
+pub fn template_dfm_hard_violations(
+    pads: &[PadTemplate],
+    holes: &[HoleTemplate],
+) -> Vec<(String, DfmViolation)> {
     template_dfm_violations(pads, holes)
         .into_iter()
-        .filter(|(_, v)| !matches!(v, DfmViolation::PthAnnularRingBelowMin | DfmViolation::SmdPadBelowMin))
+        .filter(|(_, v)| {
+            !matches!(
+                v,
+                DfmViolation::PthAnnularRingBelowMin | DfmViolation::SmdPadBelowMin
+            )
+        })
         .collect()
 }
 
@@ -680,7 +869,11 @@ mod tests {
         let templates = builtin_templates();
         assert!(!templates.is_empty());
         for t in &templates {
-            assert!(!t.pads.is_empty() || !t.holes.is_empty(), "{} has neither pads nor holes", t.name);
+            assert!(
+                !t.pads.is_empty() || !t.holes.is_empty(),
+                "{} has neither pads nor holes",
+                t.name
+            );
             for pad in &t.pads {
                 assert!(pad.radius > 0, "{} has a non-positive pad radius", t.name);
             }
@@ -696,26 +889,54 @@ mod tests {
         // would be unplaceable, so this is a regression tripwire for
         // both the builtins and the gate's own thresholds.
         for t in builtin_templates() {
-            assert!(template_dfm_hard_violations(&t.pads, &t.holes).is_empty(), "{} violates JLCPCB scalar DFM", t.name);
+            assert!(
+                template_dfm_hard_violations(&t.pads, &t.holes).is_empty(),
+                "{} violates JLCPCB scalar DFM",
+                t.name
+            );
         }
     }
 
     #[test]
     fn template_dfm_violations_flags_a_sub_minimum_smd_pad_by_its_number() {
         // 0.1mm radius -> 0.2mm diameter, under the 0.25mm SMD floor.
-        let pads = vec![PadTemplate::circle(Point::new(0, 0), 100_000, LayerId::FCu, "7")];
+        let pads = vec![PadTemplate::circle(
+            Point::new(0, 0),
+            100_000,
+            LayerId::FCu,
+            "7",
+        )];
         let all = template_dfm_violations(&pads, &[]);
-        assert_eq!(all, vec![("pad 7".to_string(), DfmViolation::SmdPadBelowMin)]);
-        assert!(template_dfm_hard_violations(&pads, &[]).is_empty(), "SMD pad floor must stay report-only (fine-pitch QFN)");
+        assert_eq!(
+            all,
+            vec![("pad 7".to_string(), DfmViolation::SmdPadBelowMin)]
+        );
+        assert!(
+            template_dfm_hard_violations(&pads, &[]).is_empty(),
+            "SMD pad floor must stay report-only (fine-pitch QFN)"
+        );
     }
 
     #[test]
     fn template_dfm_violations_measures_a_rect_pad_by_its_narrower_side() {
         let mut pad = PadTemplate::circle(Point::new(0, 0), 100_000, LayerId::FCu, "1");
-        pad.shape = PadShapeKind::Rect { width: 1_000_000, height: 200_000 };
-        assert_eq!(template_dfm_violations(&[pad.clone()], &[]).len(), 1, "a 1.0 x 0.2mm pad is under the floor on its narrow side");
-        pad.shape = PadShapeKind::Rect { width: 1_000_000, height: 250_000 };
-        assert!(template_dfm_violations(&[pad], &[]).is_empty(), "1.0 x 0.25mm sits exactly on the floor");
+        pad.shape = PadShapeKind::Rect {
+            width: 1_000_000,
+            height: 200_000,
+        };
+        assert_eq!(
+            template_dfm_violations(&[pad.clone()], &[]).len(),
+            1,
+            "a 1.0 x 0.2mm pad is under the floor on its narrow side"
+        );
+        pad.shape = PadShapeKind::Rect {
+            width: 1_000_000,
+            height: 250_000,
+        };
+        assert!(
+            template_dfm_violations(&[pad], &[]).is_empty(),
+            "1.0 x 0.25mm sits exactly on the floor"
+        );
     }
 
     #[test]
@@ -726,8 +947,14 @@ mod tests {
         let mut pad = PadTemplate::circle(Point::new(0, 0), 500_000, LayerId::FCu, "1");
         pad.hole_diameter = Some(700_000);
         let pads = vec![pad];
-        assert_eq!(template_dfm_violations(&pads, &[]), vec![("pad 1".to_string(), DfmViolation::PthAnnularRingBelowMin)]);
-        assert!(template_dfm_hard_violations(&pads, &[]).is_empty(), "the PTH ring must stay report-only");
+        assert_eq!(
+            template_dfm_violations(&pads, &[]),
+            vec![("pad 1".to_string(), DfmViolation::PthAnnularRingBelowMin)]
+        );
+        assert!(
+            template_dfm_hard_violations(&pads, &[]).is_empty(),
+            "the PTH ring must stay report-only"
+        );
     }
 
     #[test]
@@ -735,29 +962,51 @@ mod tests {
         let mut pad = PadTemplate::circle(Point::new(0, 0), 500_000, LayerId::FCu, "1");
         pad.hole_diameter = Some(100_000); // under the 0.15mm drill floor
         let pads = vec![pad];
-        assert_eq!(template_dfm_hard_violations(&pads, &[]), vec![("pad 1".to_string(), DfmViolation::PthDrillBelowMin)]);
+        assert_eq!(
+            template_dfm_hard_violations(&pads, &[]),
+            vec![("pad 1".to_string(), DfmViolation::PthDrillBelowMin)]
+        );
     }
 
     #[test]
     fn template_dfm_violations_flags_an_npth_hole_below_its_floor() {
-        let holes = vec![HoleTemplate { offset: Point::new(0, 0), drill: 400_000 }]; // under 0.5mm
-        assert_eq!(template_dfm_violations(&[], &holes), vec![("hole 1".to_string(), DfmViolation::NpthHoleBelowMin)]);
-        assert_eq!(template_dfm_hard_violations(&[], &holes).len(), 1, "a too-small NPTH hole is a hard violation");
+        let holes = vec![HoleTemplate {
+            offset: Point::new(0, 0),
+            drill: 400_000,
+        }]; // under 0.5mm
+        assert_eq!(
+            template_dfm_violations(&[], &holes),
+            vec![("hole 1".to_string(), DfmViolation::NpthHoleBelowMin)]
+        );
+        assert_eq!(
+            template_dfm_hard_violations(&[], &holes).len(),
+            1,
+            "a too-small NPTH hole is a hard violation"
+        );
     }
 
     #[test]
     fn the_mechanical_builtin_templates_are_excluded_from_bom_and_the_electrical_ones_are_not() {
         let templates = builtin_templates();
         for t in &templates {
-            let is_mechanical = t.name.starts_with("Wire pad") || t.name.starts_with("Mounting hole");
-            assert_eq!(t.exclude_from_bom, is_mechanical, "unexpected exclude_from_bom for {}", t.name);
+            let is_mechanical = t.name.starts_with("Wire pad")
+                || t.name.starts_with("Solder pad")
+                || t.name.starts_with("Mounting hole");
+            assert_eq!(
+                t.exclude_from_bom, is_mechanical,
+                "unexpected exclude_from_bom for {}",
+                t.name
+            );
         }
     }
 
     #[test]
     fn mounting_hole_templates_have_a_hole_and_no_pads() {
         let templates = builtin_templates();
-        let holes: Vec<_> = templates.iter().filter(|t| t.name.starts_with("Mounting hole")).collect();
+        let holes: Vec<_> = templates
+            .iter()
+            .filter(|t| t.name.starts_with("Mounting hole"))
+            .collect();
         assert_eq!(holes.len(), 3, "expected M2/M2.5/M3 mounting holes");
         for t in holes {
             assert!(t.pads.is_empty());
@@ -767,12 +1016,60 @@ mod tests {
 
     #[test]
     fn wire_pad_is_pth_with_a_fab_legal_drill_for_litze() {
-        let t = builtin_templates().into_iter().find(|t| t.name.starts_with("Wire pad")).expect("wire pad builtin");
+        let t = builtin_templates()
+            .into_iter()
+            .find(|t| t.name == "Wire pad (solder, 2mm)")
+            .expect("legacy wire pad builtin");
         assert_eq!(t.pads.len(), 1);
         assert_eq!(t.pads[0].hole_diameter, Some(mm(1.5)));
         assert_eq!(t.pads[0].radius, mm(1.25));
-        assert_eq!(JlcpcbDfm::check_pth_pad(t.pads[0].radius * 2, t.pads[0].hole_diameter.unwrap()), Ok(()));
+        assert_eq!(t.pads[0].zone_connection, ZoneConnection::Thermal);
+        assert_eq!(
+            JlcpcbDfm::check_pth_pad(t.pads[0].radius * 2, t.pads[0].hole_diameter.unwrap()),
+            Ok(())
+        );
         assert!(template_dfm_violations(&t.pads, &t.holes).is_empty());
+    }
+
+    #[test]
+    fn solder_pad_set_covers_smd_both_sides_and_three_pth_gauges() {
+        let templates = builtin_templates();
+        let find = |name: &str| {
+            templates
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("missing {name}"))
+        };
+
+        let smd_f = find("Solder pad (SMD, 1.5mm, F.Cu)");
+        assert_eq!(smd_f.pads[0].layer, LayerId::FCu);
+        assert_eq!(smd_f.pads[0].radius, mm(0.75));
+        assert_eq!(smd_f.pads[0].hole_diameter, None);
+        assert_eq!(smd_f.pads[0].zone_connection, ZoneConnection::Thermal);
+
+        let smd_b = find("Solder pad (SMD, 1.5mm, B.Cu)");
+        assert_eq!(smd_b.pads[0].layer, LayerId::BCu);
+        assert_eq!(smd_b.pads[0].hole_diameter, None);
+
+        let small = find("Wire pad (PTH, 1.0mm hole)");
+        assert_eq!(small.pads[0].hole_diameter, Some(mm(1.0)));
+        assert_eq!(small.pads[0].radius, mm(1.0));
+        assert_eq!(small.pads[0].zone_connection, ZoneConnection::Thermal);
+
+        let large = find("Wire pad (PTH, 2.0mm hole)");
+        assert_eq!(large.pads[0].hole_diameter, Some(mm(2.0)));
+        assert_eq!(large.pads[0].radius, mm(1.6));
+        assert_eq!(large.pads[0].zone_connection, ZoneConnection::Solid);
+
+        for t in [small, find("Wire pad (solder, 2mm)"), large] {
+            let pad = &t.pads[0];
+            assert_eq!(
+                JlcpcbDfm::check_pth_pad(pad.radius * 2, pad.hole_diameter.unwrap()),
+                Ok(())
+            );
+            let items = world_items(t, Point::new(0, 0), 0.0);
+            assert_eq!(items[0].layers(), (LayerId::FCu, Some(LayerId::BCu)));
+        }
     }
 
     #[test]
@@ -780,14 +1077,25 @@ mod tests {
         let template = FootprintTemplate {
             name: "test".to_string(),
             reference_prefix: "T".to_string(),
-            pads: vec![PadTemplate::circle(Point::new(0, 0), mm(0.5), LayerId::FCu, "1")],
-            holes: vec![HoleTemplate { offset: Point::new(mm(1.0), 0), drill: mm(2.2) }],
+            pads: vec![PadTemplate::circle(
+                Point::new(0, 0),
+                mm(0.5),
+                LayerId::FCu,
+                "1",
+            )],
+            holes: vec![HoleTemplate {
+                offset: Point::new(mm(1.0), 0),
+                drill: mm(2.2),
+            }],
             exclude_from_bom: false,
             explicit_courtyard: None,
         };
         let items = world_items(&template, Point::new(mm(10.0), mm(10.0)), 0.0);
         assert_eq!(items.len(), 2);
-        let holes: Vec<_> = items.iter().filter(|i| matches!(i, Item::Hole { .. })).collect();
+        let holes: Vec<_> = items
+            .iter()
+            .filter(|i| matches!(i, Item::Hole { .. }))
+            .collect();
         assert_eq!(holes.len(), 1);
         match holes[0] {
             Item::Hole { position, drill } => {
@@ -804,15 +1112,24 @@ mod tests {
             name: "test".to_string(),
             reference_prefix: "T".to_string(),
             pads: Vec::new(),
-            holes: vec![HoleTemplate { offset: Point::new(mm(1.0), 0), drill: mm(2.2) }],
+            holes: vec![HoleTemplate {
+                offset: Point::new(mm(1.0), 0),
+                drill: mm(2.2),
+            }],
             exclude_from_bom: false,
             explicit_courtyard: None,
         };
         let items = world_items(&template, Point::new(0, 0), 90.0);
         match items[0] {
             Item::Hole { position, .. } => {
-                assert!(position.x.abs() < 100, "expected x to vanish, got {position:?}");
-                assert!((position.y - mm(1.0)).abs() < 100, "expected y to become +1mm, got {position:?}");
+                assert!(
+                    position.x.abs() < 100,
+                    "expected x to vanish, got {position:?}"
+                );
+                assert!(
+                    (position.y - mm(1.0)).abs() < 100,
+                    "expected y to become +1mm, got {position:?}"
+                );
             }
             _ => unreachable!(),
         }
@@ -831,7 +1148,10 @@ mod tests {
         let offset = Point::new(mm(1.0), mm(0.0));
         let world = pad_world_position(offset, Point::new(0, 0), 90.0);
         assert!((world.x).abs() < 100, "expected x to vanish, got {world:?}");
-        assert!((world.y - mm(1.0)).abs() < 100, "expected y to become +1mm, got {world:?}");
+        assert!(
+            (world.y - mm(1.0)).abs() < 100,
+            "expected y to become +1mm, got {world:?}"
+        );
     }
 
     #[test]
@@ -839,7 +1159,9 @@ mod tests {
         let template = &builtin_templates()[0];
         let items = world_items(template, Point::new(0, 0), 0.0);
         assert_eq!(items.len(), template.pads.len());
-        assert!(items.iter().all(|item| matches!(item, Item::Pad { net: None, .. })));
+        assert!(items
+            .iter()
+            .all(|item| matches!(item, Item::Pad { net: None, .. })));
     }
 
     #[test]
@@ -854,11 +1176,20 @@ mod tests {
             ],
             holes: Vec::new(),
             exclude_from_bom: false,
-            explicit_courtyard: Some(Courtyard { center: Point::new(0, 0), width: mm(2.0), height: mm(2.0) }),
+            explicit_courtyard: Some(Courtyard {
+                center: Point::new(0, 0),
+                width: mm(2.0),
+                height: mm(2.0),
+            }),
         };
         let c = template.courtyard();
         let pads = fallback_courtyard(&template.pads, &template.holes);
-        assert!(c.width >= pads.width, "silk must not shrink below pad bbox, got {} vs {}", c.width, pads.width);
+        assert!(
+            c.width >= pads.width,
+            "silk must not shrink below pad bbox, got {} vs {}",
+            c.width,
+            pads.width
+        );
         assert!(c.height >= pads.height);
     }
 
@@ -867,10 +1198,19 @@ mod tests {
         let template = FootprintTemplate {
             name: "t".into(),
             reference_prefix: "U".into(),
-            pads: vec![PadTemplate::circle(Point::new(0, 0), mm(0.5), LayerId::FCu, "1")],
+            pads: vec![PadTemplate::circle(
+                Point::new(0, 0),
+                mm(0.5),
+                LayerId::FCu,
+                "1",
+            )],
             holes: Vec::new(),
             exclude_from_bom: false,
-            explicit_courtyard: Some(Courtyard { center: Point::new(0, 0), width: mm(8.0), height: mm(4.0) }),
+            explicit_courtyard: Some(Courtyard {
+                center: Point::new(0, 0),
+                width: mm(8.0),
+                height: mm(4.0),
+            }),
         };
         let c = template.courtyard();
         assert_eq!(c.width, mm(8.0));
@@ -889,7 +1229,11 @@ mod tests {
     #[test]
     fn straight_row_template_clamps_to_at_least_one_pin() {
         let t = straight_row_template("weird".to_string(), "X".to_string(), 0, 2.0, 0.5);
-        assert_eq!(t.pads.len(), 1, "zero pins doesn't make sense, must fall back to one");
+        assert_eq!(
+            t.pads.len(),
+            1,
+            "zero pins doesn't make sense, must fall back to one"
+        );
     }
 
     #[test]
@@ -898,7 +1242,11 @@ mod tests {
             let numbers: Vec<String> = t.pads.iter().map(|p| p.number.clone()).collect();
             let expected: Vec<String> = (1..=t.pads.len()).map(|n| n.to_string()).collect();
             assert_eq!(numbers, expected, "{} isn't numbered 1, 2, 3, ...", t.name);
-            assert!(t.pads.iter().all(|p| p.shape == PadShapeKind::Circle), "{} pads must render as plain circles", t.name);
+            assert!(
+                t.pads.iter().all(|p| p.shape == PadShapeKind::Circle),
+                "{} pads must render as plain circles",
+                t.name
+            );
         }
     }
 
@@ -951,8 +1299,13 @@ mod tests {
             explicit_courtyard: None,
         };
         let items = world_items(&template, Point::new(mm(10.0), mm(10.0)), 0.0);
-        let Item::Pad { shape, .. } = &items[0] else { panic!("expected a pad") };
-        assert_eq!(*shape, PadShape::Circle(Circle::new(Point::new(mm(11.0), mm(10.0)), mm(0.5))));
+        let Item::Pad { shape, .. } = &items[0] else {
+            panic!("expected a pad")
+        };
+        assert_eq!(
+            *shape,
+            PadShape::Circle(Circle::new(Point::new(mm(11.0), mm(10.0)), mm(0.5)))
+        );
     }
 
     #[test]
@@ -966,8 +1319,12 @@ mod tests {
             explicit_courtyard: None,
         };
         let items = world_items(&template, Point::new(0, 0), 0.0);
-        let Item::Pad { shape, .. } = &items[0] else { panic!("expected a pad") };
-        let PadShape::Polygon { outline, center } = shape else { panic!("a rect pad must collide as a polygon, not a circle") };
+        let Item::Pad { shape, .. } = &items[0] else {
+            panic!("expected a pad")
+        };
+        let PadShape::Polygon { outline, center } = shape else {
+            panic!("a rect pad must collide as a polygon, not a circle")
+        };
         assert_eq!(*center, Point::new(0, 0));
         // A 2mm x 1mm rect's corner must reach its own half-width/half-height
         // exactly (sharp corners, no rounding, no safety-factor inflation --
@@ -979,8 +1336,14 @@ mod tests {
             "expected a sharp corner at the rect's true half-width/half-height, got {:?}",
             outline.points
         );
-        assert!(outline.contains_point(Point::new(mm(0.9), mm(0.4))), "must cover copper well inside the true rectangle");
-        assert!(!outline.contains_point(Point::new(mm(1.1), 0)), "must not extend past the rectangle's true edge");
+        assert!(
+            outline.contains_point(Point::new(mm(0.9), mm(0.4))),
+            "must cover copper well inside the true rectangle"
+        );
+        assert!(
+            !outline.contains_point(Point::new(mm(1.1), 0)),
+            "must not extend past the rectangle's true edge"
+        );
     }
 
     #[test]
@@ -998,10 +1361,20 @@ mod tests {
             explicit_courtyard: None,
         };
         let items = world_items(&template, Point::new(0, 0), 90.0);
-        let Item::Pad { shape, .. } = &items[0] else { panic!("expected a pad") };
-        let PadShape::Polygon { outline, .. } = shape else { panic!("expected a polygon") };
-        assert!(outline.contains_point(Point::new(mm(0.9), 0)), "long axis should have rotated back onto X");
-        assert!(!outline.contains_point(Point::new(0, mm(0.9))), "short axis should now be along Y");
+        let Item::Pad { shape, .. } = &items[0] else {
+            panic!("expected a pad")
+        };
+        let PadShape::Polygon { outline, .. } = shape else {
+            panic!("expected a polygon")
+        };
+        assert!(
+            outline.contains_point(Point::new(mm(0.9), 0)),
+            "long axis should have rotated back onto X"
+        );
+        assert!(
+            !outline.contains_point(Point::new(0, mm(0.9))),
+            "short axis should now be along Y"
+        );
     }
 
     #[test]
@@ -1015,13 +1388,20 @@ mod tests {
             explicit_courtyard: None,
         };
         let items = world_items(&template, Point::new(0, 0), 0.0);
-        let Item::Pad { shape, .. } = &items[0] else { panic!("expected a pad") };
-        let PadShape::Polygon { outline, center } = shape else { panic!("an oval pad must collide as a polygon, not a circle") };
+        let Item::Pad { shape, .. } = &items[0] else {
+            panic!("expected a pad")
+        };
+        let PadShape::Polygon { outline, center } = shape else {
+            panic!("an oval pad must collide as a polygon, not a circle")
+        };
         assert_eq!(*center, Point::new(0, 0));
         // The true oval's rightmost point is exactly at x = 1mm; the
         // polygonized, safety-factor-inflated outline must fully enclose
         // it (reach at least as far), never stop a hair short.
-        assert!(outline.contains_point(Point::new(mm(1.0) - 1000, 0)), "must not under-cover the oval's true long-axis tip");
+        assert!(
+            outline.contains_point(Point::new(mm(1.0) - 1000, 0)),
+            "must not under-cover the oval's true long-axis tip"
+        );
         assert!(outline.contains_point(Point::new(0, 0)));
     }
 
@@ -1069,9 +1449,21 @@ mod tests {
         ];
         apply_zone_connection_heuristic(&mut pads);
         assert_eq!(pads[0].zone_connection, ZoneConnection::Thermal);
-        assert_eq!(pads[1].zone_connection, ZoneConnection::Solid, "EP grid pad 9");
-        assert_eq!(pads[2].zone_connection, ZoneConnection::Solid, "EP grid pad 9");
-        assert_eq!(pads[3].zone_connection, ZoneConnection::Solid, "large pad ≥ 2mm");
+        assert_eq!(
+            pads[1].zone_connection,
+            ZoneConnection::Solid,
+            "EP grid pad 9"
+        );
+        assert_eq!(
+            pads[2].zone_connection,
+            ZoneConnection::Solid,
+            "EP grid pad 9"
+        );
+        assert_eq!(
+            pads[3].zone_connection,
+            ZoneConnection::Solid,
+            "large pad ≥ 2mm"
+        );
     }
 
     #[test]
@@ -1088,7 +1480,11 @@ mod tests {
             zone_connection: ZoneConnection::Thermal,
         }];
         apply_zone_connection_heuristic(&mut named);
-        assert_eq!(named[0].zone_connection, ZoneConnection::Solid, "pad number EP");
+        assert_eq!(
+            named[0].zone_connection,
+            ZoneConnection::Solid,
+            "pad number EP"
+        );
 
         // RP2040-style: many tiny edge pads + one large center numbered "57".
         let mut qfn = Vec::new();
@@ -1104,7 +1500,13 @@ mod tests {
             qfn.push(p);
         }
         apply_zone_connection_heuristic(&mut qfn);
-        assert_eq!(qfn[0].zone_connection, ZoneConnection::Solid, "dominant center / ≥2mm EP");
-        assert!(qfn[1..].iter().all(|p| p.zone_connection == ZoneConnection::Thermal));
+        assert_eq!(
+            qfn[0].zone_connection,
+            ZoneConnection::Solid,
+            "dominant center / ≥2mm EP"
+        );
+        assert!(qfn[1..]
+            .iter()
+            .all(|p| p.zone_connection == ZoneConnection::Thermal));
     }
 }

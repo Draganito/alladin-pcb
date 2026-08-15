@@ -22,8 +22,8 @@
 //! treated as an obstacle here -- only `Pad`/`Via`/`Track`/`Hole`).
 
 use alladin_core::{thermal, Item, LayerId, NetId, Node, PadShape, RuleResolver, ZoneConnection};
-use alladin_geom::{Circle, Point, Polygon, Unit, MM};
 use alladin_geom::fill;
+use alladin_geom::{Circle, Point, Polygon, Unit, MM};
 
 /// Pour keep-out from the absolute board outline. Same 1.0 mm comfort
 /// as MCP routing's edge default (fab hard floor for pads/tracks/vias
@@ -31,7 +31,8 @@ use alladin_geom::fill;
 pub const ZONE_EDGE_COMFORT_MARGIN: Unit = MM;
 
 use crate::thermal_relief::{
-    first_illegal_thermal_on_layer, free_spoke_directions_in_node, pad_extent_along, pad_local_x, self_exclude, MIN_FREE_SPOKE_DIRS,
+    first_illegal_thermal_on_layer, free_spoke_directions_in_node, pad_extent_along, pad_local_x,
+    self_exclude, MIN_FREE_SPOKE_DIRS,
 };
 
 /// Why [`fill_zone`] refused to produce copper.
@@ -69,7 +70,10 @@ fn circle_polygon(center: Point, radius: Unit) -> Polygon {
     let points = (0..ZONE_CIRCLE_SEGMENTS)
         .map(|k| {
             let angle = std::f64::consts::TAU * k as f64 / ZONE_CIRCLE_SEGMENTS as f64;
-            Point::new(center.x + (radius as f64 * angle.cos()).round() as Unit, center.y + (radius as f64 * angle.sin()).round() as Unit)
+            Point::new(
+                center.x + (radius as f64 * angle.cos()).round() as Unit,
+                center.y + (radius as f64 * angle.sin()).round() as Unit,
+            )
         })
         .collect();
     Polygon::new(points)
@@ -88,7 +92,12 @@ fn oriented_spoke_stub(center: Point, ux: f64, uy: f64, length: Unit, width: Uni
             center.y + (along * uy + across * py).round() as Unit,
         )
     };
-    Polygon::new(vec![corner(0.0, -hw), corner(hl, -hw), corner(hl, hw), corner(0.0, hw)])
+    Polygon::new(vec![
+        corner(0.0, -hw),
+        corner(hl, -hw),
+        corner(hl, hw),
+        corner(0.0, hw),
+    ])
 }
 
 /// The exact stadium/capsule outline of a track segment from `a` to `b`
@@ -111,7 +120,10 @@ fn capsule_polygon(a: Point, b: Point, radius: Unit) -> Polygon {
     let arc = |center: Point, start: f64, points: &mut Vec<Point>| {
         for k in 0..=half {
             let angle = start + std::f64::consts::PI * (k as f64) / (half as f64);
-            points.push(Point::new(center.x + (radius as f64 * angle.cos()).round() as Unit, center.y + (radius as f64 * angle.sin()).round() as Unit));
+            points.push(Point::new(
+                center.x + (radius as f64 * angle.cos()).round() as Unit,
+                center.y + (radius as f64 * angle.sin()).round() as Unit,
+            ));
         }
     };
     // The cap around `b` faces away from `a` (sweeps through `base`);
@@ -138,10 +150,20 @@ fn item_on_layer(item: &Item, layer: LayerId) -> bool {
 /// for "this item kind vs. a zone".
 fn obstacle_polygon(item: &Item, clearance: Unit) -> Option<Polygon> {
     match item {
-        Item::Pad { shape: PadShape::Circle(c), .. } => Some(circle_polygon(c.center, c.radius + clearance)),
-        Item::Pad { shape: PadShape::Polygon { outline, .. }, .. } => fill::buffer(outline, clearance).into_iter().next(),
+        Item::Pad {
+            shape: PadShape::Circle(c),
+            ..
+        } => Some(circle_polygon(c.center, c.radius + clearance)),
+        Item::Pad {
+            shape: PadShape::Polygon { outline, .. },
+            ..
+        } => fill::buffer(outline, clearance).into_iter().next(),
         Item::Via { shape, .. } => Some(circle_polygon(shape.center, shape.radius + clearance)),
-        Item::Track { shape, .. } => Some(capsule_polygon(shape.a, shape.b, shape.width / 2 + clearance)),
+        Item::Track { shape, .. } => Some(capsule_polygon(
+            shape.a,
+            shape.b,
+            shape.width / 2 + clearance,
+        )),
         // A mounting hole keeps the pour out of the full screw-head
         // circle (radius = drill diameter, matching
         // `alladin_core::hole_keepout_circle`), not just the drilled
@@ -161,13 +183,23 @@ fn thermal_geometry_for_pad(
     spoke_width: Unit,
     exclude_centers: &[(Unit, Unit)],
 ) -> Option<(Polygon, Vec<Polygon>)> {
-    let Item::Pad { shape, .. } = item else { return None };
+    let Item::Pad { shape, .. } = item else {
+        return None;
+    };
     let (ux, uy) = pad_local_x(shape);
     let dirs = [(ux, uy), (-ux, -uy), (-uy, ux), (uy, -ux)];
     let free: Vec<(f64, f64)> = dirs
         .into_iter()
         .filter(|(dx, dy)| {
-            crate::thermal_relief::spoke_direction_free(shape, *dx, *dy, layer, spoke_width, node.iter(), exclude_centers)
+            crate::thermal_relief::spoke_direction_free(
+                shape,
+                *dx,
+                *dy,
+                layer,
+                spoke_width,
+                node.iter(),
+                exclude_centers,
+            )
         })
         .collect();
     debug_assert!(free.len() >= MIN_FREE_SPOKE_DIRS);
@@ -204,7 +236,9 @@ pub fn fill_zone(
     spoke_width: Unit,
     exclude_for_center: &dyn Fn(Point) -> Vec<(Unit, Unit)>,
 ) -> Result<Vec<Item>, FillZoneError> {
-    if let Some(center) = first_illegal_thermal_on_layer(node, layer, net, spoke_width, exclude_for_center) {
+    if let Some(center) =
+        first_illegal_thermal_on_layer(node, layer, net, spoke_width, exclude_for_center)
+    {
         return Err(FillZoneError::IllegalThermal { center });
     }
 
@@ -227,7 +261,11 @@ pub fn fill_zone(
     // A zero-geometry stand-in purely to select `RuleResolver::clearance`'s
     // "zone vs. X" match arms (see `alladin_core::JlcpcbClearance::clearance`)
     // -- its own outline/net content is never inspected, only its variant.
-    let zone_stub = Item::Zone { outline: Polygon::new(Vec::new()), layer, net: None };
+    let zone_stub = Item::Zone {
+        outline: Polygon::new(Vec::new()),
+        layer,
+        net: None,
+    };
 
     let mut obstacles: Vec<Polygon> = node
         .iter()
@@ -237,8 +275,19 @@ pub fn fill_zone(
         .collect();
 
     let mut spokes: Vec<Polygon> = Vec::new();
-    for item in node.iter().filter(|item| item.net() == Some(net)).filter(|item| item_on_layer(item, layer)) {
-        let Item::Pad { zone_connection, shape, .. } = item else { continue };
+    for item in node
+        .iter()
+        .filter(|item| item.net() == Some(net))
+        .filter(|item| item_on_layer(item, layer))
+    {
+        let Item::Pad {
+            zone_connection,
+            shape,
+            ..
+        } = item
+        else {
+            continue;
+        };
         if *zone_connection != ZoneConnection::Thermal {
             continue;
         }
@@ -249,7 +298,10 @@ pub fn fill_zone(
         spokes.extend(pad_spokes);
     }
 
-    let obstacle_union: Vec<Polygon> = fill::union(&obstacles).iter().map(fill::FilledRegion::sealed).collect();
+    let obstacle_union: Vec<Polygon> = fill::union(&obstacles)
+        .iter()
+        .map(fill::FilledRegion::sealed)
+        .collect();
 
     let mut base: Vec<Polygon> = clipped_sealed
         .iter()
@@ -260,11 +312,24 @@ pub fn fill_zone(
     if !spokes.is_empty() {
         let mut with_spokes = base;
         with_spokes.extend(spokes);
-        let united: Vec<Polygon> = fill::union(&with_spokes).iter().map(fill::FilledRegion::sealed).collect();
-        base = fill::intersection(&united, &clipped_sealed).into_iter().map(|r| r.sealed()).collect();
+        let united: Vec<Polygon> = fill::union(&with_spokes)
+            .iter()
+            .map(fill::FilledRegion::sealed)
+            .collect();
+        base = fill::intersection(&united, &clipped_sealed)
+            .into_iter()
+            .map(|r| r.sealed())
+            .collect();
     }
 
-    Ok(base.into_iter().map(|outline| Item::Zone { outline, layer, net: Some(net) }).collect())
+    Ok(base
+        .into_iter()
+        .map(|outline| Item::Zone {
+            outline,
+            layer,
+            net: Some(net),
+        })
+        .collect())
 }
 
 /// [`fill_zone`] with self-center-only excludes (no multi-pad siblings).
@@ -277,7 +342,16 @@ pub fn fill_zone_simple(
     resolver: &dyn RuleResolver,
     spoke_width: Unit,
 ) -> Result<Vec<Item>, FillZoneError> {
-    fill_zone(outline, layer, net, board_outline, node, resolver, spoke_width, &|c| self_exclude(c))
+    fill_zone(
+        outline,
+        layer,
+        net,
+        board_outline,
+        node,
+        resolver,
+        spoke_width,
+        &|c| self_exclude(c),
+    )
 }
 
 #[cfg(test)]
@@ -291,7 +365,32 @@ mod tests {
     }
 
     fn fill(outline: &Polygon, board: &[Polygon], node: &Node) -> Result<Vec<Item>, FillZoneError> {
-        fill_zone_simple(outline, LayerId::FCu, NetId(1), board, node, &JlcpcbClearance, default_spoke())
+        fill_zone_simple(
+            outline,
+            LayerId::FCu,
+            NetId(1),
+            board,
+            node,
+            &JlcpcbClearance,
+            default_spoke(),
+        )
+    }
+
+    fn fill_on(
+        outline: &Polygon,
+        board: &[Polygon],
+        node: &Node,
+        layer: LayerId,
+    ) -> Result<Vec<Item>, FillZoneError> {
+        fill_zone_simple(
+            outline,
+            layer,
+            NetId(1),
+            board,
+            node,
+            &JlcpcbClearance,
+            default_spoke(),
+        )
     }
 
     fn square(cx: f64, cy: f64, half: f64) -> Polygon {
@@ -323,12 +422,23 @@ mod tests {
         let node = Node::new();
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, net, layer } = &islands[0] else { panic!("expected a zone") };
+        let Item::Zone {
+            outline: filled,
+            net,
+            layer,
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
         assert_eq!(*net, Some(NetId(1)));
         assert_eq!(*layer, LayerId::FCu);
         // 20×20 outline inset by 1 mm comfort → ~18×18 (round join shaves corners).
         let expected = 18.0 * 18.0;
-        assert!((area_mm2(filled) - expected).abs() < 8.0, "area {} should be near {expected}", area_mm2(filled));
+        assert!(
+            (area_mm2(filled) - expected).abs() < 8.0,
+            "area {} should be near {expected}",
+            area_mm2(filled)
+        );
         assert!(filled.contains_point(Point::new(0, 0)));
     }
 
@@ -339,7 +449,12 @@ mod tests {
         let node = Node::new();
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
         // Clipped to 10×10 then inset 1 mm → ~8×8.
         let expected = 8.0 * 8.0;
         assert!(
@@ -361,7 +476,12 @@ mod tests {
         let node = Node::new();
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
         assert!(filled.contains_point(Point::new(0, 0)));
         assert!(
             filled.contains_point(Point::new((8 * MM) as Unit, 0)),
@@ -384,18 +504,31 @@ mod tests {
             net: Some(NetId(2)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
 
-        assert!(!filled.contains_point(Point::new(0, 0)), "the pad's own footprint must read as excluded");
+        assert!(
+            !filled.contains_point(Point::new(0, 0)),
+            "the pad's own footprint must read as excluded"
+        );
         let clearance_mm = JlcpcbClearance::PAD_TO_TRACK as f64 / MM as f64;
         let expected_hole_area = std::f64::consts::PI * (1.0 + clearance_mm).powi(2);
         // Comfort-inset ~18×18 minus the (pad radius + clearance) circle.
         let expected = 18.0 * 18.0 - expected_hole_area;
-        assert!((area_mm2(filled) - expected).abs() < 10.0, "area {} should be close to {expected}", area_mm2(filled));
+        assert!(
+            (area_mm2(filled) - expected).abs() < 10.0,
+            "area {} should be close to {expected}",
+            area_mm2(filled)
+        );
     }
 
     #[test]
@@ -408,12 +541,21 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Solid,
+            hole_diameter: None,
         });
 
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
-        assert!(filled.contains_point(Point::new(0, 0)), "a solid same-net pad must stay solidly connected, not excluded");
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
+        assert!(
+            filled.contains_point(Point::new(0, 0)),
+            "a solid same-net pad must stay solidly connected, not excluded"
+        );
     }
 
     #[test]
@@ -427,19 +569,31 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
 
         // Mid-gap on the diagonal (between spokes): must be empty copper.
         let gap_mid = pad_radius + thermal::GAP / 2;
         let diag = ((gap_mid as f64) / std::f64::consts::SQRT_2).round() as Unit;
-        assert!(!filled.contains_point(Point::new(diag, diag)), "thermal gap between spokes must clear the pour");
+        assert!(
+            !filled.contains_point(Point::new(diag, diag)),
+            "thermal gap between spokes must clear the pour"
+        );
         // On the +X spoke, just outside the pad: must be pour copper.
         let on_spoke = Point::new(pad_radius + thermal::GAP / 2, 0);
-        assert!(filled.contains_point(on_spoke), "thermal spoke must reconnect pad to pour");
+        assert!(
+            filled.contains_point(on_spoke),
+            "thermal spoke must reconnect pad to pour"
+        );
         // Far from the pad: pour remains.
         assert!(filled.contains_point(Point::new(5 * MM, 5 * MM)));
     }
@@ -463,6 +617,7 @@ mod tests {
                 net: Some(NetId(1)),
                 layer: LayerId::FCu,
                 zone_connection: ZoneConnection::Thermal,
+                hole_diameter: None,
             });
         }
 
@@ -483,7 +638,12 @@ mod tests {
         let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)];
         let points: Vec<Point> = corners
             .into_iter()
-            .map(|(x, y)| Point::new((x * c - y * s).round() as Unit, (x * s + y * c).round() as Unit))
+            .map(|(x, y)| {
+                Point::new(
+                    (x * c - y * s).round() as Unit,
+                    (x * s + y * c).round() as Unit,
+                )
+            })
             .collect();
         let shape = PadShape::Polygon {
             outline: Polygon::new(points),
@@ -494,11 +654,17 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
 
         // Local +X is first edge direction: (-hw,-hh)->(hw,-hh) rotated 45°
         // → (cos, sin) = (√2/2, √2/2).
@@ -509,11 +675,17 @@ mod tests {
             ((extent + thermal::GAP / 2) as f64 * ux).round() as Unit,
             ((extent + thermal::GAP / 2) as f64 * uy).round() as Unit,
         );
-        assert!(filled.contains_point(on_local), "spoke must follow rotated pad local axis");
+        assert!(
+            filled.contains_point(on_local),
+            "spoke must follow rotated pad local axis"
+        );
 
         // World +X mid-gap (between local axes at 45°): should be empty.
         let on_world = Point::new(extent + thermal::GAP / 2, 0);
-        assert!(!filled.contains_point(on_world), "diagonal/world gap between local spokes must stay empty");
+        assert!(
+            !filled.contains_point(on_world),
+            "diagonal/world gap between local spokes must stay empty"
+        );
     }
 
     #[test]
@@ -531,12 +703,14 @@ mod tests {
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         node.add(Item::Pad {
             shape: PadShape::Circle(Circle::new(b, r)),
             net: Some(NetId(1)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         let siblings = [(a.x, a.y), (b.x, b.y)];
         let islands = fill_zone(
@@ -560,7 +734,13 @@ mod tests {
         // With siblings excluded each pad still has ≥2 free dirs (+Y/-Y at least).
         let shape_a = PadShape::Circle(Circle::new(a, r));
         assert!(
-            free_spoke_directions_in_node(&shape_a, LayerId::FCu, default_spoke(), &node, &siblings) >= MIN_FREE_SPOKE_DIRS
+            free_spoke_directions_in_node(
+                &shape_a,
+                LayerId::FCu,
+                default_spoke(),
+                &node,
+                &siblings
+            ) >= MIN_FREE_SPOKE_DIRS
         );
     }
 
@@ -574,12 +754,21 @@ mod tests {
             net: Some(NetId(2)),
             layer: LayerId::BCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
 
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
-        assert!(filled.contains_point(Point::new(0, 0)), "a different-layer obstacle must not affect this layer's fill");
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
+        assert!(
+            filled.contains_point(Point::new(0, 0)),
+            "a different-layer obstacle must not affect this layer's fill"
+        );
     }
 
     #[test]
@@ -596,8 +785,16 @@ mod tests {
 
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
-        assert!(!filled.contains_point(Point::new(0, 0)), "a different-net track must clear a corridor through the pour");
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
+        assert!(
+            !filled.contains_point(Point::new(0, 0)),
+            "a different-net track must clear a corridor through the pour"
+        );
     }
 
     #[test]
@@ -612,8 +809,16 @@ mod tests {
         });
         let islands = fill(&outline, &board, &node).unwrap();
         assert_eq!(islands.len(), 1);
-        let Item::Zone { outline: filled, .. } = &islands[0] else { panic!("expected a zone") };
-        assert!(filled.contains_point(Point::new(0, 0)), "same-net vias stay solid (stitching)");
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
+        assert!(
+            filled.contains_point(Point::new(0, 0)),
+            "same-net vias stay solid (stitching)"
+        );
     }
 
     #[test]
@@ -627,6 +832,7 @@ mod tests {
             net: Some(NetId(2)),
             layer: LayerId::FCu,
             zone_connection: ZoneConnection::Thermal,
+            hole_diameter: None,
         });
         assert!(fill(&outline, &board, &node).unwrap().is_empty());
     }
@@ -636,5 +842,84 @@ mod tests {
         assert_eq!(thermal::spoke_width(100_000), thermal::SPOKE_WIDTH);
         assert_eq!(thermal::spoke_width(160_000), thermal::SPOKE_WIDTH);
         assert_eq!(thermal::spoke_width(250_000), 250_000);
+    }
+
+    fn pth_pad(net: NetId, zone_connection: ZoneConnection) -> Item {
+        Item::Pad {
+            shape: PadShape::Circle(Circle::new(Point::new(0, 0), MM)),
+            net: Some(net),
+            layer: LayerId::FCu,
+            zone_connection,
+            hole_diameter: Some(MM),
+        }
+    }
+
+    #[test]
+    fn pth_thermal_pad_gets_relief_on_both_copper_layers() {
+        let outline = square(0.0, 0.0, 10.0);
+        let board = vec![square(0.0, 0.0, 50.0)];
+        let mut node = Node::new();
+        node.add(pth_pad(NetId(1), ZoneConnection::Thermal));
+
+        let pad_radius = MM;
+        let gap_mid = pad_radius + thermal::GAP / 2;
+        let diag = ((gap_mid as f64) / std::f64::consts::SQRT_2).round() as Unit;
+        let on_spoke = Point::new(pad_radius + thermal::GAP / 2, 0);
+        for layer in [LayerId::FCu, LayerId::BCu] {
+            let islands = fill_on(&outline, &board, &node, layer).unwrap();
+            assert_eq!(islands.len(), 1, "{layer:?}");
+            let Item::Zone {
+                outline: filled, ..
+            } = &islands[0]
+            else {
+                panic!("expected a zone")
+            };
+            assert!(
+                !filled.contains_point(Point::new(diag, diag)),
+                "thermal PTH gap must clear the pour on {layer:?}"
+            );
+            assert!(
+                filled.contains_point(on_spoke),
+                "thermal PTH spoke must reconnect on {layer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pth_solid_pad_stays_flooded_on_back_copper() {
+        let outline = square(0.0, 0.0, 10.0);
+        let board = vec![square(0.0, 0.0, 50.0)];
+        let mut node = Node::new();
+        node.add(pth_pad(NetId(1), ZoneConnection::Solid));
+        let islands = fill_on(&outline, &board, &node, LayerId::BCu).unwrap();
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
+        assert!(
+            filled.contains_point(Point::new(0, 0)),
+            "solid PTH must flood on B.Cu"
+        );
+    }
+
+    #[test]
+    fn pth_foreign_net_is_cleared_from_a_back_copper_pour() {
+        let outline = square(0.0, 0.0, 10.0);
+        let board = vec![square(0.0, 0.0, 50.0)];
+        let mut node = Node::new();
+        node.add(pth_pad(NetId(2), ZoneConnection::Thermal));
+        let islands = fill_on(&outline, &board, &node, LayerId::BCu).unwrap();
+        let Item::Zone {
+            outline: filled, ..
+        } = &islands[0]
+        else {
+            panic!("expected a zone")
+        };
+        assert!(
+            !filled.contains_point(Point::new(0, 0)),
+            "a different-net PTH must not short into a B.Cu plane"
+        );
     }
 }

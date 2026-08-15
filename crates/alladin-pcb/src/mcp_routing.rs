@@ -45,8 +45,15 @@ pub(crate) fn parse_layer(s: &str) -> Result<LayerId, String> {
     }
 }
 
-pub(crate) fn pad_label(doc: &BoardDoc, templates: &[FootprintTemplate], pad_id: ItemId) -> Option<(String, String)> {
-    let footprint = doc.footprints.iter().find(|f| f.pad_item_ids.contains(&pad_id))?;
+pub(crate) fn pad_label(
+    doc: &BoardDoc,
+    templates: &[FootprintTemplate],
+    pad_id: ItemId,
+) -> Option<(String, String)> {
+    let footprint = doc
+        .footprints
+        .iter()
+        .find(|f| f.pad_item_ids.contains(&pad_id))?;
     let index = footprint.pad_item_ids.iter().position(|&id| id == pad_id)?;
     let pin = templates
         .iter()
@@ -57,8 +64,13 @@ pub(crate) fn pad_label(doc: &BoardDoc, templates: &[FootprintTemplate], pad_id:
     Some((footprint.reference.clone(), pin))
 }
 
-fn net_by_name<'a>(doc: &'a BoardDoc, name: &str) -> Result<&'a crate::board_doc::NetRecord, String> {
-    doc.nets.iter().find(|n| n.name == name).ok_or_else(|| format!("no net named \"{name}\" -- get_routing_scene / get_nets list current names"))
+fn net_by_name<'a>(
+    doc: &'a BoardDoc,
+    name: &str,
+) -> Result<&'a crate::board_doc::NetRecord, String> {
+    doc.nets.iter().find(|n| n.name == name).ok_or_else(|| {
+        format!("no net named \"{name}\" -- get_routing_scene / get_nets list current names")
+    })
 }
 
 /// One-call geometry snapshot for AI routing (pads, copper, open bridges, rules).
@@ -68,19 +80,32 @@ pub fn routing_scene_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Va
         .iter()
         .flat_map(|fp| {
             let template = templates.iter().find(|t| t.name == fp.template_name);
-            fp.pad_item_ids.iter().enumerate().filter_map(move |(index, &pad_id)| {
-                let (center, layer, net_id) = doc.pad_endpoint(pad_id)?;
-                let pin = template.and_then(|t| t.pads.get(index)).map(|p| p.number.clone()).unwrap_or_else(|| (index + 1).to_string());
-                let net = net_id.map(|id| doc.nets.iter().find(|n| n.id == id).map(|n| n.name.as_str()).unwrap_or("?").to_string());
-                Some(json!({
-                    "ref": fp.reference,
-                    "pin": pin,
-                    "net": net,
-                    "x_mm": unit_mm(center.x),
-                    "y_mm": unit_mm(center.y),
-                    "layer": layer_name(layer),
-                }))
-            })
+            fp.pad_item_ids
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, &pad_id)| {
+                    let (center, layer, net_id) = doc.pad_endpoint(pad_id)?;
+                    let pin = template
+                        .and_then(|t| t.pads.get(index))
+                        .map(|p| p.number.clone())
+                        .unwrap_or_else(|| (index + 1).to_string());
+                    let net = net_id.map(|id| {
+                        doc.nets
+                            .iter()
+                            .find(|n| n.id == id)
+                            .map(|n| n.name.as_str())
+                            .unwrap_or("?")
+                            .to_string()
+                    });
+                    Some(json!({
+                        "ref": fp.reference,
+                        "pin": pin,
+                        "net": net,
+                        "x_mm": unit_mm(center.x),
+                        "y_mm": unit_mm(center.y),
+                        "layer": layer_name(layer),
+                    }))
+                })
         })
         .collect();
 
@@ -88,8 +113,15 @@ pub fn routing_scene_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Va
     let mut vias = Vec::new();
     for (id, item) in doc.node.iter_with_ids() {
         match item {
-            Item::Track { shape, net, layer, .. } => {
-                let net_name = net.and_then(|nid| doc.nets.iter().find(|n| n.id == nid).map(|n| n.name.clone()));
+            Item::Track {
+                shape, net, layer, ..
+            } => {
+                let net_name = net.and_then(|nid| {
+                    doc.nets
+                        .iter()
+                        .find(|n| n.id == nid)
+                        .map(|n| n.name.clone())
+                });
                 tracks.push(json!({
                     "id": id.0,
                     "net": net_name,
@@ -100,7 +132,12 @@ pub fn routing_scene_json(doc: &BoardDoc, templates: &[FootprintTemplate]) -> Va
                 }));
             }
             Item::Via { shape, drill, net } => {
-                let net_name = net.and_then(|nid| doc.nets.iter().find(|n| n.id == nid).map(|n| n.name.clone()));
+                let net_name = net.and_then(|nid| {
+                    doc.nets
+                        .iter()
+                        .find(|n| n.id == nid)
+                        .map(|n| n.name.clone())
+                });
                 vias.push(json!({
                     "id": id.0,
                     "net": net_name,
@@ -148,15 +185,20 @@ pub(crate) fn open_bridges_json(doc: &BoardDoc, templates: &[FootprintTemplate])
             .map(|ids| {
                 ids.iter()
                     .filter_map(|&id| {
-                        let Item::Pad { shape, .. } = doc.node.get(id)? else { return None };
+                        let Item::Pad { shape, .. } = doc.node.get(id)? else {
+                            return None;
+                        };
                         Some((id, shape.center()))
                     })
                     .collect()
             })
             .collect();
         // Skip empty-pad islands (track-only debris); still report if ≥2 pad islands remain.
-        let pad_islands: Vec<(usize, &Vec<(ItemId, Point)>)> =
-            island_pads.iter().enumerate().filter(|(_, pads)| !pads.is_empty()).collect();
+        let pad_islands: Vec<(usize, &Vec<(ItemId, Point)>)> = island_pads
+            .iter()
+            .enumerate()
+            .filter(|(_, pads)| !pads.is_empty())
+            .collect();
         if pad_islands.len() < 2 {
             continue;
         }
@@ -176,8 +218,10 @@ pub(crate) fn open_bridges_json(doc: &BoardDoc, templates: &[FootprintTemplate])
                     }
                 }
                 if let Some((dist, id_a, id_b, pa, pb)) = best {
-                    let (ref_a, pin_a) = pad_label(doc, templates, id_a).unwrap_or_else(|| ("?".into(), "?".into()));
-                    let (ref_b, pin_b) = pad_label(doc, templates, id_b).unwrap_or_else(|| ("?".into(), "?".into()));
+                    let (ref_a, pin_a) =
+                        pad_label(doc, templates, id_a).unwrap_or_else(|| ("?".into(), "?".into()));
+                    let (ref_b, pin_b) =
+                        pad_label(doc, templates, id_b).unwrap_or_else(|| ("?".into(), "?".into()));
                     bridges.push((
                         dist,
                         json!({
@@ -197,9 +241,16 @@ pub(crate) fn open_bridges_json(doc: &BoardDoc, templates: &[FootprintTemplate])
 
 /// Compact open-bridge score for AI floorplanning: sum/max/count plus the
 /// shortest `top_n` bridges (capped at 20). Distances are millimetres.
-pub(crate) fn open_bridges_score_json(doc: &BoardDoc, templates: &[FootprintTemplate], top_n: usize) -> Value {
+pub(crate) fn open_bridges_score_json(
+    doc: &BoardDoc,
+    templates: &[FootprintTemplate],
+    top_n: usize,
+) -> Value {
     let bridges = open_bridges_json(doc, templates);
-    let distances: Vec<f64> = bridges.iter().filter_map(|b| b.get("distance_mm").and_then(|v| v.as_f64())).collect();
+    let distances: Vec<f64> = bridges
+        .iter()
+        .filter_map(|b| b.get("distance_mm").and_then(|v| v.as_f64()))
+        .collect();
     let sum_mm: f64 = distances.iter().sum();
     let max_mm = distances.iter().copied().fold(0.0_f64, f64::max);
     let top_n = top_n.min(20).min(bridges.len());
@@ -230,9 +281,21 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
         .and_then(|v| v.as_str())
         .ok_or_else(|| "candidate missing string \"net\"".to_string())?;
     let net = net_by_name(doc, net_name)?.id;
-    let width = candidate.get("width_mm").and_then(|v| v.as_f64()).map(mm).unwrap_or(DEFAULT_TRACE_WIDTH);
-    let via_diameter = candidate.get("via_diameter_mm").and_then(|v| v.as_f64()).map(mm).unwrap_or(DEFAULT_VIA_DIAMETER);
-    let via_drill = candidate.get("via_drill_mm").and_then(|v| v.as_f64()).map(mm).unwrap_or(DEFAULT_VIA_DRILL);
+    let width = candidate
+        .get("width_mm")
+        .and_then(|v| v.as_f64())
+        .map(mm)
+        .unwrap_or(DEFAULT_TRACE_WIDTH);
+    let via_diameter = candidate
+        .get("via_diameter_mm")
+        .and_then(|v| v.as_f64())
+        .map(mm)
+        .unwrap_or(DEFAULT_VIA_DIAMETER);
+    let via_drill = candidate
+        .get("via_drill_mm")
+        .and_then(|v| v.as_f64())
+        .map(mm)
+        .unwrap_or(DEFAULT_VIA_DRILL);
     let edge_margin = match candidate.get("edge_margin_mm").and_then(|v| v.as_f64()) {
         Some(v) => {
             let margin = mm(v);
@@ -257,7 +320,11 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
 
     let mut segments = Vec::with_capacity(segments_val.len());
     for (i, seg) in segments_val.iter().enumerate() {
-        let layer = parse_layer(seg.get("layer").and_then(|v| v.as_str()).ok_or_else(|| format!("segments[{i}] missing \"layer\""))?)?;
+        let layer = parse_layer(
+            seg.get("layer")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("segments[{i}] missing \"layer\""))?,
+        )?;
         let points_raw = seg
             .get("points_mm")
             .and_then(|v| v.as_array())
@@ -267,12 +334,18 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
         }
         let mut points = Vec::with_capacity(points_raw.len());
         for (j, p) in points_raw.iter().enumerate() {
-            let arr = p.as_array().ok_or_else(|| format!("segments[{i}].points_mm[{j}] must be [x_mm, y_mm]"))?;
+            let arr = p
+                .as_array()
+                .ok_or_else(|| format!("segments[{i}].points_mm[{j}] must be [x_mm, y_mm]"))?;
             if arr.len() != 2 {
                 return Err(format!("segments[{i}].points_mm[{j}] must be [x_mm, y_mm]"));
             }
-            let x = arr[0].as_f64().ok_or_else(|| format!("segments[{i}].points_mm[{j}][0] must be a number"))?;
-            let y = arr[1].as_f64().ok_or_else(|| format!("segments[{i}].points_mm[{j}][1] must be a number"))?;
+            let x = arr[0]
+                .as_f64()
+                .ok_or_else(|| format!("segments[{i}].points_mm[{j}][0] must be a number"))?;
+            let y = arr[1]
+                .as_f64()
+                .ok_or_else(|| format!("segments[{i}].points_mm[{j}][1] must be a number"))?;
             points.push(Point::new(mm(x), mm(y)));
         }
         segments.push((layer, points));
@@ -282,12 +355,18 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
     let vias = if let Some(arr) = vias_raw {
         let mut vias = Vec::with_capacity(arr.len());
         for (j, p) in arr.iter().enumerate() {
-            let xy = p.as_array().ok_or_else(|| format!("vias_mm[{j}] must be [x_mm, y_mm]"))?;
+            let xy = p
+                .as_array()
+                .ok_or_else(|| format!("vias_mm[{j}] must be [x_mm, y_mm]"))?;
             if xy.len() != 2 {
                 return Err(format!("vias_mm[{j}] must be [x_mm, y_mm]"));
             }
-            let x = xy[0].as_f64().ok_or_else(|| format!("vias_mm[{j}][0] must be a number"))?;
-            let y = xy[1].as_f64().ok_or_else(|| format!("vias_mm[{j}][1] must be a number"))?;
+            let x = xy[0]
+                .as_f64()
+                .ok_or_else(|| format!("vias_mm[{j}][0] must be a number"))?;
+            let y = xy[1]
+                .as_f64()
+                .ok_or_else(|| format!("vias_mm[{j}][1] must be a number"))?;
             vias.push(Point::new(mm(x), mm(y)));
         }
         vias
@@ -316,7 +395,10 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
             ));
         }
         if segments[i].0 == segments[i + 1].0 {
-            return Err(format!("segments[{i}] and segments[{}] share a via but are on the same layer", i + 1));
+            return Err(format!(
+                "segments[{i}] and segments[{}] share a via but are on the same layer",
+                i + 1
+            ));
         }
     }
 
@@ -337,17 +419,32 @@ pub fn parse_route_candidate(doc: &BoardDoc, candidate: &Value) -> Result<Parsed
 /// which footprint owns it.
 fn describe_item(doc: &BoardDoc, id: ItemId) -> Option<Value> {
     let item = doc.node.get(id)?;
-    let net_name = item.net().and_then(|nid| doc.nets.iter().find(|n| n.id == nid).map(|n| n.name.clone()));
+    let net_name = item.net().and_then(|nid| {
+        doc.nets
+            .iter()
+            .find(|n| n.id == nid)
+            .map(|n| n.name.clone())
+    });
     let (kind, center, layer) = match item {
         Item::Pad { shape, layer, .. } => ("pad", shape.center(), Some(*layer)),
         Item::Via { shape, .. } => ("via", shape.center, None),
-        Item::Track { shape, layer, .. } => {
-            ("track", Point::new((shape.a.x + shape.b.x) / 2, (shape.a.y + shape.b.y) / 2), Some(*layer))
-        }
-        Item::Zone { outline, layer, .. } => ("zone", outline.points.first().copied().unwrap_or(Point::new(0, 0)), Some(*layer)),
+        Item::Track { shape, layer, .. } => (
+            "track",
+            Point::new((shape.a.x + shape.b.x) / 2, (shape.a.y + shape.b.y) / 2),
+            Some(*layer),
+        ),
+        Item::Zone { outline, layer, .. } => (
+            "zone",
+            outline.points.first().copied().unwrap_or(Point::new(0, 0)),
+            Some(*layer),
+        ),
         Item::Hole { position, .. } => ("hole", *position, None),
     };
-    let footprint = doc.footprints.iter().find(|f| f.pad_item_ids.contains(&id)).map(|f| f.reference.clone());
+    let footprint = doc
+        .footprints
+        .iter()
+        .find(|f| f.pad_item_ids.contains(&id))
+        .map(|f| f.reference.clone());
     Some(json!({
         "kind": kind,
         "net": net_name,
@@ -360,7 +457,14 @@ fn describe_item(doc: &BoardDoc, id: ItemId) -> Option<Value> {
 
 /// Up to three colliding items a probe track on `layer` would hit along
 /// `from`→`to` — the detail the GUI shows as "red preview" implicitly.
-fn leg_blockers_json(doc: &BoardDoc, from: Point, to: Point, width: Unit, net: NetId, layer: LayerId) -> Vec<Value> {
+fn leg_blockers_json(
+    doc: &BoardDoc,
+    from: Point,
+    to: Point,
+    width: Unit,
+    net: NetId,
+    layer: LayerId,
+) -> Vec<Value> {
     let probe = Item::Track {
         shape: Segment::new(from, to, width),
         net: Some(net),
@@ -376,19 +480,37 @@ fn leg_blockers_json(doc: &BoardDoc, from: Point, to: Point, width: Unit, net: N
 }
 
 fn leg_mm(from: Point, to: Point) -> Value {
-    json!([[unit_mm(from.x), unit_mm(from.y)], [unit_mm(to.x), unit_mm(to.y)]])
+    json!([
+        [unit_mm(from.x), unit_mm(from.y)],
+        [unit_mm(to.x), unit_mm(to.y)]
+    ])
 }
 
 /// Per-leg clearance + edge gates for one segment path; on blockage
 /// returns `{blocked, leg_index, leg_mm, colliding?}` naming the exact
 /// leg and the first items in the way.
-fn path_block_json(doc: &BoardDoc, path: &[Point], width: Unit, net: NetId, layer: LayerId, edge_margin: Unit) -> Option<Value> {
+fn path_block_json(
+    doc: &BoardDoc,
+    path: &[Point],
+    width: Unit,
+    net: NetId,
+    layer: LayerId,
+    edge_margin: Unit,
+) -> Option<Value> {
     if path.len() < 2 {
         return Some(json!({ "blocked": "path needs at least 2 points" }));
     }
     let resolver = doc.resolver();
     for (i, leg) in path.windows(2).enumerate() {
-        if !doc.node.path_is_clear(leg[0], leg[1], width, Some(net), layer, NetClass::C, resolver) {
+        if !doc.node.path_is_clear(
+            leg[0],
+            leg[1],
+            width,
+            Some(net),
+            layer,
+            NetClass::C,
+            resolver,
+        ) {
             return Some(json!({
                 "blocked": "clearance",
                 "leg_index": i,
@@ -417,13 +539,22 @@ fn path_block_json(doc: &BoardDoc, path: &[Point], width: Unit, net: NetId, laye
 
 /// Read-only via gates matching [`BoardDoc::try_add_via`] (no mutation).
 /// On blockage names the reason and, for collisions, the items in the way.
-fn via_block_json(doc: &BoardDoc, center: Point, net: NetId, diameter: Unit, drill: Unit, edge_margin: Unit) -> Option<Value> {
+fn via_block_json(
+    doc: &BoardDoc,
+    center: Point,
+    net: NetId,
+    diameter: Unit,
+    drill: Unit,
+    edge_margin: Unit,
+) -> Option<Value> {
     if let Err(v) = JlcpcbDfm::check_via(diameter, drill) {
         return Some(json!({ "blocked": format!("via: {v}") }));
     }
     let radius = diameter / 2;
     if !alladin_geom::circle_within_outline(center, radius + edge_margin, &doc.outline) {
-        return Some(json!({ "blocked": "via: too close to board edge", "edge_margin_mm": unit_mm(edge_margin) }));
+        return Some(
+            json!({ "blocked": "via: too close to board edge", "edge_margin_mm": unit_mm(edge_margin) }),
+        );
     }
     if doc.violates_hole_to_hole(center, drill, Some(net)) {
         return Some(json!({ "blocked": "via: hole-to-hole spacing" }));
@@ -456,7 +587,9 @@ fn via_block_json(doc: &BoardDoc, center: Point, net: NetId, diameter: Unit, dri
 /// Probe one parsed candidate against the live board (no mutation).
 pub fn probe_one(doc: &BoardDoc, route: &ParsedRoute) -> Value {
     for (i, (layer, path)) in route.segments.iter().enumerate() {
-        if let Some(mut detail) = path_block_json(doc, path, route.width, route.net, *layer, route.edge_margin) {
+        if let Some(mut detail) =
+            path_block_json(doc, path, route.width, route.net, *layer, route.edge_margin)
+        {
             let obj = detail.as_object_mut().unwrap();
             obj.insert("ok".into(), json!(false));
             obj.insert("segment_index".into(), json!(i));
@@ -466,7 +599,14 @@ pub fn probe_one(doc: &BoardDoc, route: &ParsedRoute) -> Value {
         }
     }
     for (i, via) in route.vias.iter().enumerate() {
-        if let Some(mut detail) = via_block_json(doc, *via, route.net, route.via_diameter, route.via_drill, route.edge_margin) {
+        if let Some(mut detail) = via_block_json(
+            doc,
+            *via,
+            route.net,
+            route.via_diameter,
+            route.via_drill,
+            route.edge_margin,
+        ) {
             let obj = detail.as_object_mut().unwrap();
             obj.insert("ok".into(), json!(false));
             obj.insert("via_index".into(), json!(i));
@@ -496,7 +636,11 @@ pub fn probe_routes_json(doc: &BoardDoc, candidates: &[Value]) -> Value {
 
 /// One-line human summary of a `probe_one` blockage, for commit errors.
 fn block_summary(detail: &Value) -> String {
-    let mut s = detail.get("blocked").and_then(|b| b.as_str()).unwrap_or("blocked").to_string();
+    let mut s = detail
+        .get("blocked")
+        .and_then(|b| b.as_str())
+        .unwrap_or("blocked")
+        .to_string();
     if let Some(idx) = detail.get("segment_index").and_then(|v| v.as_u64()) {
         s.push_str(&format!(" (segment {idx}"));
         if let Some(leg) = detail.get("leg_index").and_then(|v| v.as_u64()) {
@@ -504,12 +648,18 @@ fn block_summary(detail: &Value) -> String {
         }
         s.push(')');
     }
-    if let Some(hit) = detail.get("colliding").and_then(|c| c.as_array()).and_then(|a| a.first()) {
+    if let Some(hit) = detail
+        .get("colliding")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+    {
         let kind = hit["kind"].as_str().unwrap_or("item");
         let net = hit["net"].as_str().unwrap_or("no-net");
         let x = hit["x_mm"].as_f64().unwrap_or(0.0);
         let y = hit["y_mm"].as_f64().unwrap_or(0.0);
-        s.push_str(&format!(" — hits {kind} on net {net} near ({x:.2}, {y:.2}) mm"));
+        s.push_str(&format!(
+            " — hits {kind} on net {net} near ({x:.2}, {y:.2}) mm"
+        ));
     }
     s
 }
@@ -527,8 +677,12 @@ pub fn commit_route(doc: &mut BoardDoc, route: &ParsedRoute) -> Result<Value, St
     let ids_before: HashSet<usize> = doc.node.iter_with_ids().map(|(id, _)| id.0).collect();
 
     let rollback = |doc: &mut BoardDoc, ids_before: &HashSet<usize>| {
-        let added: Vec<ItemId> =
-            doc.node.iter_with_ids().map(|(id, _)| id).filter(|id| !ids_before.contains(&id.0)).collect();
+        let added: Vec<ItemId> = doc
+            .node
+            .iter_with_ids()
+            .map(|(id, _)| id)
+            .filter(|id| !ids_before.contains(&id.0))
+            .collect();
         for id in added {
             doc.node.remove(id);
         }
@@ -540,7 +694,12 @@ pub fn commit_route(doc: &mut BoardDoc, route: &ParsedRoute) -> Result<Value, St
     // self-block at the junction.
     for (i, (layer, path)) in route.segments.iter().enumerate() {
         if i < route.vias.len() {
-            if let Err(e) = doc.try_add_via(route.vias[i], route.net, route.via_diameter, route.via_drill) {
+            if let Err(e) = doc.try_add_via(
+                route.vias[i],
+                route.net,
+                route.via_diameter,
+                route.via_drill,
+            ) {
                 rollback(doc, &ids_before);
                 let e: PlacementError = e;
                 return Err(format!("via after segment {i}: {e} — rolled back"));
@@ -606,7 +765,16 @@ pub struct Suggestion {
 /// The eight octilinear directions, indexed so that neighbours in the
 /// array are 45° apart (the no-90°-corner rule becomes "index differs
 /// by at most 1 mod 8").
-const OCT_DIRS: [(i64, i64); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
+const OCT_DIRS: [(i64, i64); 8] = [
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+];
 
 /// Sentinel "no incoming direction yet" for the start state.
 const NO_DIR: usize = 8;
@@ -636,9 +804,24 @@ fn turn_ok(from: usize, to: usize) -> bool {
 
 /// The same two gates every probed candidate leg passes: copper
 /// clearance on `layer` and the (comfort) edge margin.
-fn leg_is_legal(doc: &BoardDoc, from: Point, to: Point, width: Unit, net: NetId, layer: LayerId, edge_margin: Unit) -> bool {
-    doc.node.path_is_clear(from, to, width, Some(net), layer, NetClass::C, doc.resolver())
-        && path_keeps_edge_margin(&[from, to], width, &doc.outline, edge_margin)
+fn leg_is_legal(
+    doc: &BoardDoc,
+    from: Point,
+    to: Point,
+    width: Unit,
+    net: NetId,
+    layer: LayerId,
+    edge_margin: Unit,
+) -> bool {
+    doc.node.path_is_clear(
+        from,
+        to,
+        width,
+        Some(net),
+        layer,
+        NetClass::C,
+        doc.resolver(),
+    ) && path_keeps_edge_margin(&[from, to], width, &doc.outline, edge_margin)
 }
 
 /// Candidate octilinear joins from an on-lattice point to the off-lattice
@@ -656,7 +839,11 @@ fn oct_joins(from: Point, to: Point) -> Vec<Vec<Point>> {
     let d = dx.abs().min(dy.abs());
     let (sx, sy) = (dx.signum(), dy.signum());
     let diag_first = Point::new(from.x + sx * d, from.y + sy * d);
-    let axis_first = if dx.abs() > dy.abs() { Point::new(to.x - sx * d, from.y) } else { Point::new(from.x, to.y - sy * d) };
+    let axis_first = if dx.abs() > dy.abs() {
+        Point::new(to.x - sx * d, from.y)
+    } else {
+        Point::new(from.x, to.y - sy * d)
+    };
     vec![vec![diag_first, to], vec![axis_first, to]]
 }
 
@@ -690,7 +877,13 @@ fn merge_collinear(points: Vec<Point>) -> Vec<Point> {
 /// commit-ready by construction. No 90° corners, no vias. States are
 /// (lattice point, incoming direction); the goal, generally off-lattice,
 /// is joined by a final one- or two-leg octilinear decomposition.
-pub fn suggest_route(doc: &BoardDoc, net: NetId, start: Point, goal: Point, opts: &SuggestOptions) -> Result<Suggestion, String> {
+pub fn suggest_route(
+    doc: &BoardDoc,
+    net: NetId,
+    start: Point,
+    goal: Point,
+    opts: &SuggestOptions,
+) -> Result<Suggestion, String> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
 
@@ -705,7 +898,9 @@ pub fn suggest_route(doc: &BoardDoc, net: NetId, start: Point, goal: Point, opts
         let dy = ((goal.y - p.y) as f64).abs();
         dx.max(dy) + (sqrt2 - 1.0) * dx.min(dy)
     };
-    let legal = |from: Point, to: Point| leg_is_legal(doc, from, to, opts.width, net, opts.layer, opts.edge_margin);
+    let legal = |from: Point, to: Point| {
+        leg_is_legal(doc, from, to, opts.width, net, opts.layer, opts.edge_margin)
+    };
 
     // Try to finish from `state`; on success returns the join waypoints.
     let try_join = |pos: Point, dir: usize| -> Option<Vec<Point>> {
@@ -716,7 +911,9 @@ pub fn suggest_route(doc: &BoardDoc, net: NetId, start: Point, goal: Point, opts
             let mut prev = pos;
             let mut prev_dir = dir;
             for &p in &join {
-                let Some(d) = octant_of(p.x - prev.x, p.y - prev.y) else { continue 'variant };
+                let Some(d) = octant_of(p.x - prev.x, p.y - prev.y) else {
+                    continue 'variant;
+                };
                 if !turn_ok(prev_dir, d) || !legal(prev, p) {
                     continue 'variant;
                 }
@@ -759,7 +956,10 @@ pub fn suggest_route(doc: &BoardDoc, net: NetId, start: Point, goal: Point, opts
             }
             points.reverse();
             points.extend(join);
-            return Ok(Suggestion { points: merge_collinear(points), expansions });
+            return Ok(Suggestion {
+                points: merge_collinear(points),
+                expansions,
+            });
         }
 
         expansions += 1;
@@ -772,13 +972,27 @@ pub fn suggest_route(doc: &BoardDoc, net: NetId, start: Point, goal: Point, opts
             ));
         }
 
-        let dirs: &[usize] = if dir == NO_DIR { &[0, 1, 2, 3, 4, 5, 6, 7] } else { &[dir, (dir + 1) % 8, (dir + 7) % 8] };
+        let dirs: &[usize] = if dir == NO_DIR {
+            &[0, 1, 2, 3, 4, 5, 6, 7]
+        } else {
+            &[dir, (dir + 1) % 8, (dir + 7) % 8]
+        };
         for &nd in dirs {
             let (dx, dy) = OCT_DIRS[nd];
             let (nix, niy) = (ix + dx, iy + dy);
             let npos = pos_of(nix, niy);
-            let leg_len = if dx != 0 && dy != 0 { step as f64 * sqrt2 } else { step as f64 };
-            let cost = g_here + leg_len + if dir != NO_DIR && nd != dir { bend_penalty } else { 0.0 };
+            let leg_len = if dx != 0 && dy != 0 {
+                step as f64 * sqrt2
+            } else {
+                step as f64
+            };
+            let cost = g_here
+                + leg_len
+                + if dir != NO_DIR && nd != dir {
+                    bend_penalty
+                } else {
+                    0.0
+                };
             let nstate: State = (nix, niy, nd);
             if g.get(&nstate).map(|&old| cost >= old).unwrap_or(false) {
                 continue;
@@ -821,7 +1035,11 @@ fn nearest_routed_item(doc: &BoardDoc, point: Point) -> Option<ItemId> {
                 let apx = px - ax;
                 let apy = py - ay;
                 let ab2 = abx * abx + aby * aby;
-                let t = if ab2 <= 0.0 { 0.0 } else { ((apx * abx + apy * aby) / ab2).clamp(0.0, 1.0) };
+                let t = if ab2 <= 0.0 {
+                    0.0
+                } else {
+                    ((apx * abx + apy * aby) / ab2).clamp(0.0, 1.0)
+                };
                 let cx = ax + t * abx;
                 let cy = ay + t * aby;
                 (px - cx).hypot(py - cy)
@@ -843,14 +1061,20 @@ fn nearest_routed_item(doc: &BoardDoc, point: Point) -> Option<ItemId> {
 /// Remove the whole electrically-continuous wire nearest to `(x_mm, y_mm)`.
 pub fn ripup_wire_near(doc: &mut BoardDoc, x_mm: f64, y_mm: f64) -> Result<Value, String> {
     let point = Point::new(mm(x_mm), mm(y_mm));
-    let id = nearest_routed_item(doc, point).ok_or_else(|| "no track or via on the board to rip up".to_string())?;
+    let id = nearest_routed_item(doc, point)
+        .ok_or_else(|| "no track or via on the board to rip up".to_string())?;
     let wire = doc.connected_wire(id);
     if wire.is_empty() {
         return Err("nearest copper item is not a removable wire".into());
     }
     let count = wire.len();
     let net = doc.node.get(id).and_then(|item| item.net());
-    let net_name = net.and_then(|nid| doc.nets.iter().find(|n| n.id == nid).map(|n| n.name.clone()));
+    let net_name = net.and_then(|nid| {
+        doc.nets
+            .iter()
+            .find(|n| n.id == nid)
+            .map(|n| n.name.clone())
+    });
     doc.remove_wire(id);
     Ok(json!({ "ok": true, "removed_items": count, "net": net_name }))
 }
@@ -861,7 +1085,9 @@ pub fn ripup_net_copper(doc: &mut BoardDoc, net_name: &str) -> Result<Value, Str
     let mut ids: Vec<ItemId> = doc
         .node
         .iter_with_ids()
-        .filter(|(_, item)| matches!(item, Item::Track { .. } | Item::Via { .. }) && item.net() == Some(net))
+        .filter(|(_, item)| {
+            matches!(item, Item::Track { .. } | Item::Via { .. }) && item.net() == Some(net)
+        })
         .map(|(id, _)| id)
         .collect();
     let mut removed = 0usize;
@@ -886,7 +1112,15 @@ mod tests {
     use crate::board_doc::{CopperWeight, LayerCount, NewBoardParams};
     use crate::footprint;
 
-    fn board_with_two_pads() -> (BoardDoc, Vec<FootprintTemplate>, String, String, NetId, Point, Point) {
+    fn board_with_two_pads() -> (
+        BoardDoc,
+        Vec<FootprintTemplate>,
+        String,
+        String,
+        NetId,
+        Point,
+        Point,
+    ) {
         let mut doc = NewBoardParams {
             width_mm: 40.0,
             height_mm: 40.0,
@@ -896,16 +1130,46 @@ mod tests {
         }
         .create();
         let templates = footprint::builtin_templates();
-        let template = templates.iter().find(|t| t.pads.len() == 1 && t.holes.is_empty()).expect("single-pad smd template").clone();
-        let a = doc.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0).unwrap();
-        let b = doc.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0).unwrap();
-        let pad_a = doc.footprints.iter().find(|f| f.id == a).unwrap().pad_item_ids[0];
-        let pad_b = doc.footprints.iter().find(|f| f.id == b).unwrap().pad_item_ids[0];
+        let template = templates
+            .iter()
+            .find(|t| t.pads.len() == 1 && t.holes.is_empty())
+            .expect("single-pad smd template")
+            .clone();
+        let a = doc
+            .try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
+            .unwrap();
+        let b = doc
+            .try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
+            .unwrap();
+        let pad_a = doc
+            .footprints
+            .iter()
+            .find(|f| f.id == a)
+            .unwrap()
+            .pad_item_ids[0];
+        let pad_b = doc
+            .footprints
+            .iter()
+            .find(|f| f.id == b)
+            .unwrap()
+            .pad_item_ids[0];
         let ca = doc.pad_center(pad_a).unwrap();
         let cb = doc.pad_center(pad_b).unwrap();
         let net = doc.connect_pads(pad_a, pad_b).unwrap();
-        let ref_a = doc.footprints.iter().find(|f| f.id == a).unwrap().reference.clone();
-        let ref_b = doc.footprints.iter().find(|f| f.id == b).unwrap().reference.clone();
+        let ref_a = doc
+            .footprints
+            .iter()
+            .find(|f| f.id == a)
+            .unwrap()
+            .reference
+            .clone();
+        let ref_b = doc
+            .footprints
+            .iter()
+            .find(|f| f.id == b)
+            .unwrap()
+            .reference
+            .clone();
         (doc, templates, ref_a, ref_b, net, ca, cb)
     }
 
@@ -926,8 +1190,14 @@ mod tests {
         assert!(scene["pads"].as_array().unwrap().len() >= 2);
         let bridges = scene["open_bridges"].as_array().unwrap();
         assert_eq!(bridges.len(), 1);
-        let ends = [bridges[0]["a"]["ref"].as_str().unwrap(), bridges[0]["b"]["ref"].as_str().unwrap()];
-        assert!(ends.contains(&ref_a.as_str()) && ends.contains(&ref_b.as_str()), "{bridges:?}");
+        let ends = [
+            bridges[0]["a"]["ref"].as_str().unwrap(),
+            bridges[0]["b"]["ref"].as_str().unwrap(),
+        ];
+        assert!(
+            ends.contains(&ref_a.as_str()) && ends.contains(&ref_b.as_str()),
+            "{bridges:?}"
+        );
         let expected = ((ca.x - cb.x) as f64).hypot((ca.y - cb.y) as f64) / MM as f64;
         assert!((bridges[0]["distance_mm"].as_f64().unwrap() - expected).abs() < 0.05);
     }
@@ -952,9 +1222,21 @@ mod tests {
     fn blocked_probe_names_the_item_in_the_way() {
         let (mut doc, _, _, _, net, ca, cb) = board_with_two_pads();
         let templates = footprint::builtin_templates();
-        let template = templates.iter().find(|t| t.pads.len() == 1 && t.holes.is_empty()).unwrap().clone();
-        let blocker = doc.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
-        let blocker_ref = doc.footprints.iter().find(|f| f.id == blocker).unwrap().reference.clone();
+        let template = templates
+            .iter()
+            .find(|t| t.pads.len() == 1 && t.holes.is_empty())
+            .unwrap()
+            .clone();
+        let blocker = doc
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
+        let blocker_ref = doc
+            .footprints
+            .iter()
+            .find(|f| f.id == blocker)
+            .unwrap()
+            .reference
+            .clone();
         let net_name = doc.nets.iter().find(|n| n.id == net).unwrap().name.clone();
         let route = parse_route_candidate(&doc, &straight_candidate(&net_name, ca, cb)).unwrap();
         let result = probe_one(&doc, &route);
@@ -963,7 +1245,8 @@ mod tests {
         let hits = result["colliding"].as_array().unwrap();
         assert!(!hits.is_empty(), "{result}");
         assert!(
-            hits.iter().any(|h| h["kind"] == "pad" && h["footprint"] == blocker_ref.as_str()),
+            hits.iter()
+                .any(|h| h["kind"] == "pad" && h["footprint"] == blocker_ref.as_str()),
             "{result}"
         );
         assert!(result["leg_mm"].is_array(), "{result}");
@@ -983,12 +1266,19 @@ mod tests {
             }]
         });
         let route = parse_route_candidate(&doc, &cand).unwrap();
-        assert_eq!(probe_one(&doc, &route)["ok"], true, "BCu under SMD pads must be clearance-clean");
+        assert_eq!(
+            probe_one(&doc, &route)["ok"],
+            true,
+            "BCu under SMD pads must be clearance-clean"
+        );
         let err = commit_route(&mut doc, &route).unwrap_err();
         assert!(err.contains("did not join"), "{err}");
         assert!(err.contains("rolled back"), "{err}");
         assert_eq!(
-            doc.node.iter().filter(|i| matches!(i, Item::Track { .. })).count(),
+            doc.node
+                .iter()
+                .filter(|i| matches!(i, Item::Track { .. }))
+                .count(),
             0,
             "rollback must remove the useless track again"
         );
@@ -1018,7 +1308,10 @@ mod tests {
         let result = probe_one(&doc, &route);
         assert_eq!(result["ok"], false, "{result}");
         assert_eq!(result["blocked"], "edge", "{result}");
-        assert!(result["hint"].as_str().unwrap().contains("edge_margin_mm"), "{result}");
+        assert!(
+            result["hint"].as_str().unwrap().contains("edge_margin_mm"),
+            "{result}"
+        );
 
         // The same route with an explicit, deliberate 0.3mm margin passes.
         let mut relaxed = cand.clone();
@@ -1052,16 +1345,27 @@ mod tests {
         let result = probe_one(&doc, &route);
         assert_eq!(result["ok"], false);
         let blocked = result["blocked"].as_str().unwrap();
-        assert!(blocked.contains("edge") || blocked.contains("clearance"), "{blocked}");
+        assert!(
+            blocked.contains("edge") || blocked.contains("clearance"),
+            "{blocked}"
+        );
     }
 
     fn assert_octilinear_no_90(points: &[Point]) {
-        assert!(points.len() >= 2, "path needs at least 2 points: {points:?}");
+        assert!(
+            points.len() >= 2,
+            "path needs at least 2 points: {points:?}"
+        );
         let mut prev_dir = NO_DIR;
         for leg in points.windows(2) {
             let dir = octant_of(leg[1].x - leg[0].x, leg[1].y - leg[0].y)
                 .unwrap_or_else(|| panic!("leg {:?} -> {:?} is not octilinear", leg[0], leg[1]));
-            assert!(turn_ok(prev_dir, dir), "90°/135° corner before leg {:?} -> {:?} in {points:?}", leg[0], leg[1]);
+            assert!(
+                turn_ok(prev_dir, dir),
+                "90°/135° corner before leg {:?} -> {:?} in {points:?}",
+                leg[0],
+                leg[1]
+            );
             prev_dir = dir;
         }
     }
@@ -1101,11 +1405,20 @@ mod tests {
     fn suggest_route_detours_around_a_blocker_with_only_45_degree_bends() {
         let (mut doc, _, _, _, net, ca, cb) = board_with_two_pads();
         let templates = footprint::builtin_templates();
-        let template = templates.iter().find(|t| t.pads.len() == 1 && t.holes.is_empty()).unwrap().clone();
-        doc.try_place_footprint(&template, Point::new(0, 0), 0.0).unwrap();
+        let template = templates
+            .iter()
+            .find(|t| t.pads.len() == 1 && t.holes.is_empty())
+            .unwrap()
+            .clone();
+        doc.try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
         let found = suggest_route(&doc, net, ca, cb, &default_opts()).unwrap();
         assert_octilinear_no_90(&found.points);
-        assert!(found.points.len() > 2, "a detour needs bends: {:?}", found.points);
+        assert!(
+            found.points.len() > 2,
+            "a detour needs bends: {:?}",
+            found.points
+        );
         let net_name = doc.nets.iter().find(|n| n.id == net).unwrap().name.clone();
         let cand = json!({
             "net": net_name,
@@ -1115,7 +1428,11 @@ mod tests {
             }]
         });
         let route = parse_route_candidate(&doc, &cand).unwrap();
-        assert_eq!(probe_one(&doc, &route)["ok"], true, "suggested path must probe clean");
+        assert_eq!(
+            probe_one(&doc, &route)["ok"],
+            true,
+            "suggested path must probe clean"
+        );
         commit_route(&mut doc, &route).unwrap();
         assert_eq!(doc.node.net_copper_components(net).len(), 1);
     }
@@ -1136,12 +1453,24 @@ mod tests {
         let net_name = doc.nets.iter().find(|n| n.id == net).unwrap().name.clone();
         let route = parse_route_candidate(&doc, &straight_candidate(&net_name, ca, cb)).unwrap();
         commit_route(&mut doc, &route).unwrap();
-        assert_eq!(doc.node.iter().filter(|i| matches!(i, Item::Track { .. })).count(), 1);
+        assert_eq!(
+            doc.node
+                .iter()
+                .filter(|i| matches!(i, Item::Track { .. }))
+                .count(),
+            1
+        );
         let mid_x = unit_mm((ca.x + cb.x) / 2);
         let mid_y = unit_mm((ca.y + cb.y) / 2);
         let result = ripup_wire_near(&mut doc, mid_x, mid_y).unwrap();
         assert_eq!(result["ok"], true);
-        assert_eq!(doc.node.iter().filter(|i| matches!(i, Item::Track { .. })).count(), 0);
+        assert_eq!(
+            doc.node
+                .iter()
+                .filter(|i| matches!(i, Item::Track { .. }))
+                .count(),
+            0
+        );
         assert_eq!(doc.node.net_copper_components(net).len(), 2);
     }
 }

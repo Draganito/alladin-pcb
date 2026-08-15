@@ -37,7 +37,10 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { center_mm: egui::Vec2::ZERO, pixels_per_mm: 3.0 }
+        Self {
+            center_mm: egui::Vec2::ZERO,
+            pixels_per_mm: 3.0,
+        }
     }
 }
 
@@ -51,7 +54,10 @@ impl Camera {
     /// a mouse click) back into board-space nanometre coordinates.
     pub fn screen_to_board(&self, rect: Rect, p: Pos2) -> Point {
         let mm = (p - rect.center()) / self.pixels_per_mm + self.center_mm;
-        Point::new((mm.x as f64 * MM as f64).round() as i64, (mm.y as f64 * MM as f64).round() as i64)
+        Point::new(
+            (mm.x as f64 * MM as f64).round() as i64,
+            (mm.y as f64 * MM as f64).round() as i64,
+        )
     }
 
     pub fn screen_delta_to_board_mm(&self, delta: egui::Vec2) -> egui::Vec2 {
@@ -98,7 +104,15 @@ pub struct LayerToggles {
 
 impl Default for LayerToggles {
     fn default() -> Self {
-        Self { outline: true, zones: true, pads: true, vias: true, tracks: true, back_layer: true, holes: true }
+        Self {
+            outline: true,
+            zones: true,
+            pads: true,
+            vias: true,
+            tracks: true,
+            back_layer: true,
+            holes: true,
+        }
     }
 }
 
@@ -132,18 +146,32 @@ pub fn layer_tint(layer: LayerId, color: Color32) -> Color32 {
 /// net's own items keep exactly their normal, undimmed colour -- the
 /// contrast against everything else newly dimmed around it is what
 /// makes it "pop", not any extra brightening of its own.
-pub fn net_highlight_dim(color: Color32, item_net: Option<NetId>, highlight: Option<NetId>) -> Color32 {
+pub fn net_highlight_dim(
+    color: Color32,
+    item_net: Option<NetId>,
+    highlight: Option<NetId>,
+) -> Color32 {
     match highlight {
         Some(net) if item_net != Some(net) => color.gamma_multiply(0.18),
         _ => color,
     }
 }
 
-pub fn draw_polygon_outline(painter: &Painter, rect: Rect, camera: &Camera, poly: &Polygon, stroke: Stroke) {
+pub fn draw_polygon_outline(
+    painter: &Painter,
+    rect: Rect,
+    camera: &Camera,
+    poly: &Polygon,
+    stroke: Stroke,
+) {
     if poly.points.len() < 2 {
         return;
     }
-    let mut pts: Vec<Pos2> = poly.points.iter().map(|&p| camera.board_to_screen(rect, p)).collect();
+    let mut pts: Vec<Pos2> = poly
+        .points
+        .iter()
+        .map(|&p| camera.board_to_screen(rect, p))
+        .collect();
     pts.push(pts[0]);
     painter.add(Shape::line(pts, stroke));
 }
@@ -167,9 +195,18 @@ pub fn draw_polygon_outline(painter: &Painter, rect: Rect, camera: &Camera, poly
 /// reverse also occurs somewhere else in the same ring before stroking
 /// what's left, so each hole's loop still renders as its own closed ring
 /// and the bridge itself renders as nothing.
-pub fn draw_zone_outline(painter: &Painter, rect: Rect, camera: &Camera, poly: &Polygon, stroke: Stroke) {
+pub fn draw_zone_outline(
+    painter: &Painter,
+    rect: Rect,
+    camera: &Camera,
+    poly: &Polygon,
+    stroke: Stroke,
+) {
     for run in bridge_free_runs(&poly.points) {
-        let pts: Vec<Pos2> = run.iter().map(|&p| camera.board_to_screen(rect, p)).collect();
+        let pts: Vec<Pos2> = run
+            .iter()
+            .map(|&p| camera.board_to_screen(rect, p))
+            .collect();
         painter.add(Shape::line(pts, stroke));
     }
 }
@@ -185,7 +222,8 @@ fn bridge_free_runs(ring: &[Point]) -> Vec<Vec<Point>> {
     if n < 2 {
         return Vec::new();
     }
-    let edges: std::collections::HashSet<(Point, Point)> = (0..n).map(|i| (ring[i], ring[(i + 1) % n])).collect();
+    let edges: std::collections::HashSet<(Point, Point)> =
+        (0..n).map(|i| (ring[i], ring[(i + 1) % n])).collect();
 
     let mut runs = Vec::new();
     let mut run: Vec<Point> = Vec::new();
@@ -226,13 +264,24 @@ pub fn draw_board(
 ) {
     if layers.outline {
         for poly in outline {
-            draw_polygon_outline(painter, rect, camera, poly, Stroke::new(2.0, Color32::from_rgb(90, 210, 130)));
+            draw_polygon_outline(
+                painter,
+                rect,
+                camera,
+                poly,
+                Stroke::new(2.0, Color32::from_rgb(90, 210, 130)),
+            );
         }
     }
 
     if layers.zones {
         for item in items {
-            if let Item::Zone { outline, layer, net } = item {
+            if let Item::Zone {
+                outline,
+                layer,
+                net,
+            } = item
+            {
                 if *layer == LayerId::BCu && !layers.back_layer {
                     continue;
                 }
@@ -245,14 +294,18 @@ pub fn draw_board(
 
     if layers.tracks {
         for item in items {
-            if let Item::Track { shape, net, layer, .. } = item {
+            if let Item::Track {
+                shape, net, layer, ..
+            } = item
+            {
                 if *layer == LayerId::BCu && !layers.back_layer {
                     continue;
                 }
                 let a = camera.board_to_screen(rect, shape.a);
                 let b = camera.board_to_screen(rect, shape.b);
                 let width_px = (shape.width as f32 / MM as f32 * camera.pixels_per_mm).max(1.0);
-                let color = net_highlight_dim(layer_tint(*layer, net_color(*net)), *net, highlight_net);
+                let color =
+                    net_highlight_dim(layer_tint(*layer, net_color(*net)), *net, highlight_net);
                 painter.line_segment([a, b], Stroke::new(width_px, color));
                 // `egui::Painter::line_segment` renders a butt-capped
                 // quad, not a rounded capsule -- harmless for a single
@@ -278,7 +331,10 @@ pub fn draw_board(
 
     if layers.pads {
         for item in items {
-            if let Item::Pad { shape, net, layer, .. } = item {
+            if let Item::Pad {
+                shape, net, layer, ..
+            } = item
+            {
                 if *layer == LayerId::BCu && !layers.back_layer {
                     continue;
                 }
@@ -293,8 +349,10 @@ pub fn draw_board(
                 // shape/rotation fidelity, not the interactive editor's
                 // own rendering).
                 let center = camera.board_to_screen(rect, shape.center());
-                let radius_px = (shape.bounding_radius() as f32 / MM as f32 * camera.pixels_per_mm).max(1.0);
-                let color = net_highlight_dim(layer_tint(*layer, net_color(*net)), *net, highlight_net);
+                let radius_px =
+                    (shape.bounding_radius() as f32 / MM as f32 * camera.pixels_per_mm).max(1.0);
+                let color =
+                    net_highlight_dim(layer_tint(*layer, net_color(*net)), *net, highlight_net);
                 painter.circle_filled(center, radius_px, color);
             }
         }
@@ -305,7 +363,8 @@ pub fn draw_board(
             if let Item::Via { shape, net, .. } = item {
                 let center = camera.board_to_screen(rect, shape.center);
                 let radius_px = (shape.radius as f32 / MM as f32 * camera.pixels_per_mm).max(1.0);
-                let color = net_highlight_dim(net_color(*net).gamma_multiply(0.85), *net, highlight_net);
+                let color =
+                    net_highlight_dim(net_color(*net).gamma_multiply(0.85), *net, highlight_net);
                 painter.circle_filled(center, radius_px, color);
                 painter.circle_stroke(center, radius_px, Stroke::new(1.0, Color32::BLACK));
             }
@@ -346,13 +405,28 @@ pub fn draw_live_overlay(
         let min = camera.board_to_screen(rect, c.min);
         let max = camera.board_to_screen(rect, c.max);
         let region = Rect::from_two_pos(min, max);
-        painter.rect_filled(region, 0.0, Color32::from_rgba_unmultiplied(255, 220, 0, 28));
-        painter.rect_stroke(region, 0.0, Stroke::new(1.5, Color32::from_rgb(255, 200, 0)), egui::StrokeKind::Middle);
+        painter.rect_filled(
+            region,
+            0.0,
+            Color32::from_rgba_unmultiplied(255, 220, 0, 28),
+        );
+        painter.rect_stroke(
+            region,
+            0.0,
+            Stroke::new(1.5, Color32::from_rgb(255, 200, 0)),
+            egui::StrokeKind::Middle,
+        );
     }
     if let Some(path) = path {
         if path.len() >= 2 {
-            let pts: Vec<Pos2> = path.iter().map(|&p| camera.board_to_screen(rect, p)).collect();
-            painter.add(Shape::line(pts, Stroke::new(3.0, Color32::from_rgb(255, 70, 70))));
+            let pts: Vec<Pos2> = path
+                .iter()
+                .map(|&p| camera.board_to_screen(rect, p))
+                .collect();
+            painter.add(Shape::line(
+                pts,
+                Stroke::new(3.0, Color32::from_rgb(255, 70, 70)),
+            ));
         }
     }
 }
@@ -365,13 +439,20 @@ mod tests {
     fn net_highlight_dim_leaves_color_untouched_with_no_highlight_active() {
         let color = Color32::from_rgb(200, 60, 60);
         assert_eq!(net_highlight_dim(color, Some(NetId(1)), None), color);
-        assert_eq!(net_highlight_dim(color, None, None), color, "even a netless item must be unaffected when nothing is highlighted");
+        assert_eq!(
+            net_highlight_dim(color, None, None),
+            color,
+            "even a netless item must be unaffected when nothing is highlighted"
+        );
     }
 
     #[test]
     fn net_highlight_dim_leaves_the_highlighted_nets_own_items_untouched() {
         let color = Color32::from_rgb(200, 60, 60);
-        assert_eq!(net_highlight_dim(color, Some(NetId(1)), Some(NetId(1))), color);
+        assert_eq!(
+            net_highlight_dim(color, Some(NetId(1)), Some(NetId(1))),
+            color
+        );
     }
 
     #[test]
@@ -379,27 +460,45 @@ mod tests {
         let color = Color32::from_rgb(200, 60, 60);
         let dimmed_other_net = net_highlight_dim(color, Some(NetId(2)), Some(NetId(1)));
         let dimmed_netless = net_highlight_dim(color, None, Some(NetId(1)));
-        assert_ne!(dimmed_other_net, color, "a different net must actually be dimmed");
-        assert_eq!(dimmed_other_net, dimmed_netless, "no-net and wrong-net must be dimmed identically");
+        assert_ne!(
+            dimmed_other_net, color,
+            "a different net must actually be dimmed"
+        );
+        assert_eq!(
+            dimmed_other_net, dimmed_netless,
+            "no-net and wrong-net must be dimmed identically"
+        );
     }
 
     #[test]
     fn fit_centers_the_bounds_at_the_rects_center() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(800.0, 600.0));
-        let bounds = Aabb { min: Point::new(0, 0), max: Point::new(50 * MM, 30 * MM) };
+        let bounds = Aabb {
+            min: Point::new(0, 0),
+            max: Point::new(50 * MM, 30 * MM),
+        };
         let mut camera = Camera::default();
         camera.fit(rect, bounds);
 
         let center_board = Point::new(25 * MM, 15 * MM);
         let screen = camera.board_to_screen(rect, center_board);
-        assert!((screen.x - rect.center().x).abs() < 0.5, "expected board center at screen center, got {screen:?}");
-        assert!((screen.y - rect.center().y).abs() < 0.5, "expected board center at screen center, got {screen:?}");
+        assert!(
+            (screen.x - rect.center().x).abs() < 0.5,
+            "expected board center at screen center, got {screen:?}"
+        );
+        assert!(
+            (screen.y - rect.center().y).abs() < 0.5,
+            "expected board center at screen center, got {screen:?}"
+        );
     }
 
     #[test]
     fn fit_scales_so_the_bounds_dont_overflow_the_rect() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(800.0, 600.0));
-        let bounds = Aabb { min: Point::new(0, 0), max: Point::new(50 * MM, 30 * MM) };
+        let bounds = Aabb {
+            min: Point::new(0, 0),
+            max: Point::new(50 * MM, 30 * MM),
+        };
         let mut camera = Camera::default();
         camera.fit(rect, bounds);
 
@@ -421,7 +520,10 @@ mod tests {
     #[test]
     fn board_to_screen_moves_right_and_down_for_increasing_board_coordinates() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(800.0, 600.0));
-        let camera = Camera { center_mm: egui::Vec2::ZERO, pixels_per_mm: 2.0 };
+        let camera = Camera {
+            center_mm: egui::Vec2::ZERO,
+            pixels_per_mm: 2.0,
+        };
         let origin = camera.board_to_screen(rect, Point::new(0, 0));
         let right = camera.board_to_screen(rect, Point::new(10 * MM, 0));
         let down = camera.board_to_screen(rect, Point::new(0, 10 * MM));
@@ -432,12 +534,25 @@ mod tests {
     #[test]
     fn default_layer_toggles_shows_every_layer_including_mounting_holes() {
         let layers = LayerToggles::default();
-        assert!(layers.outline && layers.zones && layers.pads && layers.vias && layers.tracks && layers.back_layer && layers.holes);
+        assert!(
+            layers.outline
+                && layers.zones
+                && layers.pads
+                && layers.vias
+                && layers.tracks
+                && layers.back_layer
+                && layers.holes
+        );
     }
 
     #[test]
     fn bridge_free_runs_on_a_plain_hole_less_ring_returns_it_unchanged() {
-        let square = vec![Point::new(0, 0), Point::new(10 * MM, 0), Point::new(10 * MM, 10 * MM), Point::new(0, 10 * MM)];
+        let square = vec![
+            Point::new(0, 0),
+            Point::new(10 * MM, 0),
+            Point::new(10 * MM, 10 * MM),
+            Point::new(0, 10 * MM),
+        ];
         let runs = bridge_free_runs(&square);
         assert_eq!(runs.len(), 1);
         let mut expected = square.clone();
@@ -450,10 +565,21 @@ mod tests {
         // The exact shape `alladin_geom::fill::seal_holes` produces for a
         // centered square hole: outer boundary spliced at its first point
         // with the hole's own ring, both bridge endpoints duplicated.
-        let outer = [Point::new(-10 * MM, -10 * MM), Point::new(10 * MM, -10 * MM), Point::new(10 * MM, 10 * MM), Point::new(-10 * MM, 10 * MM)];
-        let hole = [Point::new(-3 * MM, -3 * MM), Point::new(3 * MM, -3 * MM), Point::new(3 * MM, 3 * MM), Point::new(-3 * MM, 3 * MM)];
+        let outer = [
+            Point::new(-10 * MM, -10 * MM),
+            Point::new(10 * MM, -10 * MM),
+            Point::new(10 * MM, 10 * MM),
+            Point::new(-10 * MM, 10 * MM),
+        ];
+        let hole = [
+            Point::new(-3 * MM, -3 * MM),
+            Point::new(3 * MM, -3 * MM),
+            Point::new(3 * MM, 3 * MM),
+            Point::new(-3 * MM, 3 * MM),
+        ];
         let sealed: Vec<Point> = vec![
-            outer[0], outer[1], outer[2], outer[3],
+            outer[0], outer[1], outer[2],
+            outer[3],
             // Bridge splice sits right after outer[0]/wraps to it -- mirror
             // `splice_hole`'s own "boundary[i], hole[j..], boundary[i]" shape.
         ];
@@ -475,12 +601,28 @@ mod tests {
         let runs = bridge_free_runs(&sealed);
         assert_eq!(runs.len(), 2, "must split into the outer ring and the hole's own closed loop, with the bridge itself drawn nowhere");
 
-        let hole_run = runs.iter().find(|r| r.contains(&hole[1])).expect("one run must be the hole's own loop");
-        assert_eq!(hole_run.len(), 5, "hole loop is its own 4-edge closed ring: 4 distinct points plus the closing repeat");
-        assert!(!hole_run.contains(&outer[1]), "the hole's run must never include an outer-boundary point");
+        let hole_run = runs
+            .iter()
+            .find(|r| r.contains(&hole[1]))
+            .expect("one run must be the hole's own loop");
+        assert_eq!(
+            hole_run.len(),
+            5,
+            "hole loop is its own 4-edge closed ring: 4 distinct points plus the closing repeat"
+        );
+        assert!(
+            !hole_run.contains(&outer[1]),
+            "the hole's run must never include an outer-boundary point"
+        );
 
-        let outer_run = runs.iter().find(|r| r.contains(&outer[1])).expect("one run must be the outer boundary");
-        assert!(!outer_run.contains(&hole[1]), "the outer run must never include a hole point");
+        let outer_run = runs
+            .iter()
+            .find(|r| r.contains(&outer[1]))
+            .expect("one run must be the outer boundary");
+        assert!(
+            !outer_run.contains(&hole[1]),
+            "the outer run must never include a hole point"
+        );
     }
 
     #[test]
@@ -496,11 +638,20 @@ mod tests {
     #[test]
     fn screen_to_board_is_the_inverse_of_board_to_screen() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(800.0, 600.0));
-        let camera = Camera { center_mm: egui::vec2(5.0, -3.0), pixels_per_mm: 4.0 };
+        let camera = Camera {
+            center_mm: egui::vec2(5.0, -3.0),
+            pixels_per_mm: 4.0,
+        };
         let original = Point::new(12 * MM, 7 * MM);
         let screen = camera.board_to_screen(rect, original);
         let back = camera.screen_to_board(rect, screen);
-        assert!((back.x - original.x).abs() < 1_000, "round-trip x drifted: {back:?} vs {original:?}");
-        assert!((back.y - original.y).abs() < 1_000, "round-trip y drifted: {back:?} vs {original:?}");
+        assert!(
+            (back.x - original.x).abs() < 1_000,
+            "round-trip x drifted: {back:?} vs {original:?}"
+        );
+        assert!(
+            (back.y - original.y).abs() < 1_000,
+            "round-trip y drifted: {back:?} vs {original:?}"
+        );
     }
 }

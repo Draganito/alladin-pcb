@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use alladin_core::{Item, LayerId, ZoneConnection};
 use alladin_geom::{Point, Unit, MM};
 use alladin_gerber::{
-    set_generation_software, Circle as GerberCircle, DrillKind, ExcellonFile, GerberLayer, Oblong, PadMaster, Path as GerberPath, Rectangle,
+    set_generation_software, Circle as GerberCircle, DrillKind, ExcellonFile, GerberLayer, Oblong,
+    PadMaster, Path as GerberPath, Rectangle,
 };
 
 use crate::board_doc::BoardDoc;
@@ -100,10 +101,18 @@ pub fn export_manufacturing_files_native(
     let bom_csv = out_dir.join(format!("{stem}_bom.csv"));
     std::fs::write(&bom_csv, bom_csv_contents)?;
 
-    Ok(ManufacturingFiles { gerber_zip, position_csv, bom_csv })
+    Ok(ManufacturingFiles {
+        gerber_zip,
+        position_csv,
+        bom_csv,
+    })
 }
 
-fn build_gerber_files(doc: &BoardDoc, templates: &[FootprintTemplate], stem: &str) -> Vec<NamedFile> {
+fn build_gerber_files(
+    doc: &BoardDoc,
+    templates: &[FootprintTemplate],
+    stem: &str,
+) -> Vec<NamedFile> {
     let mut f_cu = GerberLayer::new("Copper,L1,Top,Signal", false);
     let mut b_cu = GerberLayer::new("Copper,L2,Bot,Signal", false);
     let mut f_mask = GerberLayer::new("Soldermask,Top", true);
@@ -123,8 +132,17 @@ fn build_gerber_files(doc: &BoardDoc, templates: &[FootprintTemplate], stem: &st
     for item in doc.node.iter() {
         match item {
             Item::Track { shape, layer, .. } => {
-                let layer_g = if *layer == LayerId::FCu { &mut f_cu } else { &mut b_cu };
-                layer_g.add_trace_line(fab_point(shape.a), fab_point(shape.b), shape.width, "Conductor");
+                let layer_g = if *layer == LayerId::FCu {
+                    &mut f_cu
+                } else {
+                    &mut b_cu
+                };
+                layer_g.add_trace_line(
+                    fab_point(shape.a),
+                    fab_point(shape.b),
+                    shape.width,
+                    "Conductor",
+                );
             }
             Item::Via { shape, drill, .. } => {
                 let master = PadMaster::Circle(GerberCircle::new(shape.radius * 2, "ViaPad"));
@@ -137,7 +155,11 @@ fn build_gerber_files(doc: &BoardDoc, templates: &[FootprintTemplate], stem: &st
             Item::Zone { outline, layer, .. } => {
                 let pts: Vec<Point> = outline.points.iter().copied().map(fab_point).collect();
                 let path = GerberPath::from_closed_ring(&pts);
-                let layer_g = if *layer == LayerId::FCu { &mut f_cu } else { &mut b_cu };
+                let layer_g = if *layer == LayerId::FCu {
+                    &mut f_cu
+                } else {
+                    &mut b_cu
+                };
                 layer_g.add_region(path, "Conductor", false);
             }
             // Mounting holes are emitted from footprint templates below
@@ -154,7 +176,11 @@ fn build_gerber_files(doc: &BoardDoc, templates: &[FootprintTemplate], stem: &st
             continue;
         };
         for pad in &template.pads {
-            let center = fab_point(pad_world_position(pad.offset, placed.position, placed.rotation_deg));
+            let center = fab_point(pad_world_position(
+                pad.offset,
+                placed.position,
+                placed.rotation_deg,
+            ));
             // Y-flip mirrors rotation sense too: Gerber/pos use the
             // negated board angle (KiCad-compatible `at` convention).
             let total_rot = -(pad.rotation_deg + placed.rotation_deg);
@@ -199,11 +225,18 @@ fn build_gerber_files(doc: &BoardDoc, templates: &[FootprintTemplate], stem: &st
             }
         }
         for hole in &template.holes {
-            let center = fab_point(pad_world_position(hole.offset, placed.position, placed.rotation_deg));
+            let center = fab_point(pad_world_position(
+                hole.offset,
+                placed.position,
+                placed.rotation_deg,
+            ));
             npth.add_hole(center, hole.drill);
             // Mechanical holes also need a soldermask opening on both sides
             // so solder mask doesn't tent the hole shut.
-            let master = PadMaster::Circle(GerberCircle::new(hole.drill + MASK_EXPANSION * 2, "ComponentPad"));
+            let master = PadMaster::Circle(GerberCircle::new(
+                hole.drill + MASK_EXPANSION * 2,
+                "ComponentPad",
+            ));
             f_mask.add_pad(master.clone(), center, 0.0);
             b_mask.add_pad(master, center, 0.0);
         }
@@ -214,18 +247,39 @@ fn build_gerber_files(doc: &BoardDoc, templates: &[FootprintTemplate], stem: &st
 
     // --- Silkscreen -------------------------------------------------
     for text in &doc.silk_texts {
-        let silk = if text.layer == LayerId::FCu { &mut f_silk } else { &mut b_silk };
+        let silk = if text.layer == LayerId::FCu {
+            &mut f_silk
+        } else {
+            &mut b_silk
+        };
         for seg in text.stroke_segments() {
-            silk.add_trace_line(fab_point(seg.a), fab_point(seg.b), seg.width, "NonConductor");
+            silk.add_trace_line(
+                fab_point(seg.a),
+                fab_point(seg.b),
+                seg.width,
+                "NonConductor",
+            );
         }
     }
     for dot in &doc.silk_dots {
-        let silk = if dot.layer == LayerId::FCu { &mut f_silk } else { &mut b_silk };
-        silk.add_pad(PadMaster::Circle(GerberCircle::new(dot.diameter, "NonConductor")), fab_point(dot.position), 0.0);
+        let silk = if dot.layer == LayerId::FCu {
+            &mut f_silk
+        } else {
+            &mut b_silk
+        };
+        silk.add_pad(
+            PadMaster::Circle(GerberCircle::new(dot.diameter, "NonConductor")),
+            fab_point(dot.position),
+            0.0,
+        );
     }
     for fp in &doc.footprints {
         if let Some(c) = fp.pin1_marker_circle() {
-            f_silk.add_pad(PadMaster::Circle(GerberCircle::new(c.radius * 2, "NonConductor")), fab_point(c.center), 0.0);
+            f_silk.add_pad(
+                PadMaster::Circle(GerberCircle::new(c.radius * 2, "NonConductor")),
+                fab_point(c.center),
+                0.0,
+            );
         }
     }
 
@@ -237,33 +291,76 @@ fn build_gerber_files(doc: &BoardDoc, templates: &[FootprintTemplate], stem: &st
     }
 
     let mut out = Vec::new();
-    out.push(NamedFile { name: format!("{stem}-F_Cu.gtl"), contents: f_cu.dump() });
-    out.push(NamedFile { name: format!("{stem}-B_Cu.gbl"), contents: b_cu.dump() });
-    out.push(NamedFile { name: format!("{stem}-F_Mask.gts"), contents: f_mask.dump() });
-    out.push(NamedFile { name: format!("{stem}-B_Mask.gbs"), contents: b_mask.dump() });
-    out.push(NamedFile { name: format!("{stem}-F_Paste.gtp"), contents: f_paste.dump() });
-    out.push(NamedFile { name: format!("{stem}-B_Paste.gbp"), contents: b_paste.dump() });
-    out.push(NamedFile { name: format!("{stem}-F_Silkscreen.gto"), contents: f_silk.dump() });
-    out.push(NamedFile { name: format!("{stem}-B_Silkscreen.gbo"), contents: b_silk.dump() });
-    out.push(NamedFile { name: format!("{stem}-Edge_Cuts.gm1"), contents: edge.dump() });
+    out.push(NamedFile {
+        name: format!("{stem}-F_Cu.gtl"),
+        contents: f_cu.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-B_Cu.gbl"),
+        contents: b_cu.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-F_Mask.gts"),
+        contents: f_mask.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-B_Mask.gbs"),
+        contents: b_mask.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-F_Paste.gtp"),
+        contents: f_paste.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-B_Paste.gbp"),
+        contents: b_paste.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-F_Silkscreen.gto"),
+        contents: f_silk.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-B_Silkscreen.gbo"),
+        contents: b_silk.dump(),
+    });
+    out.push(NamedFile {
+        name: format!("{stem}-Edge_Cuts.gm1"),
+        contents: edge.dump(),
+    });
     if !pth.is_empty() {
-        out.push(NamedFile { name: format!("{stem}-PTH.drl"), contents: pth.dump() });
+        out.push(NamedFile {
+            name: format!("{stem}-PTH.drl"),
+            contents: pth.dump(),
+        });
     }
     if !npth.is_empty() {
-        out.push(NamedFile { name: format!("{stem}-NPTH.drl"), contents: npth.dump() });
+        out.push(NamedFile {
+            name: format!("{stem}-NPTH.drl"),
+            contents: npth.dump(),
+        });
     }
     out
 }
 
-fn pad_template_master(pad: &crate::footprint::PadTemplate, expansion: Unit, function: &str) -> PadMaster {
+fn pad_template_master(
+    pad: &crate::footprint::PadTemplate,
+    expansion: Unit,
+    function: &str,
+) -> PadMaster {
     match pad.shape {
-        PadShapeKind::Circle => PadMaster::Circle(GerberCircle::new(pad.radius * 2 + expansion * 2, function)),
-        PadShapeKind::Rect { width, height } => {
-            PadMaster::Rectangle(Rectangle::new(width + expansion * 2, height + expansion * 2, function))
+        PadShapeKind::Circle => {
+            PadMaster::Circle(GerberCircle::new(pad.radius * 2 + expansion * 2, function))
         }
-        PadShapeKind::Oval { width, height } => {
-            PadMaster::Oblong(Oblong::new(width + expansion * 2, height + expansion * 2, function))
-        }
+        PadShapeKind::Rect { width, height } => PadMaster::Rectangle(Rectangle::new(
+            width + expansion * 2,
+            height + expansion * 2,
+            function,
+        )),
+        PadShapeKind::Oval { width, height } => PadMaster::Oblong(Oblong::new(
+            width + expansion * 2,
+            height + expansion * 2,
+            function,
+        )),
     }
 }
 
@@ -274,7 +371,12 @@ fn build_jlcpcb_cpl(doc: &BoardDoc, templates: &[FootprintTemplate]) -> String {
     rows.sort_by(|a, b| a.reference.cmp(&b.reference));
     for fp in rows {
         // Skip pure mechanical hole parts (exclude_from_bom) -- same as BOM.
-        if templates.iter().find(|t| t.name == fp.template_name).map(|t| t.exclude_from_bom).unwrap_or(false) {
+        if templates
+            .iter()
+            .find(|t| t.name == fp.template_name)
+            .map(|t| t.exclude_from_bom)
+            .unwrap_or(false)
+        {
             continue;
         }
         // Layer: a part is "Top" if it has any front-side pad, else Bottom.
@@ -318,8 +420,12 @@ fn zip_named_files(files: &[NamedFile], zip_path: &Path) -> Result<(), NativeGer
     Ok(())
 }
 
-fn write_named_files_to_zip<W: Write + Seek>(writer: &mut zip::ZipWriter<W>, files: &[NamedFile]) -> Result<(), NativeGerberError> {
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+fn write_named_files_to_zip<W: Write + Seek>(
+    writer: &mut zip::ZipWriter<W>,
+    files: &[NamedFile],
+) -> Result<(), NativeGerberError> {
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
     let mut sorted: Vec<&NamedFile> = files.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
     for f in sorted {
@@ -339,8 +445,14 @@ pub fn export_manufacturing_zip_bytes(
 ) -> Result<Vec<u8>, NativeGerberError> {
     set_generation_software("Dragan Bojovic", "Alladin PCB", env!("CARGO_PKG_VERSION"));
     let mut files = build_gerber_files(doc, templates, stem);
-    files.push(NamedFile { name: format!("{stem}_cpl.csv"), contents: build_jlcpcb_cpl(doc, templates) });
-    files.push(NamedFile { name: format!("{stem}_bom.csv"), contents: bom_csv_contents.to_string() });
+    files.push(NamedFile {
+        name: format!("{stem}_cpl.csv"),
+        contents: build_jlcpcb_cpl(doc, templates),
+    });
+    files.push(NamedFile {
+        name: format!("{stem}_bom.csv"),
+        contents: bom_csv_contents.to_string(),
+    });
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut cursor);
@@ -371,16 +483,30 @@ mod tests {
     #[test]
     fn native_export_writes_zip_and_cpl_for_an_empty_board() {
         let board = empty_board();
-        let dir = std::env::temp_dir().join(format!("alladin_native_gerber_empty_{}", std::process::id()));
-        let files = export_manufacturing_files_native(&board, &[], "board", &dir, "Comment,Designator,Footprint,LCSC Part #\n").unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "alladin_native_gerber_empty_{}",
+            std::process::id()
+        ));
+        let files = export_manufacturing_files_native(
+            &board,
+            &[],
+            "board",
+            &dir,
+            "Comment,Designator,Footprint,LCSC Part #\n",
+        )
+        .unwrap();
         assert!(files.gerber_zip.exists());
         assert!(files.position_csv.exists());
         assert!(files.bom_csv.exists());
-        assert!(std::fs::read_to_string(&files.bom_csv).unwrap().starts_with("Comment,Designator,Footprint,LCSC Part #"));
+        assert!(std::fs::read_to_string(&files.bom_csv)
+            .unwrap()
+            .starts_with("Comment,Designator,Footprint,LCSC Part #"));
 
         let zip_file = std::fs::File::open(&files.gerber_zip).unwrap();
         let mut archive = zip::ZipArchive::new(zip_file).unwrap();
-        let mut names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+        let mut names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
         names.sort();
         assert!(names.iter().any(|n| n.ends_with("-F_Cu.gtl")));
         assert!(names.iter().any(|n| n.ends_with("-B_Cu.gbl")));
@@ -411,21 +537,32 @@ mod tests {
             drill: MM / 3,
             net: None,
         });
-        let dir = std::env::temp_dir().join(format!("alladin_native_gerber_via_{}", std::process::id()));
-        let files = export_manufacturing_files_native(&board, &[], "via", &dir, "Comment,Designator,Footprint,LCSC Part #\n").unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("alladin_native_gerber_via_{}", std::process::id()));
+        let files = export_manufacturing_files_native(
+            &board,
+            &[],
+            "via",
+            &dir,
+            "Comment,Designator,Footprint,LCSC Part #\n",
+        )
+        .unwrap();
         let zip_file = std::fs::File::open(&files.gerber_zip).unwrap();
         let mut archive = zip::ZipArchive::new(zip_file).unwrap();
 
         let mut f_cu = String::new();
-        std::io::Read::read_to_string(&mut archive.by_name("via-F_Cu.gtl").unwrap(), &mut f_cu).unwrap();
+        std::io::Read::read_to_string(&mut archive.by_name("via-F_Cu.gtl").unwrap(), &mut f_cu)
+            .unwrap();
         let mut b_cu = String::new();
-        std::io::Read::read_to_string(&mut archive.by_name("via-B_Cu.gbl").unwrap(), &mut b_cu).unwrap();
+        std::io::Read::read_to_string(&mut archive.by_name("via-B_Cu.gbl").unwrap(), &mut b_cu)
+            .unwrap();
         assert!(f_cu.contains("ViaPad"));
         assert!(b_cu.contains("ViaPad"));
         assert!(f_cu.contains("D03*"));
 
         let mut pth = String::new();
-        std::io::Read::read_to_string(&mut archive.by_name("via-PTH.drl").unwrap(), &mut pth).unwrap();
+        std::io::Read::read_to_string(&mut archive.by_name("via-PTH.drl").unwrap(), &mut pth)
+            .unwrap();
         assert!(pth.contains("Plated,1,2,PTH"));
         assert!(pth.contains("X0Y0") || pth.contains("X0.0Y0"));
 
@@ -436,16 +573,37 @@ mod tests {
     fn native_export_bakes_silk_text_into_front_silkscreen() {
         let mut board = empty_board();
         board
-            .try_place_silk_text("ALLADIN", Point::new(0, 0), 0.0, LayerId::FCu, crate::board_doc::DEFAULT_SILK_TEXT_HEIGHT)
+            .try_place_silk_text(
+                "ALLADIN",
+                Point::new(0, 0),
+                0.0,
+                LayerId::FCu,
+                crate::board_doc::DEFAULT_SILK_TEXT_HEIGHT,
+            )
             .unwrap();
-        let dir = std::env::temp_dir().join(format!("alladin_native_gerber_silk_{}", std::process::id()));
-        let files = export_manufacturing_files_native(&board, &[], "silk", &dir, "Comment,Designator,Footprint,LCSC Part #\n").unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("alladin_native_gerber_silk_{}", std::process::id()));
+        let files = export_manufacturing_files_native(
+            &board,
+            &[],
+            "silk",
+            &dir,
+            "Comment,Designator,Footprint,LCSC Part #\n",
+        )
+        .unwrap();
         let zip_file = std::fs::File::open(&files.gerber_zip).unwrap();
         let mut archive = zip::ZipArchive::new(zip_file).unwrap();
         let mut silk = String::new();
-        std::io::Read::read_to_string(&mut archive.by_name("silk-F_Silkscreen.gto").unwrap(), &mut silk).unwrap();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("silk-F_Silkscreen.gto").unwrap(),
+            &mut silk,
+        )
+        .unwrap();
         assert!(silk.contains("D01*"), "silk strokes must draw");
-        assert!(silk.matches("D01*").count() > 5, "a word of stroke font must produce many segments");
+        assert!(
+            silk.matches("D01*").count() > 5,
+            "a word of stroke font must produce many segments"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -461,7 +619,10 @@ mod tests {
                     radius: MM / 4,
                     layer: LayerId::FCu,
                     number: "1".into(),
-                    shape: PadShapeKind::Rect { width: MM / 2, height: MM / 3 },
+                    shape: PadShapeKind::Rect {
+                        width: MM / 2,
+                        height: MM / 3,
+                    },
                     rotation_deg: 0.0,
                     hole_diameter: None,
                     pin_name: None,
@@ -472,7 +633,10 @@ mod tests {
                     radius: MM / 4,
                     layer: LayerId::FCu,
                     number: "2".into(),
-                    shape: PadShapeKind::Rect { width: MM / 2, height: MM / 3 },
+                    shape: PadShapeKind::Rect {
+                        width: MM / 2,
+                        height: MM / 3,
+                    },
                     rotation_deg: 0.0,
                     hole_diameter: None,
                     pin_name: None,
@@ -483,9 +647,14 @@ mod tests {
             exclude_from_bom: false,
             explicit_courtyard: None,
         };
-        board.try_place_footprint(&template, Point::new(MM, 2 * MM), 90.0).unwrap();
+        board
+            .try_place_footprint(&template, Point::new(MM, 2 * MM), 90.0)
+            .unwrap();
         let cpl = build_jlcpcb_cpl(&board, &[template]);
         // Fab convention: Y and rotation negated vs board coords.
-        assert!(cpl.contains("C1,1.000000,-2.000000,Top,-90.000000"), "got:\n{cpl}");
+        assert!(
+            cpl.contains("C1,1.000000,-2.000000,Top,-90.000000"),
+            "got:\n{cpl}"
+        );
     }
 }
