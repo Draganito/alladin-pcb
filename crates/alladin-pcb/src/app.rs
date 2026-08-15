@@ -3506,9 +3506,9 @@ impl eframe::App for PcbApp {
                                 &json,
                             ) {
                                 Ok((n, skip)) => {
+                                    let (templates, origin, hover, category) =
+                                        load_templates(&world.parts_db);
                                     if let Screen::Editor(state) = &mut world.screen {
-                                        let (templates, origin, hover, category) =
-                                            load_templates(&world.parts_db);
                                         state.templates = templates;
                                         state.template_origin = origin;
                                         state.template_hover = hover;
