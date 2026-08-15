@@ -206,17 +206,18 @@ functions e.g. `U10.3 (VDD)`.
 
 ### 6.1 Built-in parts
 
-Always available under "Place part": "2-pin THT (2.54mm pitch)",
-"4-pin THT header (2.54mm pitch)", "SOIC-8 (1.27mm pitch)",
-"Solder pad (SMD, 1.5mm, F.Cu)", "Solder pad (SMD, 1.5mm, B.Cu)",
-"Wire pad (PTH, 1.0mm hole)", "Wire pad (solder, 2mm)" (1.5 mm hole),
-"Wire pad (PTH, 2.0mm hole)" (Solid, for higher current),
-"Mounting hole (M2, NPTH)", "Mounting hole (M2.5, NPTH)",
-"Mounting hole (M3, NPTH)".
+Always available under "Place part": "Solder pad (SMD, 1.5mm, F.Cu)",
+"Solder pad (SMD, 1.5mm, B.Cu)", "Wire pad (PTH, 1.0mm hole)",
+"Wire pad (solder, 2mm)" (1.5 mm hole), "Wire pad (PTH, 2.0mm hole)"
+(Solid default, for higher current), "Mounting hole (M2, NPTH)",
+"Mounting hole (M2.5, NPTH)", "Mounting hole (M3, NPTH)". Real ICs and
+headers come from the parts DB / LCSC, not as built-in demos.
 
 PTH wire pads occupy **both** copper layers. On a selected part,
 **"Pour: Thermal / Solid"** chooses spoke relief vs a full flood into a
-same-net plane (F.Cu and B.Cu). "Add part…" can optionally set a drill.
+same-net plane (F.Cu and B.Cu) — the same choice is available over MCP
+(`zone_connection` on place, or `set_zone_connection`). "Add part…" can
+optionally set a drill.
 
 Every mounting hole automatically enforces a **screw-head keep-out**:
 copper (tracks, vias, pads, zone fills) stays out of a circle of the
@@ -536,7 +537,7 @@ Write (need `--allow-ai-write`):
 |---|---|
 | `new_board` | Create a fresh board (refuses to discard an open one unless told to) |
 | `download_lcsc_part` | LCSC → parts DB |
-| `place_footprint` | Place a library template (same DFM gates as the GUI) |
+| `place_footprint` | Place a library template (same DFM gates as the GUI); optional `zone_connection` `thermal`/`solid` |
 | `move_footprint` | Move/rotate a placed part |
 | `place_parts` | Atomic multi-place (max 50, one undo); optional `pins` net map; reply includes `open_bridges` score |
 | `move_parts` | Atomic multi-move (max 50, one undo); reply includes `open_bridges` score |
@@ -545,6 +546,7 @@ Write (need `--allow-ai-write`):
 | `disconnect_pin` | Take one pin off its net |
 | `add_pin_stitching_via` | Stitching via + stub next to a pin (or every pad on a net), auto-placed like the GUI's "Add via near pin"; never lands on or within clearance of any solder pad (same-net included) — crowded pins are refused rather than compromised. Every via placement (GUI / MCP / mid-route) also refuses landing on any track, same-net included — a drill through a trace severs that copper |
 | `rename_net` | Give a net a real name (`5V`, `GND`, …) |
+| `set_zone_connection` | Pour connection of a placed part: `thermal` (spokes) or `solid` (full flood) |
 | `save_board` | Save the board |
 | `commit_route` | Lay a cleared copper route (same gates as the GUI preview) |
 | `ripup_wire` | Remove a wire near a point, or all tracks/vias on a net |

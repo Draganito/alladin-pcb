@@ -101,10 +101,12 @@ An AI can set up a board, fetch and place parts, wire the netlist, lay
 copper with the same clearance gates as the GUI's manual router, and
 verify its own work — read-only: `board_summary`, `get_footprints`,
 `get_nets`, `list_parts`, `check_board`, `get_routing_scene`,
-`probe_route`; write: `new_board`, `download_lcsc_part`,
-`place_footprint`, `move_footprint`, `remove_footprint`, `connect_pins`,
-`disconnect_pin`, `add_pin_stitching_via`, `rename_net`, `save_board`,
-`commit_route`, `ripup_wire`. Every write runs through the same DFM gates and Ctrl+Z undo
+`probe_route`, `probe_placement`, `suggest_route` (write only with
+`commit=true`); write: `new_board`, `download_lcsc_part`,
+`place_footprint`, `move_footprint`, `place_parts`, `move_parts`,
+`remove_footprint`, `connect_pins`, `disconnect_pin`,
+`add_pin_stitching_via`, `rename_net`, `set_zone_connection`,
+`save_board`, `commit_route`, `ripup_wire`. Every write runs through the same DFM gates and Ctrl+Z undo
 history as GUI gestures. Zone fill stays in the GUI (no autorouter).
 
 Copy the *contents* of [`contrib/cursor-setup/`](contrib/cursor-setup)

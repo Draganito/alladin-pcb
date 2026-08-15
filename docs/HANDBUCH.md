@@ -214,18 +214,18 @@ bekannten Pin-Funktionen z. B. `U10.3 (VDD)`.
 
 ### 6.1 Eingebaute Bauteile
 
-Unter „Place part" stehen immer bereit: „2-pin THT (2.54mm pitch)",
-„4-pin THT header (2.54mm pitch)", „SOIC-8 (1.27mm pitch)",
-„Solder pad (SMD, 1.5mm, F.Cu)", „Solder pad (SMD, 1.5mm, B.Cu)",
-„Wire pad (PTH, 1.0mm hole)", „Wire pad (solder, 2mm)" (1,5 mm Loch),
-„Wire pad (PTH, 2.0mm hole)" (Solid, für höhere Ströme),
-„Mounting hole (M2, NPTH)", „Mounting hole (M2.5, NPTH)",
-„Mounting hole (M3, NPTH)".
+Unter „Place part" stehen immer bereit: „Solder pad (SMD, 1.5mm, F.Cu)",
+„Solder pad (SMD, 1.5mm, B.Cu)", „Wire pad (PTH, 1.0mm hole)",
+„Wire pad (solder, 2mm)" (1,5 mm Loch), „Wire pad (PTH, 2.0mm hole)"
+(Solid-Default, für höhere Ströme), „Mounting hole (M2, NPTH)",
+„Mounting hole (M2.5, NPTH)", „Mounting hole (M3, NPTH)". Echte ICs und
+Stecker kommen aus der Parts-DB / LCSC, nicht als eingebaute Demos.
 
 PTH-Lötpads sitzen auf **beiden** Kupferlagen. Am ausgewählten Bauteil
 stellt **„Pour: Thermal / Solid"** ein, ob eine Plane mit Speichen oder
-vollflächig anbindet (gilt für F.Cu und B.Cu). „Add part…" kann optional
-eine Bohrung setzen.
+vollflächig anbindet (gilt für F.Cu und B.Cu) — dieselbe Wahl geht über
+MCP (`zone_connection` beim Platzieren, oder `set_zone_connection`).
+„Add part…" kann optional eine Bohrung setzen.
 
 Jedes Montageloch erzwingt automatisch einen **Schraubenkopf-Freiraum**:
 Kupfer (Bahnen, Vias, Pads, Zonen-Füllungen) bleibt aus einem Kreis vom
@@ -559,7 +559,7 @@ Schreibend (brauchen `--allow-ai-write`):
 |---|---|
 | `new_board` | Frisches Board anlegen (verweigert, ein offenes Board ungefragt zu verwerfen) |
 | `download_lcsc_part` | LCSC → Parts-DB |
-| `place_footprint` | Template platzieren (dieselben DFM-Gates wie die GUI) |
+| `place_footprint` | Template platzieren (dieselben DFM-Gates wie die GUI); optional `zone_connection` `thermal`/`solid` |
 | `move_footprint` | Platziertes Teil verschieben/drehen |
 | `place_parts` | Atomares Mehrfach-Platzieren (max. 50, ein Undo); optional `pins`-Netzmap; Antwort mit `open_bridges`-Score |
 | `move_parts` | Atomares Mehrfach-Verschieben (max. 50, ein Undo); Antwort mit `open_bridges`-Score |
@@ -568,6 +568,7 @@ Schreibend (brauchen `--allow-ai-write`):
 | `disconnect_pin` | Einen Pin vom Netz nehmen |
 | `add_pin_stitching_via` | Stitching-Via + Stub neben einem Pin (oder allen Pads eines Netzes), automatisch platziert wie das GUI-„Via neben Pin"; landet nie auf oder zu nah an einem Lötpad (auch nicht same-net) — enge Pins werden abgelehnt statt kompromittiert. Jede Via-Platzierung (GUI / MCP / Layerwechsel) lehnt auch das Landen auf einer Leiterbahn ab (auch same-net) — das Bohrloch kappt die Spur |
 | `rename_net` | Netz sauber benennen (`5V`, `GND`, …) |
+| `set_zone_connection` | Pour-Anbindung eines platzierten Teils: `thermal` (Speichen) oder `solid` (vollflächig) |
 | `save_board` | Board speichern |
 | `commit_route` | Geprüfte Kupferbahn legen (gleiche Gates wie GUI-Preview) |
 | `ripup_wire` | Bahn nahe einem Punkt oder alles Kupfer eines Netzes entfernen |

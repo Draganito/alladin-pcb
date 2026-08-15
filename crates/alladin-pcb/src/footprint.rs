@@ -260,10 +260,9 @@ pub struct FootprintTemplate {
     pub pads: Vec<PadTemplate>,
     /// Genuine unplated mechanical holes this template also has, if
     /// any (see [`HoleTemplate`]'s own doc comment) -- empty for every
-    /// ordinary electrical part (the 3 fixed [`builtin_templates`],
-    /// every LCSC download, every `crate::parts_db::PartsDb::insert_part`
-    /// hand-added part so far). Populated by mechanical builtins
-    /// ([`mounting_hole_template`]) and any imported NPTH geometry.
+    /// ordinary electrical part (LCSC downloads, hand-added parts).
+    /// Populated by mechanical builtins ([`mounting_hole_template`])
+    /// and any imported NPTH geometry.
     pub holes: Vec<HoleTemplate>,
     /// Whether this template's own placed instances should be silently
     /// skipped by `crate::bom::build_bom_rows` -- purely mechanical
@@ -463,11 +462,53 @@ pub fn world_courtyard(
     pad_outline_polygon(courtyard.width, courtyard.height, 0, rotation_deg, center)
 }
 
-/// The fixed template library shipped with the editor. Deliberately
-/// small and generic (pitch/pad-size only, no real part semantics) --
-/// enough for placement and collision-locking demos; real parts come
-/// from the parts database / LCSC download.
+/// The placeable built-in library: SMD/PTH solder pads plus metric
+/// mounting holes. Real ICs and headers come from the parts database /
+/// LCSC download. Old demo names (THT header / SOIC placeholders with
+/// no drill) live in [`legacy_builtin_templates`] so existing boards
+/// still open; they are hidden from Place part / `list_parts`.
 pub fn builtin_templates() -> Vec<FootprintTemplate> {
+    vec![
+        smd_solder_pad_template(LayerId::FCu),
+        smd_solder_pad_template(LayerId::BCu),
+        wire_pad_template(
+            "Wire pad (PTH, 1.0mm hole)",
+            mm(1.0),
+            mm(1.0),
+            ZoneConnection::Thermal,
+        ),
+        wire_pad_template(
+            "Wire pad (solder, 2mm)",
+            mm(1.25),
+            mm(1.5),
+            ZoneConnection::Thermal,
+        ),
+        wire_pad_template(
+            "Wire pad (PTH, 2.0mm hole)",
+            mm(1.6),
+            mm(2.0),
+            ZoneConnection::Solid,
+        ),
+        mounting_hole_template("M2", mm(2.2)),
+        mounting_hole_template("M2.5", mm(2.7)),
+        mounting_hole_template("M3", mm(3.2)),
+    ]
+}
+
+/// Names of the former demo builtins that must not appear in Place part
+/// or `list_parts`, but still resolve when an old board is opened.
+pub fn is_legacy_demo_template(name: &str) -> bool {
+    matches!(
+        name,
+        "2-pin THT (2.54mm pitch)"
+            | "4-pin THT header (2.54mm pitch)"
+            | "SOIC-8 (1.27mm pitch)"
+    )
+}
+
+/// Geometry for [`is_legacy_demo_template`] names — load/move only.
+/// These were SMD circles labelled THT/SOIC (no plated hole).
+pub fn legacy_builtin_templates() -> Vec<FootprintTemplate> {
     vec![
         FootprintTemplate {
             name: "2-pin THT (2.54mm pitch)".to_string(),
@@ -519,30 +560,15 @@ pub fn builtin_templates() -> Vec<FootprintTemplate> {
             exclude_from_bom: false,
             explicit_courtyard: None,
         },
-        smd_solder_pad_template(LayerId::FCu),
-        smd_solder_pad_template(LayerId::BCu),
-        wire_pad_template(
-            "Wire pad (PTH, 1.0mm hole)",
-            mm(1.0),
-            mm(1.0),
-            ZoneConnection::Thermal,
-        ),
-        wire_pad_template(
-            "Wire pad (solder, 2mm)",
-            mm(1.25),
-            mm(1.5),
-            ZoneConnection::Thermal,
-        ),
-        wire_pad_template(
-            "Wire pad (PTH, 2.0mm hole)",
-            mm(1.6),
-            mm(2.0),
-            ZoneConnection::Solid,
-        ),
-        mounting_hole_template("M2", mm(2.2)),
-        mounting_hole_template("M2.5", mm(2.7)),
-        mounting_hole_template("M3", mm(3.2)),
     ]
+}
+
+/// Placeable builtins plus load-only demo ghosts — what a session needs
+/// so an old board can still move/rotate those footprints.
+pub fn session_builtin_templates() -> Vec<FootprintTemplate> {
+    let mut templates = builtin_templates();
+    templates.extend(legacy_builtin_templates());
+    templates
 }
 
 /// SMD solder / test pad (no drill) on one copper face — surface-solder
@@ -863,6 +889,32 @@ pub fn template_dfm_hard_violations(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placeable_builtins_are_only_the_pad_set_and_mounting_holes() {
+        let names: Vec<_> = builtin_templates().into_iter().map(|t| t.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Solder pad (SMD, 1.5mm, F.Cu)",
+                "Solder pad (SMD, 1.5mm, B.Cu)",
+                "Wire pad (PTH, 1.0mm hole)",
+                "Wire pad (solder, 2mm)",
+                "Wire pad (PTH, 2.0mm hole)",
+                "Mounting hole (M2, NPTH)",
+                "Mounting hole (M2.5, NPTH)",
+                "Mounting hole (M3, NPTH)",
+            ]
+        );
+        for name in [
+            "2-pin THT (2.54mm pitch)",
+            "4-pin THT header (2.54mm pitch)",
+            "SOIC-8 (1.27mm pitch)",
+        ] {
+            assert!(is_legacy_demo_template(name));
+            assert!(legacy_builtin_templates().iter().any(|t| t.name == name));
+        }
+    }
 
     #[test]
     fn builtin_templates_are_non_empty_and_every_pad_has_a_positive_radius() {

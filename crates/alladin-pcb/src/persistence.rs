@@ -738,7 +738,7 @@ pub fn from_json(
 mod tests {
     use super::*;
     use crate::board_doc::NewBoardParams;
-    use crate::footprint::builtin_templates;
+    use crate::footprint::{builtin_templates, legacy_builtin_templates, session_builtin_templates};
     use alladin_geom::MM;
 
     #[test]
@@ -750,6 +750,20 @@ mod tests {
         assert_eq!(loaded.layer_count, doc.layer_count);
         assert!(loaded.footprints.is_empty());
         assert_eq!(loaded.node.len(), 0);
+    }
+
+    #[test]
+    fn old_boards_with_legacy_demo_templates_still_load() {
+        let mut doc = NewBoardParams::default().create();
+        let legacy = legacy_builtin_templates();
+        doc.try_place_footprint(&legacy[0], Point::new(0, 0), 0.0)
+            .unwrap();
+        let (loaded, _) = from_json(&to_json(&doc, &[]), &session_builtin_templates())
+            .expect("a board that still names 2-pin THT must open");
+        assert_eq!(
+            loaded.footprints[0].template_name,
+            "2-pin THT (2.54mm pitch)"
+        );
     }
 
     #[test]

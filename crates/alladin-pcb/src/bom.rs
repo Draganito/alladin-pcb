@@ -132,10 +132,16 @@ mod tests {
     #[test]
     fn groups_parts_sharing_a_template_into_one_row_with_sorted_uppercase_designators() {
         let mut board = test_board();
-        let templates = crate::footprint::builtin_templates();
-        let template = &templates[0];
-        board.try_place_footprint(template, Point::new(-20_000_000, 0), 0.0).unwrap();
-        board.try_place_footprint(template, Point::new(20_000_000, 0), 0.0).unwrap();
+        let template = crate::footprint::straight_row_template(
+            "2-pin test".into(),
+            "P".into(),
+            2,
+            2.54,
+            0.45,
+        );
+        board.try_place_footprint(&template, Point::new(-20_000_000, 0), 0.0).unwrap();
+        board.try_place_footprint(&template, Point::new(20_000_000, 0), 0.0).unwrap();
+        let templates = vec![template.clone()];
         let db = PartsDb::open_in_memory().unwrap();
 
         let rows = build_bom_rows(&board, &templates, &vec![None; templates.len()], &db);
@@ -180,7 +186,13 @@ mod tests {
     #[test]
     fn a_mix_of_electrical_and_mechanical_parts_only_boms_the_electrical_one() {
         let mut board = test_board();
-        let electrical = crate::footprint::builtin_templates().into_iter().find(|t| !t.exclude_from_bom).expect("a builtin electrical template must exist");
+        let electrical = crate::footprint::straight_row_template(
+            "2-pin test".into(),
+            "P".into(),
+            2,
+            2.54,
+            0.45,
+        );
         let mechanical = crate::footprint::builtin_templates().into_iter().find(|t| t.exclude_from_bom).expect("a builtin mechanical template must exist");
         board.try_place_footprint(&electrical, Point::new(-20_000_000, 0), 0.0).unwrap();
         board.try_place_footprint(&mechanical, Point::new(20_000_000, 0), 0.0).unwrap();

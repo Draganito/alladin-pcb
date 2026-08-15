@@ -9,17 +9,19 @@
 //!
 //! Tool surface -- read-only: `get_footprints`, `get_nets`,
 //! `board_summary`, `list_parts`, `check_board`, `get_routing_scene`,
-//! `probe_route`; write (require `--allow-ai-write`): `new_board`,
-//! `download_lcsc_part`, `place_footprint`, `move_footprint`,
-//! `remove_footprint`, `connect_pins`, `disconnect_pin`,
-//! `add_pin_stitching_via`, `rename_net`, `save_board`, `commit_route`,
-//! `ripup_wire`. Placement, netlist, and
-//! copper-route writes run through the same DFM gates and undo history
-//! as the GUI's own gestures. Zone fill stays in the GUI.
+//! `probe_route`, `probe_placement`; write (require `--allow-ai-write`):
+//! `new_board`, `download_lcsc_part`, `place_footprint`, `move_footprint`,
+//! `place_parts`, `move_parts`, `remove_footprint`, `connect_pins`,
+//! `disconnect_pin`, `add_pin_stitching_via`, `rename_net`,
+//! `set_zone_connection`, `save_board`, `commit_route`, `ripup_wire`,
+//! `suggest_route` with `commit=true`. Placement, netlist, pour
+//! connection, and copper-route writes run through the same DFM gates
+//! and undo history as the GUI's own gestures. Zone fill stays in the GUI.
 
 use std::sync::mpsc;
 use std::time::Duration;
 
+use alladin_core::ZoneConnection;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
 use rmcp::schemars;
@@ -30,6 +32,24 @@ use tokio::sync::oneshot;
 
 /// Fixed localhost port the embedded MCP server always binds to.
 pub const PORT: u16 = 8642;
+
+/// `"thermal"` / `"solid"` as place_footprint / set_zone_connection accept.
+pub(crate) fn parse_zone_connection(s: &str) -> Result<ZoneConnection, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "thermal" => Ok(ZoneConnection::Thermal),
+        "solid" => Ok(ZoneConnection::Solid),
+        other => Err(format!(
+            "zone_connection must be \"thermal\" or \"solid\", not \"{other}\""
+        )),
+    }
+}
+
+pub(crate) fn zone_connection_name(conn: ZoneConnection) -> &'static str {
+    match conn {
+        ZoneConnection::Thermal => "thermal",
+        ZoneConnection::Solid => "solid",
+    }
+}
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct DownloadLcscPartArgs {
@@ -67,6 +87,10 @@ pub struct PlaceFootprintArgs {
     pub y_mm: f64,
     /// Rotation in degrees; omit for 0.
     pub rotation_deg: Option<f64>,
+    /// Optional pour connection for every pad on this part:
+    /// `"thermal"` (spoke relief) or `"solid"` (full flood).
+    /// Omit to keep the template default.
+    pub zone_connection: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -110,6 +134,18 @@ pub struct PlacePartSpec {
     /// Applied in the same undo step as the place. Multi-pad pins
     /// (same number) all join the net together.
     pub pins: Option<std::collections::BTreeMap<String, String>>,
+    /// Optional pour connection for every pad on this part:
+    /// `"thermal"` or `"solid"`. Omit to keep the template default.
+    pub zone_connection: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct SetZoneConnectionArgs {
+    /// Reference designator of the footprint, e.g. `"W1"`.
+    pub reference: String,
+    /// `"thermal"` (spoke relief into a same-net pour) or `"solid"`
+    /// (full flood). Same as the GUI's Pour: Thermal / Solid control.
+    pub zone_connection: String,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -272,6 +308,8 @@ pub enum McpQuery {
     CheckBoard { reply: oneshot::Sender<String> },
     /// Places a library template on the board (same DFM gates as the GUI).
     PlaceFootprint { args: PlaceFootprintArgs, reply: oneshot::Sender<String> },
+    /// Sets Thermal / Solid pour connection on every pad of a footprint.
+    SetZoneConnection { args: SetZoneConnectionArgs, reply: oneshot::Sender<String> },
     /// Moves/rotates an already-placed footprint.
     MoveFootprint { args: MoveFootprintArgs, reply: oneshot::Sender<String> },
     /// Dry-run placement/move probe (+ optional nearest-legal search).
@@ -359,7 +397,7 @@ impl AlladinMcp {
         self.ask(|reply| McpQuery::Nets { reply }).await
     }
 
-    #[tool(description = "Every placed footprint: reference, template name, position/rotation, and each pad's net (or null if that pin isn't wired to anything).")]
+    #[tool(description = "Every placed footprint: reference, template name, position/rotation, and each pad's net (or null if that pin isn't wired to anything) plus zone_connection (thermal/solid) for that pad.")]
     async fn get_footprints(&self) -> Result<CallToolResult, McpError> {
         self.ask(|reply| McpQuery::Footprints { reply }).await
     }
@@ -415,7 +453,7 @@ impl AlladinMcp {
     }
 
     #[tool(
-        description = "Places a parts-library template on the live board at x/y mm (board-center origin, +x right, +y down). The same JLCPCB DFM gates as the GUI apply: board edge distance, pad/body clearance, hole spacing -- a refusal names the violated rule; pick a different spot and retry. Returns the auto-assigned reference (e.g. \"U17\"). The human can undo this with Ctrl+Z."
+        description = "Places a parts-library template on the live board at x/y mm (board-center origin, +x right, +y down). The same JLCPCB DFM gates as the GUI apply: board edge distance, pad/body clearance, hole spacing -- a refusal names the violated rule; pick a different spot and retry. Optional zone_connection=\"thermal\"|\"solid\" sets pour relief vs full flood on every pad (same as the GUI Pour control); omit to keep the template default. Returns the auto-assigned reference (e.g. \"U17\"). The human can undo this with Ctrl+Z."
     )]
     async fn place_footprint(&self, Parameters(args): Parameters<PlaceFootprintArgs>) -> Result<CallToolResult, McpError> {
         if let Some(refusal) = self.require_write_access() {
@@ -440,7 +478,7 @@ impl AlladinMcp {
     }
 
     #[tool(
-        description = "Places many parts in one atomic step (max 50): all-or-nothing against the board and each other, one Ctrl+Z undo. Each entry: {template, x_mm, y_mm, rotation_deg?, pins?: {\"1\":\"GND\",\"2\":\"3V3\"}}. Optional pins assign named nets in the same undo (multi-pad pins join together). Reply includes placed[] references plus open_bridges {sum_mm,max_mm,count,top} so you can judge the floorplan ratsnest without a separate get_routing_scene. Prefer over N× place_footprint."
+        description = "Places many parts in one atomic step (max 50): all-or-nothing against the board and each other, one Ctrl+Z undo. Each entry: {template, x_mm, y_mm, rotation_deg?, pins?: {\"1\":\"GND\",\"2\":\"3V3\"}, zone_connection?: \"thermal\"|\"solid\"}. Optional pins assign named nets in the same undo (multi-pad pins join together). Optional zone_connection overrides the template pour default. Reply includes placed[] references plus open_bridges {sum_mm,max_mm,count,top} so you can judge the floorplan ratsnest without a separate get_routing_scene. Prefer over N× place_footprint."
     )]
     async fn place_parts(&self, Parameters(args): Parameters<PlacePartsArgs>) -> Result<CallToolResult, McpError> {
         if let Some(refusal) = self.require_write_access() {
@@ -491,6 +529,16 @@ impl AlladinMcp {
             return refusal;
         }
         self.ask(|reply| McpQuery::RenameNet { args, reply }).await
+    }
+
+    #[tool(
+        description = "Sets the pour connection on every pad of a placed footprint: zone_connection=\"thermal\" (spoke relief, solderable) or \"solid\" (full flood into a same-net plane). Same as the GUI's selected-part Pour: Thermal / Solid control. Mounting holes have no pads and are refused. Ctrl+Z undoes."
+    )]
+    async fn set_zone_connection(&self, Parameters(args): Parameters<SetZoneConnectionArgs>) -> Result<CallToolResult, McpError> {
+        if let Some(refusal) = self.require_write_access() {
+            return refusal;
+        }
+        self.ask(|reply| McpQuery::SetZoneConnection { args, reply }).await
     }
 
     #[tool(
@@ -557,14 +605,15 @@ impl ServerHandler for AlladinMcp {
             "Write tools are ENABLED for this process (launched with --allow-ai-write): \
              new_board, download_lcsc_part, place/move/remove_footprint, place_parts, \
              move_parts, connect_pins, disconnect_pin, add_pin_stitching_via, rename_net, \
-             save_board, commit_route, ripup_wire, and suggest_route with commit=true act \
-             directly on the live board/parts DB."
+             set_zone_connection, save_board, commit_route, ripup_wire, and suggest_route \
+             with commit=true act directly on the live board/parts DB."
         } else {
             "Write tools (new_board, download_lcsc_part, place/move/remove_footprint, \
              place_parts, move_parts, connect_pins, disconnect_pin, add_pin_stitching_via, \
-             rename_net, save_board, commit_route, ripup_wire, suggest_route with commit=true) \
-             are DISABLED for this process -- every one of them will refuse with an \
-             explanation. Relaunch alladin-pcb with --allow-ai-write to enable them."
+             rename_net, set_zone_connection, save_board, commit_route, ripup_wire, \
+             suggest_route with commit=true) are DISABLED for this process -- every one \
+             of them will refuse with an explanation. Relaunch alladin-pcb with \
+             --allow-ai-write to enable them."
         };
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(format!(
             "MCP surface for a running alladin-pcb GUI: board setup, parts download + placement \

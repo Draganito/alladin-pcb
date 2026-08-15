@@ -10,8 +10,8 @@ alwaysApply: true
   `probe_placement`, `suggest_route` (needs write access only with `commit=true`);
   write: `new_board`, `download_lcsc_part`, `place_footprint`, `move_footprint`,
   `place_parts`, `move_parts`, `remove_footprint`, `connect_pins`, `disconnect_pin`,
-  `add_pin_stitching_via`, `rename_net`, `save_board`, `commit_route`,
-  `ripup_wire`.
+  `add_pin_stitching_via`, `rename_net`, `set_zone_connection`, `save_board`,
+  `commit_route`, `ripup_wire`.
 - Never create, edit, or parse board `.json` by hand — use MCP / the GUI.
 - Start with `board_summary`. After each batch of changes, verify your own
   work with `check_board` before reporting done.
@@ -21,8 +21,9 @@ alwaysApply: true
   `place_footprint` / `place_parts` want.
 - Floorplan: prefer `probe_placement` (optional `search_radius_mm`) then
   `place_parts` / `move_parts` (atomic, one Ctrl+Z, optional `pins` net map,
-  reply includes `open_bridges` score). Avoid N× single place + blind spiral
-  retries.
+  optional `zone_connection` `thermal`/`solid`, reply includes `open_bridges`
+  score). Use `set_zone_connection` to change pour relief on a placed part.
+  Avoid N× single place + blind spiral retries.
 - A placement/move refusal names the violated JLCPCB DFM rule — pick a
   different spot and retry; never try to bypass the gate.
 - `new_board` refuses to discard an open board unless `replace_current=true`

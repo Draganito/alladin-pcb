@@ -609,13 +609,13 @@ impl Default for AddPartForm {
     }
 }
 
-/// Every built-in template plus every part currently in `parts_db`, as
-/// one flat list ready for [`EditorState::templates`], alongside a
-/// parallel `template_origin` (see that field's doc comment) recording
-/// which entries came from the database. A `parts_db` read failure is
-/// swallowed on purpose -- a broken/missing parts file should degrade to
-/// "just the built-ins available this session", not stop the editor from
-/// opening at all.
+/// Every session built-in (placeable pad set plus load-only demo ghosts)
+/// plus every part currently in `parts_db`, as one flat list ready for
+/// [`EditorState::templates`], alongside a parallel `template_origin`
+/// (see that field's doc comment) recording which entries came from the
+/// database. A `parts_db` read failure is swallowed on purpose -- a
+/// broken/missing parts file should degrade to "just the built-ins
+/// available this session", not stop the editor from opening at all.
 pub(crate) fn load_templates(
     parts_db: &PartsDb,
 ) -> (
@@ -624,7 +624,7 @@ pub(crate) fn load_templates(
     Vec<Option<String>>,
     Vec<Option<String>>,
 ) {
-    let mut templates = footprint::builtin_templates();
+    let mut templates = footprint::session_builtin_templates();
     let mut origin: Vec<Option<i64>> = vec![None; templates.len()];
     let mut hover: Vec<Option<String>> = vec![None; templates.len()];
     let mut category: Vec<Option<String>> = vec![None; templates.len()];
@@ -4159,6 +4159,9 @@ impl eframe::App for PcbApp {
                         if state.template_origin[i].is_some() {
                             continue;
                         }
+                        if footprint::is_legacy_demo_template(&state.templates[i].name) {
+                            continue;
+                        }
                         if place_part_row(ui, i, &state.templates, &state.template_origin, &state.template_hover, &mut state.tool, &mut delete_part_requested) {
                             selection_changed = true;
                         }
@@ -5686,6 +5689,9 @@ fn handle_mcp_query(query: crate::mcp::McpQuery, screen: &mut Screen, parts_db: 
         McpQuery::PlaceFootprint { args, reply } => {
             let _ = reply.send(place_footprint_write(screen, args).to_string());
         }
+        McpQuery::SetZoneConnection { args, reply } => {
+            let _ = reply.send(set_zone_connection_write(screen, args).to_string());
+        }
         McpQuery::MoveFootprint { args, reply } => {
             let _ = reply.send(move_footprint_write(screen, args).to_string());
         }
@@ -5901,7 +5907,13 @@ fn footprints_json(screen: &Screen) -> serde_json::Value {
                     let pin = pad_template.map(|p| p.number.clone()).unwrap_or_else(|| (index + 1).to_string());
                     let pin_name = pad_template.and_then(|p| p.pin_name.clone());
                     let net = state.doc.pad_net(pad_id).ok().flatten().map(|id| net_name(&state.doc, id).to_string());
-                    serde_json::json!({ "pin": pin, "pin_name": pin_name, "net": net })
+                    let zone_connection = match state.doc.node.get(pad_id) {
+                        Some(Item::Pad { zone_connection, .. }) => {
+                            Some(crate::mcp::zone_connection_name(*zone_connection))
+                        }
+                        _ => None,
+                    };
+                    serde_json::json!({ "pin": pin, "pin_name": pin_name, "net": net, "zone_connection": zone_connection })
                 })
                 .collect();
             // The footprint's own real mechanical body/courtyard (see
@@ -6195,6 +6207,7 @@ fn list_parts_json(screen: &Screen, parts_db: &PartsDb) -> serde_json::Value {
     let parts: Vec<_> = templates
         .iter()
         .enumerate()
+        .filter(|(_, t)| !footprint::is_legacy_demo_template(&t.name))
         .map(|(i, t)| {
             let c = t.courtyard();
             serde_json::json!({
@@ -6312,7 +6325,23 @@ fn place_footprint_write(
     };
     let position = Point::new(mm_arg(args.x_mm), mm_arg(args.y_mm));
     let rotation = args.rotation_deg.unwrap_or(0.0);
-    match state.try_mutate_doc_ok(|doc| doc.try_place_footprint(&template, position, rotation)) {
+    let zone = match args.zone_connection.as_deref() {
+        None => None,
+        Some(s) => match crate::mcp::parse_zone_connection(s) {
+            Ok(conn) => Some(conn),
+            Err(e) => return error_json(e),
+        },
+    };
+    match state.try_mutate_doc_ok(|doc| -> Result<_, String> {
+        let id = doc
+            .try_place_footprint(&template, position, rotation)
+            .map_err(|e| e.to_string())?;
+        if let Some(conn) = zone {
+            doc.set_footprint_zone_connection(id, conn)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(id)
+    }) {
         Ok(id) => {
             let reference = state
                 .doc
@@ -6321,11 +6350,68 @@ fn place_footprint_write(
                 .find(|f| f.id == id)
                 .map(|f| f.reference.clone())
                 .unwrap_or_default();
-            serde_json::json!({ "ok": true, "reference": reference, "template": args.template, "x_mm": args.x_mm, "y_mm": args.y_mm, "rotation_deg": rotation })
+            let zone_connection = state
+                .doc
+                .footprints
+                .iter()
+                .find(|f| f.id == id)
+                .and_then(|fp| fp.pad_item_ids.first().copied())
+                .and_then(|pad_id| match state.doc.node.get(pad_id) {
+                    Some(Item::Pad {
+                        zone_connection, ..
+                    }) => Some(crate::mcp::zone_connection_name(*zone_connection)),
+                    _ => None,
+                });
+            serde_json::json!({ "ok": true, "reference": reference, "template": args.template, "x_mm": args.x_mm, "y_mm": args.y_mm, "rotation_deg": rotation, "zone_connection": zone_connection })
         }
         Err(e) => error_json(format!(
             "couldn't place {} at ({}, {}): {e}",
             args.template, args.x_mm, args.y_mm
+        )),
+    }
+}
+
+/// [`crate::mcp::McpQuery::SetZoneConnection`]'s handler -- same
+/// [`BoardDoc::set_footprint_zone_connection`] as the GUI's Pour control.
+#[cfg(not(target_arch = "wasm32"))]
+fn set_zone_connection_write(
+    screen: &mut Screen,
+    args: crate::mcp::SetZoneConnectionArgs,
+) -> serde_json::Value {
+    let Screen::Editor(state) = screen else {
+        return no_board_open_json_error();
+    };
+    let conn = match crate::mcp::parse_zone_connection(&args.zone_connection) {
+        Ok(conn) => conn,
+        Err(e) => return error_json(e),
+    };
+    let Some(fp) = state
+        .doc
+        .footprints
+        .iter()
+        .find(|f| f.reference == args.reference)
+    else {
+        return error_json(format!(
+            "no footprint with reference \"{}\" on the board",
+            args.reference
+        ));
+    };
+    if fp.pad_item_ids.is_empty() {
+        return error_json(format!(
+            "{} has no pads -- mounting holes have no pour connection",
+            args.reference
+        ));
+    }
+    let id = fp.id;
+    match state.try_mutate_doc_ok(|doc| doc.set_footprint_zone_connection(id, conn)) {
+        Ok(()) => serde_json::json!({
+            "ok": true,
+            "reference": args.reference,
+            "zone_connection": crate::mcp::zone_connection_name(conn),
+        }),
+        Err(e) => error_json(format!(
+            "couldn't set zone_connection on {}: {e}",
+            args.reference
         )),
     }
 }
@@ -7037,6 +7123,7 @@ mod mcp_handler_tests {
                 x_mm,
                 y_mm,
                 rotation_deg: None,
+                zone_connection: None,
             },
         )
     }
@@ -7055,6 +7142,56 @@ mod mcp_handler_tests {
         assert_eq!(state.doc.footprints.len(), 1);
         assert!(state.undo());
         assert!(state.doc.footprints.is_empty());
+    }
+
+    #[test]
+    fn place_and_set_zone_connection_toggle_thermal_and_solid() {
+        let mut screen = editor_screen();
+        let template = a_template_with_pads(&screen, 1);
+        let placed = place_footprint_write(
+            &mut screen,
+            crate::mcp::PlaceFootprintArgs {
+                template: template.clone(),
+                x_mm: 0.0,
+                y_mm: 0.0,
+                rotation_deg: None,
+                zone_connection: Some("solid".into()),
+            },
+        );
+        assert_eq!(placed["ok"], true, "unexpected: {placed}");
+        assert_eq!(placed["zone_connection"], "solid");
+        let reference = placed["reference"].as_str().unwrap().to_string();
+        {
+            let Screen::Editor(state) = &screen else {
+                unreachable!()
+            };
+            let pad = state.doc.footprints[0].pad_item_ids[0];
+            match state.doc.node.get(pad) {
+                Some(Item::Pad {
+                    zone_connection, ..
+                }) => assert_eq!(*zone_connection, ZoneConnection::Solid),
+                other => panic!("expected pad, got {other:?}"),
+            }
+        }
+        let toggled = set_zone_connection_write(
+            &mut screen,
+            crate::mcp::SetZoneConnectionArgs {
+                reference,
+                zone_connection: "thermal".into(),
+            },
+        );
+        assert_eq!(toggled["ok"], true, "unexpected: {toggled}");
+        assert_eq!(toggled["zone_connection"], "thermal");
+        let Screen::Editor(state) = &screen else {
+            unreachable!()
+        };
+        let pad = state.doc.footprints[0].pad_item_ids[0];
+        match state.doc.node.get(pad) {
+            Some(Item::Pad {
+                zone_connection, ..
+            }) => assert_eq!(*zone_connection, ZoneConnection::Thermal),
+            other => panic!("expected pad, got {other:?}"),
+        }
     }
 
     #[test]
@@ -7108,9 +7245,31 @@ mod mcp_handler_tests {
         assert_eq!(state.doc.footprints.len(), 1, "probe must not place");
     }
 
+    fn two_pin_test_template() -> crate::footprint::FootprintTemplate {
+        crate::footprint::straight_row_template(
+            "test-2pin".into(),
+            "P".into(),
+            2,
+            2.54,
+            0.45,
+        )
+    }
+
+    fn editor_screen_with_two_pin() -> Screen {
+        let mut templates = footprint::builtin_templates();
+        templates.insert(0, two_pin_test_template());
+        Screen::Editor(EditorState::new(
+            NewBoardParams::default().create(),
+            templates,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
     #[test]
     fn place_parts_atomic_with_pin_nets_and_one_undo() {
-        let mut screen = editor_screen();
+        let mut screen = editor_screen_with_two_pin();
         let template = a_template_with_pads(&screen, 2);
         let mut pins = std::collections::BTreeMap::new();
         pins.insert("1".into(), "3V3".into());
@@ -7125,6 +7284,7 @@ mod mcp_handler_tests {
                         y_mm: 0.0,
                         rotation_deg: None,
                         pins: Some(pins.clone()),
+                        zone_connection: None,
                     },
                     crate::mcp::PlacePartSpec {
                         template: template.clone(),
@@ -7132,6 +7292,7 @@ mod mcp_handler_tests {
                         y_mm: 0.0,
                         rotation_deg: None,
                         pins: Some(pins),
+                        zone_connection: None,
                     },
                 ],
             },
@@ -7166,6 +7327,7 @@ mod mcp_handler_tests {
                         y_mm: 0.0,
                         rotation_deg: None,
                         pins: None,
+                        zone_connection: None,
                     },
                     crate::mcp::PlacePartSpec {
                         template,
@@ -7173,6 +7335,7 @@ mod mcp_handler_tests {
                         y_mm: 0.0,
                         rotation_deg: None,
                         pins: None,
+                        zone_connection: None,
                     },
                 ],
             },
@@ -7199,6 +7362,7 @@ mod mcp_handler_tests {
                         y_mm: 0.0,
                         rotation_deg: None,
                         pins: None,
+                        zone_connection: None,
                     },
                     crate::mcp::PlacePartSpec {
                         template,
@@ -7206,6 +7370,7 @@ mod mcp_handler_tests {
                         y_mm: 0.0,
                         rotation_deg: None,
                         pins: None,
+                        zone_connection: None,
                     },
                 ],
             },
@@ -7319,7 +7484,7 @@ mod mcp_handler_tests {
     #[test]
     fn connect_then_disconnect_then_rename_round_trip() {
         let mut screen = editor_screen();
-        let template = a_template_with_pads(&screen, 2);
+        let template = a_template_with_pads(&screen, 1);
         let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"]
             .as_str()
             .unwrap()
@@ -7372,7 +7537,7 @@ mod mcp_handler_tests {
     #[test]
     fn add_pin_stitching_via_stitches_one_pin_then_the_batch_skips_it() {
         let mut screen = editor_screen();
-        let template = a_template_with_pads(&screen, 2);
+        let template = a_template_with_pads(&screen, 1);
         let r1 = place(&mut screen, &template, -8.0, 0.0)["reference"]
             .as_str()
             .unwrap()

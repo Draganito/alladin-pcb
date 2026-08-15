@@ -774,15 +774,19 @@ mod tests {
     use alladin_core::{Item, PadShape};
     use alladin_geom::{Circle, Segment, MM};
 
-    /// Two 2-pin THT footprints, 20mm apart on open board, with pad 0 of
-    /// each already joined onto the same net -- the baseline every
-    /// routing test in this module drags a trace across.
+    /// Two 2-pin rows, 20mm apart on open board, with pad 0 of each
+    /// already joined onto the same net -- the baseline every routing
+    /// test in this module drags a trace across.
+    fn two_pin_row() -> crate::footprint::FootprintTemplate {
+        crate::footprint::straight_row_template("2-pin test".into(), "P".into(), 2, 2.54, 0.45)
+    }
+
     fn two_footprints_connected() -> (BoardDoc, ItemId, ItemId) {
         let mut doc = NewBoardParams::default().create();
-        let template = &builtin_templates()[0];
-        doc.try_place_footprint(template, Point::new(-10 * MM, 0), 0.0)
+        let template = two_pin_row();
+        doc.try_place_footprint(&template, Point::new(-10 * MM, 0), 0.0)
             .unwrap();
-        doc.try_place_footprint(template, Point::new(10 * MM, 0), 0.0)
+        doc.try_place_footprint(&template, Point::new(10 * MM, 0), 0.0)
             .unwrap();
         let pad_a = doc.footprints[0].pad_item_ids[0];
         let pad_b = doc.footprints[1].pad_item_ids[0];

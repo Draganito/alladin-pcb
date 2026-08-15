@@ -162,7 +162,21 @@ pub(crate) fn place_parts_on_doc(
         })
         .collect();
 
+    for part in parts {
+        if let Some(s) = part.zone_connection.as_deref() {
+            crate::mcp::parse_zone_connection(s)?;
+        }
+    }
+
     let ids = doc.place_batch(&specs).map_err(|e| e.to_string())?;
+
+    for (part, &id) in parts.iter().zip(ids.iter()) {
+        if let Some(s) = part.zone_connection.as_deref() {
+            let conn = crate::mcp::parse_zone_connection(s)?;
+            doc.set_footprint_zone_connection(id, conn)
+                .map_err(|e| e.to_string())?;
+        }
+    }
 
     let mut placed = Vec::with_capacity(ids.len());
     for (part, &id) in parts.iter().zip(ids.iter()) {
@@ -184,6 +198,9 @@ pub(crate) fn place_parts_on_doc(
                 nets.insert(pin.clone(), net.clone());
             }
             entry["nets"] = json!(nets);
+        }
+        if let Some(s) = &part.zone_connection {
+            entry["zone_connection"] = json!(s);
         }
         placed.push(entry);
     }

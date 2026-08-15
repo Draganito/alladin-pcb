@@ -4679,7 +4679,13 @@ mod tests {
     }
 
     fn two_pin_template() -> crate::footprint::FootprintTemplate {
-        crate::footprint::builtin_templates().remove(0)
+        crate::footprint::straight_row_template(
+            "2-pin test".into(),
+            "P".into(),
+            2,
+            2.54,
+            0.45,
+        )
     }
 
     #[test]
@@ -5421,10 +5427,7 @@ mod tests {
             corner_radius_mm: 0.0,
         }
         .create();
-        let a = crate::footprint::builtin_templates()
-            .into_iter()
-            .find(|t| t.name.contains("SOIC"))
-            .expect("SOIC builtin");
+        let a = two_pin_template();
         let wire = crate::footprint::builtin_templates()
             .into_iter()
             .find(|t| t.name.contains("Wire pad"))
@@ -5444,7 +5447,7 @@ mod tests {
             .unwrap();
         let templates = vec![a.clone(), wire.clone(), hole.clone()];
         let report = board.try_enable_pin1_markers_for_all(&templates);
-        assert_eq!(report.enabled.len(), 2, "SOIC + wire pad: {report:?}");
+        assert_eq!(report.enabled.len(), 2, "2-pin + wire pad: {report:?}");
         assert_eq!(
             report.skipped_no_pads.len(),
             1,
@@ -7106,7 +7109,13 @@ mod tests {
     #[test]
     fn connected_wire_does_not_pull_in_an_unrelated_wire_that_only_shares_a_pad() {
         let mut board = test_board();
-        let template = crate::footprint::builtin_templates().remove(1); // 4-pin header, room for two separate nets
+        let template = crate::footprint::straight_row_template(
+            "4-pin test".into(),
+            "J".into(),
+            4,
+            2.54,
+            0.45,
+        );
         board
             .try_place_footprint(&template, Point::new(-12 * MM, 0), 0.0)
             .unwrap();

@@ -12,7 +12,7 @@ use alladin_geom::{Point, Unit};
 use serde::{Deserialize, Serialize};
 
 use crate::board_doc::BoardDoc;
-use crate::footprint::{builtin_templates, Courtyard, FootprintTemplate, HoleTemplate, PadShapeKind, PadTemplate};
+use crate::footprint::{session_builtin_templates, Courtyard, FootprintTemplate, HoleTemplate, PadShapeKind, PadTemplate};
 use crate::parts_db::{PartRecord, PartsDb, PartsDbError};
 
 pub const FORMAT: &str = "alladin-parts";
@@ -193,9 +193,10 @@ pub fn template_from_snapshot(dto: &PartSnapshot) -> FootprintTemplate {
     }
 }
 
-/// Built-in template names never need embedding (every Alladin has them).
+/// Built-in template names never need embedding (every Alladin has them,
+/// including load-only demo ghosts so old boards don't suddenly embed).
 fn builtin_names() -> BTreeSet<String> {
-    builtin_templates().into_iter().map(|t| t.name).collect()
+    session_builtin_templates().into_iter().map(|t| t.name).collect()
 }
 
 /// Snapshots for every non-builtin template used on `doc`, with PartsDb metadata when known.
