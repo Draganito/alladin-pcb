@@ -569,7 +569,8 @@ Manual workflow (full aesthetic control, multi-layer routes with vias):
 
 Every MCP write runs through the same JLCPCB DFM gates and the same
 Ctrl+Z undo history as your own GUI gestures — you can always take back
-what the AI did. Zone fill stays in the GUI.
+what the AI did. Zone fill stays in the GUI. MCP runs on its own thread. File dialogs and Gerber export run on a
+worker: the GUI stays responsive and the AI is not stalled.
 
 
 

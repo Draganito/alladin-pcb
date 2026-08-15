@@ -592,6 +592,9 @@ Manueller Ablauf (volle ästhetische Kontrolle, Mehrlagen-Routen mit Vias):
 Jeder MCP-Schreibzugriff läuft durch dieselben JLCPCB-DFM-Gates und
 dieselbe Ctrl+Z-Undo-Historie wie deine eigenen GUI-Gesten — du kannst
 alles, was die KI getan hat, jederzeit zurücknehmen. Zone-Fill bleibt GUI.
+MCP läuft auf einem eigenen Thread. Dateidialog und Gerber-Export
+laufen auf einem Worker: die GUI bleibt bedienbar, die KI wird nicht
+blockiert.
 
 
 

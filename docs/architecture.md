@@ -42,6 +42,9 @@ write (need `--allow-ai-write`): `new_board`, `download_lcsc_part`,
 `remove_footprint`, `connect_pins`, `disconnect_pin`,
 `add_pin_stitching_via`, `rename_net`, `set_zone_connection`,
 `save_board`, `commit_route`, `ripup_wire`.
+Queries run on a dedicated pump thread that locks the live board only
+for that call. Native file dialogs and manufacturing export run on a
+worker thread so the GUI stays responsive and MCP is not stalled.
 Copper routing reuses the GUI's clearance gates (not an autorouter).
 Zone fill stays in the GUI. Pour connection (Thermal/Solid) is a write.
 

@@ -3,9 +3,11 @@
 //! Transport only: a dedicated OS thread with its own tiny `tokio`
 //! runtime, hosting an `rmcp` "Streamable HTTP" server on
 //! `127.0.0.1` (loopback-only, no auth). Every `#[tool]` forwards a
-//! [`McpQuery`] across an [`std::sync::mpsc::Sender`] to the UI thread
-//! and awaits a JSON [`String`] on an embedded `tokio::sync::oneshot`
-//! reply channel. `crate::app::handle_mcp_query` builds the answers.
+//! [`McpQuery`] across an [`std::sync::mpsc::Sender`] to the MCP pump
+//! thread (`crate::app::spawn_mcp_pump`) and awaits a JSON [`String`]
+//! on an embedded `tokio::sync::oneshot` reply channel. The pump locks
+//! the shared board/parts world only for that handler, so a native
+//! file dialog cannot starve MCP. `handle_mcp_query` builds the answers.
 //!
 //! Tool surface -- read-only: `get_footprints`, `get_nets`,
 //! `board_summary`, `list_parts`, `check_board`, `get_routing_scene`,
@@ -372,7 +374,7 @@ impl AlladinMcp {
             Ok(Ok(json)) => json,
             Ok(Err(_)) => "error: the alladin-pcb GUI dropped the request without answering".to_string(),
             Err(_) => format!(
-                "error: no reply within {}s (a modal dialog may be blocking the GUI thread)",
+                "error: no reply within {}s (the board lock is held by a long GUI/MCP op)",
                 timeout.as_secs()
             ),
         };

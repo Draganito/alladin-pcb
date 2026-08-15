@@ -1966,42 +1966,19 @@ impl EditorState {
     fn zone_refill_active(&self) -> bool {
         self.zone_refill.is_some()
     }
-    /// Writes manufacturing files synchronously into `out_dir`.
-    fn export_manufacturing_files_sync(&mut self, out_dir: PathBuf, parts_db: &PartsDb) {
-        self.io_message = Some("Exporting manufacturing files...".to_string());
-        let bom_csv = crate::bom::to_csv(&crate::bom::build_bom_rows(
-            &self.doc,
-            &self.templates,
-            &self.template_origin,
-            parts_db,
-        ));
-        match export_manufacturing_files_to_dir(
-            &self.doc,
-            &self.templates,
-            &self.file_path,
-            &out_dir,
-            &bom_csv,
-        ) {
-            Ok(files) => {
-                self.io_message = Some(format!(
-                    "Wrote manufacturing files:\n  {}\n  {}\n  {}",
-                    files.gerber_zip.display(),
-                    files.position_csv.display(),
-                    files.bom_csv.display(),
-                ));
-            }
-            Err(e) => self.io_message = Some(format!("Couldn't export manufacturing files: {e}")),
-        }
-    }
+}
+
+/// Live board + parts DB shared by the GUI frame and the desktop MCP
+/// pump thread. MCP queries are handled on that pump (blocking
+/// `recv`), not inside [`PcbApp::ui`] -- a native file dialog can
+/// freeze the UI thread for minutes without starving the AI.
+struct McpWorld {
+    screen: Screen,
+    parts_db: PartsDb,
 }
 
 pub struct PcbApp {
-    screen: Screen,
-    /// The user's parts library -- opened once for the process lifetime.
-    parts_db: PartsDb,
-    /// Pending requests from the embedded MCP server (desktop only).
-    #[cfg(not(target_arch = "wasm32"))]
-    mcp_rx: mpsc::Receiver<crate::mcp::McpQuery>,
+    world: std::sync::Arc<std::sync::Mutex<McpWorld>>,
     /// Whether this process was launched with `--allow-ai-write`.
     /// Only displayed/used on desktop (the web build has no MCP), hence
     /// dead on wasm32.
@@ -2015,6 +1992,11 @@ pub struct PcbApp {
     new_board_dxf: Option<crate::dxf_outline::DxfOutline>,
     new_board_dxf_label: Option<String>,
     new_board_dxf_message: Option<(bool, String)>,
+    /// In-flight native file dialog / manufacturing write. The worker
+    /// owns the blocking `rfd` call so [`PcbApp::ui`] keeps pumping
+    /// and GNOME does not mark the window "not responding".
+    #[cfg(not(target_arch = "wasm32"))]
+    desktop_io: Option<mpsc::Receiver<DesktopIoResult>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2079,24 +2061,30 @@ impl PcbApp {
             let _ = templates;
             Screen::NewBoard(NewBoardParams::default())
         };
+        let world = std::sync::Arc::new(std::sync::Mutex::new(McpWorld { screen, parts_db }));
         #[cfg(not(target_arch = "wasm32"))]
-        let mcp_rx = {
+        {
             let (mcp_tx, mcp_rx) = mpsc::channel();
             crate::mcp::spawn_server(mcp_tx, crate::mcp::PORT, allow_ai_write);
-            mcp_rx
-        };
+            spawn_mcp_pump(mcp_rx, world.clone());
+        }
         Self {
-            screen,
-            parts_db,
-            #[cfg(not(target_arch = "wasm32"))]
-            mcp_rx,
+            world,
             allow_ai_write,
             #[cfg(target_arch = "wasm32")]
             wasm_pending: WasmPending::default(),
             new_board_dxf: None,
             new_board_dxf_label: None,
             new_board_dxf_message: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            desktop_io: None,
         }
+    }
+
+    fn lock_world(&self) -> std::sync::MutexGuard<'_, McpWorld> {
+        self.world
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn clear_new_board_dxf(&mut self) {
@@ -2275,11 +2263,61 @@ fn last_board_path() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Native file dialogs + heavy folder writes. Scheduled from [`PcbApp::ui`]
+/// and executed on `alladin-desktop-io` so the egui loop never blocks
+/// in `rfd` or Gerber export.
+#[cfg(not(target_arch = "wasm32"))]
+enum DesktopFileJob {
+    OpenBoard,
+    SaveBoardAs,
+    ExportManufacturing,
+    ImportDxf,
+    ExportParts { json: String },
+    ImportParts,
+}
+
+/// Result of one [`DesktopFileJob`]. `None` / cancelled means the user
+/// dismissed the dialog -- apply is a no-op.
+#[cfg(not(target_arch = "wasm32"))]
+enum DesktopIoResult {
+    OpenBoard(Option<PathBuf>),
+    SaveBoardAs(Option<PathBuf>),
+    ExportManufacturing { message: Option<String> },
+    ImportDxf(Option<Result<(String, Vec<u8>), String>>),
+    ExportParts { path: Option<PathBuf>, json: String },
+    ImportParts(Option<Result<String, String>>),
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn board_file_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
         .add_filter("Aladin PCB board", &["json"])
         .set_file_name("board.json")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn editor_from_path(path: PathBuf, parts_db: &PartsDb) -> Result<EditorState, String> {
+    let (templates, _, _, _) = load_templates(parts_db);
+    let (doc, merge) = load_from_path(&path, &templates, parts_db).map_err(|e| e.to_string())?;
+    remember_last_board(&path);
+    let (templates, template_origin, template_hover, template_category) = load_templates(parts_db);
+    let mut opened = EditorState::new(
+        doc,
+        templates,
+        template_origin,
+        template_hover,
+        template_category,
+    );
+    opened.set_file_path(path);
+    if let Some((n, skip)) = merge {
+        if n > 0 || skip > 0 {
+            opened.lcsc_message = Some((
+                true,
+                format!("Board parts: imported {n}, already had {skip}."),
+            ));
+        }
+    }
+    Ok(opened)
 }
 
 /// GUI counterpart of [`crate::app::export_manufacturing_files_write`]
@@ -3316,43 +3354,54 @@ fn draw_footprint_details(
 
 impl eframe::App for PcbApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Without this, egui/winit stops repainting once idle (no mouse/
-        // keyboard input, e.g. an unfocused or minimized window) -- and
-        // since `crate::mcp`'s query queue is only ever drained from
-        // *inside* this very method (see its module doc comment), an
-        // idle window would silently stop answering MCP calls at all,
-        // eventually timing every one of them out. A cheap ~10Hz repaint
-        // floor keeps this method running continuously regardless of
-        // window focus, so an AI driving the GUI headlessly/in the
-        // background is never at the mercy of "is anyone moving the
-        // mouse right now".
+        // Disk-reload / zone-refill / desktop-io completion still need
+        // a tick while the window is idle. File dialogs and Gerber
+        // writes run on `alladin-desktop-io`, so this method stays
+        // short and GNOME does not mark the window unresponsive.
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
 
         #[cfg(not(target_arch = "wasm32"))]
-        while let Ok(query) = self.mcp_rx.try_recv() {
-            handle_mcp_query(query, &mut self.screen, &mut self.parts_db);
+        if let Some(rx) = &self.desktop_io {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.desktop_io = None;
+                    apply_desktop_io_result(self, result);
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.desktop_io = None,
+            }
         }
+
+        let mut world = self
+            .world
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let board_loading = false;
         let mut pending_screen: Option<Screen> = None;
+        let mut reset_new_board_dxf = false;
+        #[cfg(target_arch = "wasm32")]
         let mut pending_dxf_file: Option<(String, Vec<u8>)> = None;
+        #[cfg(target_arch = "wasm32")]
         let mut pending_dxf_read_err: Option<String> = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut desktop_file_job: Option<DesktopFileJob> = None;
 
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(rx) = self.wasm_pending.open_board.take() {
                 match rx.try_recv() {
                     Ok(crate::web_io::PickedFile::Ok { name, bytes }) => {
-                        let (templates, _, _, _) = load_templates(&self.parts_db);
+                        let (templates, _, _, _) = load_templates(&world.parts_db);
                         match String::from_utf8(bytes) {
-                            Ok(json) => match load_board_json(&json, &templates, &self.parts_db) {
+                            Ok(json) => match load_board_json(&json, &templates, &world.parts_db) {
                                 Ok((doc, merge)) => {
                                     let (
                                         templates,
                                         template_origin,
                                         template_hover,
                                         template_category,
-                                    ) = load_templates(&self.parts_db);
+                                    ) = load_templates(&world.parts_db);
                                     let mut opened = EditorState::new(
                                         doc,
                                         templates,
@@ -3370,21 +3419,21 @@ impl eframe::App for PcbApp {
                                     pending_screen = Some(Screen::Editor(opened));
                                 }
                                 Err(e) => {
-                                    if let Screen::Editor(state) = &mut self.screen {
+                                    if let Screen::Editor(state) = &mut world.screen {
                                         state.io_message =
                                             Some(format!("Couldn't open board: {e}"));
                                     }
                                 }
                             },
                             Err(e) => {
-                                if let Screen::Editor(state) = &mut self.screen {
+                                if let Screen::Editor(state) = &mut world.screen {
                                     state.io_message = Some(format!("Couldn't open board: {e}"));
                                 }
                             }
                         }
                     }
                     Ok(crate::web_io::PickedFile::Err(e)) => {
-                        if let Screen::Editor(state) = &mut self.screen {
+                        if let Screen::Editor(state) = &mut world.screen {
                             state.io_message = Some(format!("Couldn't open board: {e}"));
                         }
                     }
@@ -3401,13 +3450,13 @@ impl eframe::App for PcbApp {
                     Ok(crate::web_io::PickedFile::Ok { bytes, .. }) => {
                         match String::from_utf8(bytes) {
                             Ok(json) => match crate::parts_transfer::import_library_json(
-                                &self.parts_db,
+                                &world.parts_db,
                                 &json,
                             ) {
                                 Ok((n, skip)) => {
-                                    if let Screen::Editor(state) = &mut self.screen {
+                                    if let Screen::Editor(state) = &mut world.screen {
                                         let (templates, origin, hover, category) =
-                                            load_templates(&self.parts_db);
+                                            load_templates(&world.parts_db);
                                         state.templates = templates;
                                         state.template_origin = origin;
                                         state.template_hover = hover;
@@ -3417,14 +3466,14 @@ impl eframe::App for PcbApp {
                                     }
                                 }
                                 Err(e) => {
-                                    if let Screen::Editor(state) = &mut self.screen {
+                                    if let Screen::Editor(state) = &mut world.screen {
                                         state.lcsc_message =
                                             Some((false, format!("Couldn't import parts: {e}")));
                                     }
                                 }
                             },
                             Err(e) => {
-                                if let Screen::Editor(state) = &mut self.screen {
+                                if let Screen::Editor(state) = &mut world.screen {
                                     state.lcsc_message =
                                         Some((false, format!("Couldn't import parts: {e}")));
                                 }
@@ -3432,7 +3481,7 @@ impl eframe::App for PcbApp {
                         }
                     }
                     Ok(crate::web_io::PickedFile::Err(e)) => {
-                        if let Screen::Editor(state) = &mut self.screen {
+                        if let Screen::Editor(state) = &mut world.screen {
                             state.lcsc_message =
                                 Some((false, format!("Couldn't import parts: {e}")));
                         }
@@ -3448,13 +3497,10 @@ impl eframe::App for PcbApp {
             if let Some(rx) = self.wasm_pending.import_dxf.take() {
                 match rx.try_recv() {
                     Ok(crate::web_io::PickedFile::Ok { name, bytes }) => {
-                        self.apply_dxf_bytes(&name, &bytes);
+                        pending_dxf_file = Some((name, bytes));
                     }
                     Ok(crate::web_io::PickedFile::Err(e)) => {
-                        self.new_board_dxf = None;
-                        self.new_board_dxf_label = None;
-                        self.new_board_dxf_message =
-                            Some((false, format!("Couldn't import DXF: {e}")));
+                        pending_dxf_read_err = Some(format!("Couldn't import DXF: {e}"));
                     }
                     Ok(crate::web_io::PickedFile::Cancelled) => {}
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -3466,14 +3512,16 @@ impl eframe::App for PcbApp {
             }
         }
 
-        match &mut self.screen {
-            Screen::NewBoard(params) => {
-                let mut create_requested = false;
-                let mut open_from_new = false;
-                let mut import_dxf = false;
-                let mut clear_dxf = false;
-                let dxf_loaded = self.new_board_dxf.is_some();
-                egui::CentralPanel::default().show(ui, |ui| {
+        {
+            let McpWorld { screen, parts_db } = &mut *world;
+            match screen {
+                Screen::NewBoard(params) => {
+                    let mut create_requested = false;
+                    let mut open_from_new = false;
+                    let mut import_dxf = false;
+                    let mut clear_dxf = false;
+                    let dxf_loaded = self.new_board_dxf.is_some();
+                    egui::CentralPanel::default().show(ui, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(40.0);
                         ui.heading("Alladin PCB \u{2014} New board");
@@ -3583,355 +3631,309 @@ impl eframe::App for PcbApp {
                     });
                 });
 
-                if clear_dxf {
-                    self.new_board_dxf = None;
-                    self.new_board_dxf_label = None;
-                    self.new_board_dxf_message = None;
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if import_dxf {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("DXF outline", &["dxf"])
-                        .pick_file()
-                    {
-                        match std::fs::read(&path) {
-                            Ok(bytes) => {
-                                let name = path
-                                    .file_name()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("outline.dxf")
-                                    .to_string();
-                                pending_dxf_file = Some((name, bytes));
-                            }
-                            Err(e) => {
-                                pending_dxf_read_err = Some(format!("Couldn't read DXF: {e}"))
-                            }
-                        }
+                    if clear_dxf {
+                        reset_new_board_dxf = true;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if import_dxf {
+                        desktop_file_job = Some(DesktopFileJob::ImportDxf);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    if import_dxf {
+                        self.wasm_pending.import_dxf =
+                            Some(crate::web_io::pick_file("DXF outline", &["dxf"]));
+                    }
+
+                    if create_requested {
+                        let doc = if let Some(outline) = self.new_board_dxf.take() {
+                            self.new_board_dxf_label = None;
+                            self.new_board_dxf_message = None;
+                            params.create_with_outline(outline.polygon)
+                        } else {
+                            params.create()
+                        };
+                        let (templates, template_origin, template_hover, template_category) =
+                            load_templates(&parts_db);
+                        pending_screen = Some(Screen::Editor(EditorState::new(
+                            doc,
+                            templates,
+                            template_origin,
+                            template_hover,
+                            template_category,
+                        )));
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if open_from_new {
+                        desktop_file_job = Some(DesktopFileJob::OpenBoard);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    if open_from_new {
+                        self.wasm_pending.open_board =
+                            Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
                     }
                 }
-                #[cfg(target_arch = "wasm32")]
-                if import_dxf {
-                    self.wasm_pending.import_dxf =
-                        Some(crate::web_io::pick_file("DXF outline", &["dxf"]));
-                }
+                Screen::Editor(state) => {
+                    let mut new_board_requested = false;
+                    let mut open_requested = false;
+                    let mut save_requested = false;
+                    let mut save_as_requested = false;
+                    let mut export_manufacturing_requested = false;
+                    let mut create_part_requested = false;
+                    // Neither of these is acted on directly below (needs
+                    // `&parts_db`, only reachable outside this
+                    // closure) -- and even once it is reachable, still
+                    // doesn't delete anything itself, only stages
+                    // `state.pending_delete` for
+                    // `draw_delete_confirmation_window` to actually act on
+                    // once the user confirms. See [`PendingDelete`]'s own
+                    // doc comment for why.
+                    let mut delete_part_requested: Option<(usize, i64, String)> = None;
+                    // A category-tree header's own "delete" button's
+                    // exact prefix plus how many parts it would remove
+                    // (already known right here at the header's own render
+                    // site, see `group_templates_by_category`'s doc
+                    // comment for the tree shape this comes from).
+                    let mut delete_category_requested: Option<(String, usize)> = None;
 
-                if create_requested {
-                    let doc = if let Some(outline) = self.new_board_dxf.take() {
-                        self.new_board_dxf_label = None;
-                        self.new_board_dxf_message = None;
-                        params.create_with_outline(outline.polygon)
-                    } else {
-                        params.create()
-                    };
-                    let (templates, template_origin, template_hover, template_category) =
-                        load_templates(&self.parts_db);
-                    pending_screen = Some(Screen::Editor(EditorState::new(
-                        doc,
-                        templates,
-                        template_origin,
-                        template_hover,
-                        template_category,
-                    )));
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if open_from_new {
-                    if let Some(path) = board_file_dialog().pick_file() {
-                        let (templates, _, _, _) = load_templates(&self.parts_db);
-                        match load_from_path(&path, &templates, &self.parts_db) {
-                            Ok((doc, merge)) => {
-                                remember_last_board(&path);
-                                let (templates, template_origin, template_hover, template_category) =
-                                    load_templates(&self.parts_db);
-                                let mut opened = EditorState::new(
-                                    doc,
-                                    templates,
-                                    template_origin,
-                                    template_hover,
-                                    template_category,
-                                );
-                                opened.set_file_path(path);
-                                if let Some((n, skip)) = merge {
-                                    if n > 0 || skip > 0 {
-                                        opened.lcsc_message = Some((
+                    // Reactive `egui` only re-runs this whole method on
+                    // user input by default -- without this, an AI/script
+                    // changing the board file while the user's hands are
+                    // off the mouse would sit unnoticed until the next
+                    // click. Requesting a repaint a third of a second out
+                    // keeps this method (and so `maybe_reload_from_disk`'s
+                    // own poll right below) ticking on its own the whole
+                    // time the editor is open, at a deliberately low,
+                    // barely-perceptible-lag cadence rather than every
+                    // single frame.
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(300));
+                    if !state.zone_refill_active() {
+                        state.maybe_reload_from_disk(&parts_db, ui.input(|i| i.time));
+                    }
+                    state.poll_zone_refill(ui.ctx());
+
+                    if let Some(rx) = &state.lcsc_fetch {
+                        match rx.try_recv() {
+                            Ok(Ok(part)) => {
+                                state.lcsc_fetch = None;
+                                match parts_db.insert_part_categorized(
+                                    &part.name,
+                                    &part.reference_prefix,
+                                    &part.description,
+                                    Some(&part.lcsc_code),
+                                    &part.pads,
+                                    &[],
+                                    false,
+                                    part.explicit_courtyard,
+                                    part.category.as_deref(),
+                                ) {
+                                    Ok(record) => {
+                                        state.lcsc_message = Some((
                                             true,
                                             format!(
-                                                "Board parts: imported {n}, already had {skip}."
+                                                "{} ({}) added to your parts database.",
+                                                record.template.name, part.lcsc_code
                                             ),
                                         ));
-                                    }
-                                }
-                                pending_screen = Some(Screen::Editor(opened));
-                            }
-                            Err(e) => eprintln!("Couldn't open board: {e}"),
-                        }
-                    }
-                }
-                #[cfg(target_arch = "wasm32")]
-                if open_from_new {
-                    self.wasm_pending.open_board =
-                        Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
-                }
-            }
-            Screen::Editor(state) => {
-                let mut new_board_requested = false;
-                let mut open_requested = false;
-                let mut save_requested = false;
-                let mut save_as_requested = false;
-                let mut export_manufacturing_requested = false;
-                let mut create_part_requested = false;
-                // Neither of these is acted on directly below (needs
-                // `&self.parts_db`, only reachable outside this
-                // closure) -- and even once it is reachable, still
-                // doesn't delete anything itself, only stages
-                // `state.pending_delete` for
-                // `draw_delete_confirmation_window` to actually act on
-                // once the user confirms. See [`PendingDelete`]'s own
-                // doc comment for why.
-                let mut delete_part_requested: Option<(usize, i64, String)> = None;
-                // A category-tree header's own "delete" button's
-                // exact prefix plus how many parts it would remove
-                // (already known right here at the header's own render
-                // site, see `group_templates_by_category`'s doc
-                // comment for the tree shape this comes from).
-                let mut delete_category_requested: Option<(String, usize)> = None;
-
-                // Reactive `egui` only re-runs this whole method on
-                // user input by default -- without this, an AI/script
-                // changing the board file while the user's hands are
-                // off the mouse would sit unnoticed until the next
-                // click. Requesting a repaint a third of a second out
-                // keeps this method (and so `maybe_reload_from_disk`'s
-                // own poll right below) ticking on its own the whole
-                // time the editor is open, at a deliberately low,
-                // barely-perceptible-lag cadence rather than every
-                // single frame.
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(300));
-                if !state.zone_refill_active() {
-                    state.maybe_reload_from_disk(&self.parts_db, ui.input(|i| i.time));
-                }
-                state.poll_zone_refill(ui.ctx());
-
-                if let Some(rx) = &state.lcsc_fetch {
-                    match rx.try_recv() {
-                        Ok(Ok(part)) => {
-                            state.lcsc_fetch = None;
-                            match self.parts_db.insert_part_categorized(
-                                &part.name,
-                                &part.reference_prefix,
-                                &part.description,
-                                Some(&part.lcsc_code),
-                                &part.pads,
-                                &[],
-                                false,
-                                part.explicit_courtyard,
-                                part.category.as_deref(),
-                            ) {
-                                Ok(record) => {
-                                    state.lcsc_message = Some((
-                                        true,
-                                        format!(
-                                            "{} ({}) added to your parts database.",
-                                            record.template.name, part.lcsc_code
-                                        ),
-                                    ));
-                                    let tooltip =
-                                        format!("{}: {}", part.lcsc_code, part.description);
-                                    state.templates.push(record.template);
-                                    state.template_origin.push(Some(record.id));
-                                    state.template_hover.push(Some(tooltip));
-                                    state.template_category.push(record.category);
-                                    state.tool = Tool::Place(state.templates.len() - 1);
-                                    state.clear_selection();
-                                }
-                                Err(crate::parts_db::PartsDbError::DuplicateLcscCode(code)) => {
-                                    // Already downloaded before -- select it for placing instead of
-                                    // just reporting a dead-end error.
-                                    let existing =
-                                        state.template_origin.iter().position(|origin| {
-                                            origin
-                                                .and_then(|id| {
-                                                    self.parts_db
-                                                        .find_by_lcsc_code(&code)
-                                                        .ok()
-                                                        .flatten()
-                                                        .map(|r| r.id == id)
-                                                })
-                                                .unwrap_or(false)
-                                        });
-                                    if let Some(index) = existing {
-                                        state.tool = Tool::Place(index);
+                                        let tooltip =
+                                            format!("{}: {}", part.lcsc_code, part.description);
+                                        state.templates.push(record.template);
+                                        state.template_origin.push(Some(record.id));
+                                        state.template_hover.push(Some(tooltip));
+                                        state.template_category.push(record.category);
+                                        state.tool = Tool::Place(state.templates.len() - 1);
                                         state.clear_selection();
                                     }
-                                    state.lcsc_message = Some((true, format!("{code} is already in your parts database \u{2014} selected for placing.")));
-                                }
-                                Err(e) => {
-                                    state.lcsc_message = Some((
-                                        false,
-                                        format!(
+                                    Err(crate::parts_db::PartsDbError::DuplicateLcscCode(code)) => {
+                                        // Already downloaded before -- select it for placing instead of
+                                        // just reporting a dead-end error.
+                                        let existing =
+                                            state.template_origin.iter().position(|origin| {
+                                                origin
+                                                    .and_then(|id| {
+                                                        parts_db
+                                                            .find_by_lcsc_code(&code)
+                                                            .ok()
+                                                            .flatten()
+                                                            .map(|r| r.id == id)
+                                                    })
+                                                    .unwrap_or(false)
+                                            });
+                                        if let Some(index) = existing {
+                                            state.tool = Tool::Place(index);
+                                            state.clear_selection();
+                                        }
+                                        state.lcsc_message = Some((true, format!("{code} is already in your parts database \u{2014} selected for placing.")));
+                                    }
+                                    Err(e) => {
+                                        state.lcsc_message = Some((
+                                            false,
+                                            format!(
                                             "Downloaded, but couldn't save to the database: {e}"
                                         ),
-                                    ))
+                                        ))
+                                    }
                                 }
                             }
-                        }
-                        Ok(Err(e)) => {
-                            state.lcsc_fetch = None;
-                            state.lcsc_message = Some((false, e.to_string()));
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            state.lcsc_fetch = None;
-                            state.lcsc_message =
-                                Some((false, "the download thread ended unexpectedly".to_string()));
+                            Ok(Err(e)) => {
+                                state.lcsc_fetch = None;
+                                state.lcsc_message = Some((false, e.to_string()));
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                state.lcsc_fetch = None;
+                                state.lcsc_message = Some((
+                                    false,
+                                    "the download thread ended unexpectedly".to_string(),
+                                ));
+                            }
                         }
                     }
-                }
 
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    state.tool = Tool::Select;
-                    state.pending_connect = None;
-                    state.routing = None;
-                    state.trace_dragging = None;
-                    state.via_net = None;
-                    state.zone_points.clear();
-                    state.zone_net = None;
-                    if state.pending_pin_via.take().is_some() {
-                        // Otherwise this leaves `begin_pin_via_relocation`'s
-                        // "move the part until it turns green" message
-                        // on screen forever, describing a mode that
-                        // Escape just silently ended -- misleading
-                        // about what a further click will now actually
-                        // do (ordinary `Tool::Select` again, not "place
-                        // the pending via").
-                        state.io_message = None;
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        state.tool = Tool::Select;
+                        state.pending_connect = None;
+                        state.routing = None;
+                        state.trace_dragging = None;
+                        state.via_net = None;
+                        state.zone_points.clear();
+                        state.zone_net = None;
+                        if state.pending_pin_via.take().is_some() {
+                            // Otherwise this leaves `begin_pin_via_relocation`'s
+                            // "move the part until it turns green" message
+                            // on screen forever, describing a mode that
+                            // Escape just silently ended -- misleading
+                            // about what a further click will now actually
+                            // do (ordinary `Tool::Select` again, not "place
+                            // the pending via").
+                            state.io_message = None;
+                        }
                     }
-                }
-                // Document undo/redo. Skip while a text field has focus
-                // so Ctrl+Z doesn't steal egui's own text undo. Mid-
-                // route Backspace still undoes corners (below); Ctrl+Z
-                // undoes the last *committed* board change.
-                if !ui.ctx().text_edit_focused() {
-                    let (undo_pressed, redo_pressed) = ui.input(|i| {
-                        let ctrl = i.modifiers.command; // Ctrl on Linux/Win, Cmd on macOS
-                        let z = i.key_pressed(egui::Key::Z);
-                        let y = i.key_pressed(egui::Key::Y);
-                        let undo = ctrl && z && !i.modifiers.shift;
-                        let redo = (ctrl && y) || (ctrl && z && i.modifiers.shift);
-                        (undo, redo)
-                    });
-                    if state.zone_refill_active() {
-                        // Don't tear the board out from under a running refill.
-                    } else if undo_pressed {
-                        if state.routing.is_some() {
-                            state.routing = None;
-                            state.route_message = Some(
+                    // Document undo/redo. Skip while a text field has focus
+                    // so Ctrl+Z doesn't steal egui's own text undo. Mid-
+                    // route Backspace still undoes corners (below); Ctrl+Z
+                    // undoes the last *committed* board change.
+                    if !ui.ctx().text_edit_focused() {
+                        let (undo_pressed, redo_pressed) = ui.input(|i| {
+                            let ctrl = i.modifiers.command; // Ctrl on Linux/Win, Cmd on macOS
+                            let z = i.key_pressed(egui::Key::Z);
+                            let y = i.key_pressed(egui::Key::Y);
+                            let undo = ctrl && z && !i.modifiers.shift;
+                            let redo = (ctrl && y) || (ctrl && z && i.modifiers.shift);
+                            (undo, redo)
+                        });
+                        if state.zone_refill_active() {
+                            // Don't tear the board out from under a running refill.
+                        } else if undo_pressed {
+                            if state.routing.is_some() {
+                                state.routing = None;
+                                state.route_message = Some(
                                 "Route cancelled \u{2014} Ctrl+Z undoes committed board changes."
                                     .to_string(),
                             );
-                        } else if !state.undo() {
-                            state.io_message = Some("Nothing to undo.".to_string());
-                        } else {
-                            state.io_message = None;
-                        }
-                    } else if redo_pressed {
-                        if !state.redo() {
-                            state.io_message = Some("Nothing to redo.".to_string());
-                        } else {
-                            state.io_message = None;
-                        }
-                    }
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::R)) {
-                    match state.tool {
-                        Tool::Place(_) => {
-                            state.place_rotation_deg = (state.place_rotation_deg + 90.0) % 360.0
-                        }
-                        Tool::PlaceSilkText => {
-                            state.silk_text_place_rotation_deg =
-                                (state.silk_text_place_rotation_deg + 90.0) % 360.0
-                        }
-                        Tool::Select => state.rotate_selected(),
-                        Tool::Connect
-                        | Tool::Route
-                        | Tool::PlaceVia
-                        | Tool::DrawZone
-                        | Tool::PlaceSilkDot => {}
-                    }
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if let Tool::DrawZone = state.tool {
-                        state.finish_zone();
-                    }
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::V)) {
-                    if matches!(state.tool, Tool::Route) {
-                        let outcome = state.routing.as_mut().map(|routing| {
-                            let before = state.doc.clone();
-                            match routing.drop_via_and_switch_layer(&mut state.doc) {
-                                Ok(()) => Ok(before),
-                                Err(e) => Err(e),
+                            } else if !state.undo() {
+                                state.io_message = Some("Nothing to undo.".to_string());
+                            } else {
+                                state.io_message = None;
                             }
-                        });
-                        match outcome {
-                            Some(Ok(before)) => {
-                                state.record_undo(before);
-                                state.route_message = None;
+                        } else if redo_pressed {
+                            if !state.redo() {
+                                state.io_message = Some("Nothing to redo.".to_string());
+                            } else {
+                                state.io_message = None;
                             }
-                            Some(Err(e)) => state.route_message = Some(e.to_string()),
-                            None => {}
                         }
                     }
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::Space)) {
-                    if let (Tool::Route, Some(routing)) = (state.tool, &mut state.routing) {
-                        state.route_message = if routing.fix_corner() {
-                            None
-                        } else {
-                            Some("can't fix a corner here \u{2014} move the mouse first, or this leg is blocked".to_string())
-                        };
+                    if ui.input(|i| i.key_pressed(egui::Key::R)) {
+                        match state.tool {
+                            Tool::Place(_) => {
+                                state.place_rotation_deg = (state.place_rotation_deg + 90.0) % 360.0
+                            }
+                            Tool::PlaceSilkText => {
+                                state.silk_text_place_rotation_deg =
+                                    (state.silk_text_place_rotation_deg + 90.0) % 360.0
+                            }
+                            Tool::Select => state.rotate_selected(),
+                            Tool::Connect
+                            | Tool::Route
+                            | Tool::PlaceVia
+                            | Tool::DrawZone
+                            | Tool::PlaceSilkDot => {}
+                        }
                     }
-                }
-                // Backspace un-fixes the last routing corner while an
-                // in-progress `Tool::Route` drag exists (`state.selected`/
-                // `state.selected_item` are always `None` in that tool,
-                // see every `Tool::Route` switch-in's `clear_selection()`
-                // call, so this never shadows the "delete selected
-                // footprint/trace" gesture below); otherwise it falls
-                // through to that gesture, same as Delete.
-                if ui.input(|i| i.key_pressed(egui::Key::Backspace))
-                    && matches!((state.tool, &state.routing), (Tool::Route, Some(_)))
-                {
-                    if let Some(routing) = &mut state.routing {
-                        state.route_message = if routing.undo_last_corner() {
-                            None
-                        } else {
-                            Some("no fixed corner to undo yet".to_string())
-                        };
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if let Tool::DrawZone = state.tool {
+                            state.finish_zone();
+                        }
                     }
-                } else if ui.input(|i| {
-                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
-                }) {
-                    if let Some(id) = state.selected.take() {
-                        state.mutate_doc(|doc| {
-                            doc.remove_footprint(id);
-                        });
-                    } else if let Some(id) = state.selected_item.take() {
-                        state.mutate_doc(|doc| {
-                            doc.remove_wire(id);
-                        });
-                    } else if let Some(id) = state.selected_silk_text.take() {
-                        state.mutate_doc(|doc| {
-                            doc.remove_silk_text(id);
-                        });
-                    } else if let Some(id) = state.selected_silk_dot.take() {
-                        state.mutate_doc(|doc| {
-                            doc.remove_silk_dot(id);
-                        });
+                    if ui.input(|i| i.key_pressed(egui::Key::V)) {
+                        if matches!(state.tool, Tool::Route) {
+                            let outcome = state.routing.as_mut().map(|routing| {
+                                let before = state.doc.clone();
+                                match routing.drop_via_and_switch_layer(&mut state.doc) {
+                                    Ok(()) => Ok(before),
+                                    Err(e) => Err(e),
+                                }
+                            });
+                            match outcome {
+                                Some(Ok(before)) => {
+                                    state.record_undo(before);
+                                    state.route_message = None;
+                                }
+                                Some(Err(e)) => state.route_message = Some(e.to_string()),
+                                None => {}
+                            }
+                        }
                     }
-                }
+                    if ui.input(|i| i.key_pressed(egui::Key::Space)) {
+                        if let (Tool::Route, Some(routing)) = (state.tool, &mut state.routing) {
+                            state.route_message = if routing.fix_corner() {
+                                None
+                            } else {
+                                Some("can't fix a corner here \u{2014} move the mouse first, or this leg is blocked".to_string())
+                            };
+                        }
+                    }
+                    // Backspace un-fixes the last routing corner while an
+                    // in-progress `Tool::Route` drag exists (`state.selected`/
+                    // `state.selected_item` are always `None` in that tool,
+                    // see every `Tool::Route` switch-in's `clear_selection()`
+                    // call, so this never shadows the "delete selected
+                    // footprint/trace" gesture below); otherwise it falls
+                    // through to that gesture, same as Delete.
+                    if ui.input(|i| i.key_pressed(egui::Key::Backspace))
+                        && matches!((state.tool, &state.routing), (Tool::Route, Some(_)))
+                    {
+                        if let Some(routing) = &mut state.routing {
+                            state.route_message = if routing.undo_last_corner() {
+                                None
+                            } else {
+                                Some("no fixed corner to undo yet".to_string())
+                            };
+                        }
+                    } else if ui.input(|i| {
+                        i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                    }) {
+                        if let Some(id) = state.selected.take() {
+                            state.mutate_doc(|doc| {
+                                doc.remove_footprint(id);
+                            });
+                        } else if let Some(id) = state.selected_item.take() {
+                            state.mutate_doc(|doc| {
+                                doc.remove_wire(id);
+                            });
+                        } else if let Some(id) = state.selected_silk_text.take() {
+                            state.mutate_doc(|doc| {
+                                doc.remove_silk_text(id);
+                            });
+                        } else if let Some(id) = state.selected_silk_dot.take() {
+                            state.mutate_doc(|doc| {
+                                doc.remove_silk_dot(id);
+                            });
+                        }
+                    }
 
-                egui::Panel::top("top_panel").show(ui, |ui| {
+                    egui::Panel::top("top_panel").show(ui, |ui| {
                     // Several separate rows on purpose, not one long
                     // `ui.horizontal` -- a plain `ui.horizontal` never
                     // wraps in egui, so on a narrower window the tail end
@@ -4140,7 +4142,7 @@ impl eframe::App for PcbApp {
                     }
                 });
 
-                egui::Panel::right("parts_panel").min_size(300.0).show(ui, |ui| {
+                    egui::Panel::right("parts_panel").min_size(300.0).show(ui, |ui| {
                     // The panel's own content (parts library, placed
                     // parts, nets, planes, the current tool's own
                     // section) easily outgrows a shorter window --
@@ -4220,20 +4222,12 @@ impl eframe::App for PcbApp {
                     ui.label("Transfer parts as JSON between desktop and web (no LCSC proxy).");
                     ui.horizontal(|ui| {
                         if ui.button("Export parts…").clicked() {
-                            match crate::parts_transfer::export_library_json(&self.parts_db) {
+                            match crate::parts_transfer::export_library_json(&parts_db) {
                                 Ok(json) => {
                                     #[cfg(not(target_arch = "wasm32"))]
                                     {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Alladin parts", &["json"])
-                                            .set_file_name("alladin-parts.json")
-                                            .save_file()
-                                        {
-                                            match std::fs::write(&path, json.as_bytes()) {
-                                                Ok(()) => state.lcsc_message = Some((true, format!("Exported parts to {}", path.display()))),
-                                                Err(e) => state.lcsc_message = Some((false, format!("Couldn't export parts: {e}"))),
-                                            }
-                                        }
+                                        desktop_file_job =
+                                            Some(DesktopFileJob::ExportParts { json });
                                     }
                                     #[cfg(target_arch = "wasm32")]
                                     {
@@ -4247,22 +4241,7 @@ impl eframe::App for PcbApp {
                         if ui.button("Import parts…").clicked() {
                             #[cfg(not(target_arch = "wasm32"))]
                             {
-                                if let Some(path) = rfd::FileDialog::new().add_filter("Alladin parts", &["json"]).pick_file() {
-                                    match std::fs::read_to_string(&path) {
-                                        Ok(json) => match crate::parts_transfer::import_library_json(&self.parts_db, &json) {
-                                            Ok((n, skip)) => {
-                                                let (templates, origin, hover, category) = load_templates(&self.parts_db);
-                                                state.templates = templates;
-                                                state.template_origin = origin;
-                                                state.template_hover = hover;
-                                                state.template_category = category;
-                                                state.lcsc_message = Some((true, format!("Imported {n} part(s), skipped {skip} duplicate(s).")));
-                                            }
-                                            Err(e) => state.lcsc_message = Some((false, format!("Couldn't import parts: {e}"))),
-                                        },
-                                        Err(e) => state.lcsc_message = Some((false, format!("Couldn't read parts file: {e}"))),
-                                    }
-                                }
+                                desktop_file_job = Some(DesktopFileJob::ImportParts);
                             }
                             #[cfg(target_arch = "wasm32")]
                             {
@@ -4841,26 +4820,27 @@ impl eframe::App for PcbApp {
                     });
                 });
 
-                draw_delete_confirmation_window(ui.ctx(), state, &self.parts_db);
+                    draw_delete_confirmation_window(ui.ctx(), state, &parts_db);
 
-                egui::CentralPanel::default().show(ui, |ui| {
-                    let (rect, response) =
-                        ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let (rect, response) = ui.allocate_exact_size(
+                            ui.available_size(),
+                            egui::Sense::click_and_drag(),
+                        );
 
-                    if !state.fitted {
-                        if let Some(bounds) = state.board_bounds() {
-                            state.camera.fit(rect, bounds);
+                        if !state.fitted {
+                            if let Some(bounds) = state.board_bounds() {
+                                state.camera.fit(rect, bounds);
+                            }
+                            state.fitted = true;
                         }
-                        state.fitted = true;
-                    }
 
-                    let hover_board = response
-                        .hover_pos()
-                        .map(|p| state.camera.screen_to_board(rect, p));
-                    state.last_hover_board = hover_board;
+                        let hover_board = response
+                            .hover_pos()
+                            .map(|p| state.camera.screen_to_board(rect, p));
+                        state.last_hover_board = hover_board;
 
-                    let hover_pad_tooltip =
-                        hover_board
+                        let hover_pad_tooltip = hover_board
                             .and_then(|p| state.doc.pad_at(p))
                             .and_then(|pad_id| {
                                 let footprint = state
@@ -4886,774 +4866,1038 @@ impl eframe::App for PcbApp {
                                     }
                                 })
                             });
-                    let response = match hover_pad_tooltip {
-                        Some(text) => response.on_hover_text(text),
-                        None => response,
-                    };
+                        let response = match hover_pad_tooltip {
+                            Some(text) => response.on_hover_text(text),
+                            None => response,
+                        };
 
-                    // Captured once, right on the click that opens the
-                    // menu, rather than re-derived from `hover_board`
-                    // inside the `context_menu` closure below: once the
-                    // popup itself has mouse focus, `response.hover_pos()`
-                    // no longer reliably reports the pad that was
-                    // actually right-clicked.
-                    let board_locked = state.zone_refill_active();
-                    if !board_locked && response.secondary_clicked() {
-                        state.context_menu_pad = hover_board.and_then(|p| state.doc.pad_at(p));
-                    }
-                    if !board_locked {
-                        response.context_menu(|ui| {
-                            if let Some(pad_id) = state.context_menu_pad {
-                                if ui.button("Add via near pin").clicked() {
-                                    state.add_pin_stitching_via_at(pad_id);
-                                    ui.close();
+                        // Captured once, right on the click that opens the
+                        // menu, rather than re-derived from `hover_board`
+                        // inside the `context_menu` closure below: once the
+                        // popup itself has mouse focus, `response.hover_pos()`
+                        // no longer reliably reports the pad that was
+                        // actually right-clicked.
+                        let board_locked = state.zone_refill_active();
+                        if !board_locked && response.secondary_clicked() {
+                            state.context_menu_pad = hover_board.and_then(|p| state.doc.pad_at(p));
+                        }
+                        if !board_locked {
+                            response.context_menu(|ui| {
+                                if let Some(pad_id) = state.context_menu_pad {
+                                    if ui.button("Add via near pin").clicked() {
+                                        state.add_pin_stitching_via_at(pad_id);
+                                        ui.close();
+                                    }
+                                } else {
+                                    ui.label("(nothing here)");
                                 }
-                            } else {
-                                ui.label("(nothing here)");
+                            });
+                        }
+
+                        if board_locked {
+                            // Still allow pan while pours recompute.
+                            if response.dragged() {
+                                state.camera.center_mm -=
+                                    state.camera.screen_delta_to_board_mm(response.drag_delta());
                             }
-                        });
-                    }
-
-                    if board_locked {
-                        // Still allow pan while pours recompute.
-                        if response.dragged() {
-                            state.camera.center_mm -=
-                                state.camera.screen_delta_to_board_mm(response.drag_delta());
-                        }
-                    } else if state.pending_pin_via.is_some() {
-                        // The footprint+via unit follows the cursor
-                        // exactly like an ordinary `Dragging` move,
-                        // but driven purely by hover (see
-                        // `PendingPinVia`'s own doc comment for why):
-                        // no mouse button is being held for this one.
-                        if let Some(board_pos) = hover_board {
-                            state.update_pending_pin_via(board_pos);
-                        }
-                        if response.clicked() {
-                            state.finish_pending_pin_via();
-                        }
-                    } else {
-                        match state.tool {
-                            Tool::Place(index) => {
-                                if response.dragged() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
-                                }
-                                if response.clicked() {
-                                    if let Some(board_pos) = hover_board {
-                                        let board_pos = snap_to_grid_point(
-                                            board_pos,
-                                            state.grid_spacing,
-                                            state.grid_snap_enabled,
-                                        );
-                                        let template = state.templates[index].clone();
-                                        let rotation = state.place_rotation_deg;
-                                        if state.matrix_rows.max(1) * state.matrix_cols.max(1) > 1 {
-                                            let (center, _, _) =
-                                                state.snap_matrix_center(board_pos);
-                                            let positions = state.matrix_ghost_positions(center);
-                                            let _ = state.try_mutate_doc(|doc| {
-                                                doc.place_matrix(&template, &positions, rotation)
+                        } else if state.pending_pin_via.is_some() {
+                            // The footprint+via unit follows the cursor
+                            // exactly like an ordinary `Dragging` move,
+                            // but driven purely by hover (see
+                            // `PendingPinVia`'s own doc comment for why):
+                            // no mouse button is being held for this one.
+                            if let Some(board_pos) = hover_board {
+                                state.update_pending_pin_via(board_pos);
+                            }
+                            if response.clicked() {
+                                state.finish_pending_pin_via();
+                            }
+                        } else {
+                            match state.tool {
+                                Tool::Place(index) => {
+                                    if response.dragged() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
+                                    }
+                                    if response.clicked() {
+                                        if let Some(board_pos) = hover_board {
+                                            let board_pos = snap_to_grid_point(
+                                                board_pos,
+                                                state.grid_spacing,
+                                                state.grid_snap_enabled,
+                                            );
+                                            let template = state.templates[index].clone();
+                                            let rotation = state.place_rotation_deg;
+                                            if state.matrix_rows.max(1) * state.matrix_cols.max(1)
+                                                > 1
+                                            {
+                                                let (center, _, _) =
+                                                    state.snap_matrix_center(board_pos);
+                                                let positions =
+                                                    state.matrix_ghost_positions(center);
+                                                let _ = state.try_mutate_doc(|doc| {
+                                                    doc.place_matrix(
+                                                        &template, &positions, rotation,
+                                                    )
                                                     .map(|_| ())
-                                            });
-                                        } else {
-                                            let _ = state.try_mutate_doc(|doc| {
-                                                doc.try_place_footprint(
-                                                    &template, board_pos, rotation,
-                                                )
-                                                .map(|_| ())
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            Tool::PlaceSilkText => {
-                                if response.dragged() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
-                                }
-                                if response.clicked() {
-                                    if let Some(board_pos) = hover_board {
-                                        let board_pos = snap_to_grid_point(
-                                            board_pos,
-                                            state.grid_spacing,
-                                            state.grid_snap_enabled,
-                                        );
-                                        let text = state.silk_text_input.clone();
-                                        let (rot, layer, height) = (
-                                            state.silk_text_place_rotation_deg,
-                                            state.silk_layer,
-                                            state.silk_text_height,
-                                        );
-                                        match state.try_mutate_doc_ok(|doc| {
-                                            doc.try_place_silk_text(
-                                                &text, board_pos, rot, layer, height,
-                                            )
-                                        }) {
-                                            Ok(_) => {
-                                                state.silk_text_message = None;
-                                                // 0deg is silk text's standard: a one-off
-                                                // rotation applies to the text it was made
-                                                // for, never silently to the next one too.
-                                                state.silk_text_place_rotation_deg = 0.0;
+                                                });
+                                            } else {
+                                                let _ = state.try_mutate_doc(|doc| {
+                                                    doc.try_place_footprint(
+                                                        &template, board_pos, rotation,
+                                                    )
+                                                    .map(|_| ())
+                                                });
                                             }
-                                            Err(e) => state.silk_text_message = Some(e.to_string()),
                                         }
                                     }
                                 }
-                            }
-                            Tool::PlaceSilkDot => {
-                                if response.dragged() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
-                                }
-                                if response.clicked() {
-                                    if let Some(board_pos) = hover_board {
-                                        let board_pos = snap_to_grid_point(
-                                            board_pos,
-                                            state.grid_spacing,
-                                            state.grid_snap_enabled,
-                                        );
-                                        let (diameter, layer) =
-                                            (state.silk_dot_diameter, state.silk_layer);
-                                        match state.try_mutate_doc_ok(|doc| {
-                                            doc.try_place_silk_dot(board_pos, diameter, layer)
-                                        }) {
-                                            Ok(_) => state.silk_dot_message = None,
-                                            Err(e) => state.silk_dot_message = Some(e.to_string()),
-                                        }
-                                    }
-                                }
-                            }
-                            Tool::Select => {
-                                if response.drag_started() {
-                                    if let Some(board_pos) = hover_board {
-                                        state.begin_drag(board_pos);
-                                    }
-                                }
-                                if state.dragging.is_some() || state.silk_text_dragging.is_some() {
+                                Tool::PlaceSilkText => {
                                     if response.dragged() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
+                                    }
+                                    if response.clicked() {
                                         if let Some(board_pos) = hover_board {
-                                            state.update_drag(board_pos);
+                                            let board_pos = snap_to_grid_point(
+                                                board_pos,
+                                                state.grid_spacing,
+                                                state.grid_snap_enabled,
+                                            );
+                                            let text = state.silk_text_input.clone();
+                                            let (rot, layer, height) = (
+                                                state.silk_text_place_rotation_deg,
+                                                state.silk_layer,
+                                                state.silk_text_height,
+                                            );
+                                            match state.try_mutate_doc_ok(|doc| {
+                                                doc.try_place_silk_text(
+                                                    &text, board_pos, rot, layer, height,
+                                                )
+                                            }) {
+                                                Ok(_) => {
+                                                    state.silk_text_message = None;
+                                                    // 0deg is silk text's standard: a one-off
+                                                    // rotation applies to the text it was made
+                                                    // for, never silently to the next one too.
+                                                    state.silk_text_place_rotation_deg = 0.0;
+                                                }
+                                                Err(e) => {
+                                                    state.silk_text_message = Some(e.to_string())
+                                                }
+                                            }
                                         }
                                     }
-                                    if response.drag_stopped() {
-                                        state.finish_drag();
-                                    }
-                                } else if state.trace_dragging.is_some() {
+                                }
+                                Tool::PlaceSilkDot => {
                                     if response.dragged() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
+                                    }
+                                    if response.clicked() {
                                         if let Some(board_pos) = hover_board {
-                                            state.update_trace_drag(board_pos);
+                                            let board_pos = snap_to_grid_point(
+                                                board_pos,
+                                                state.grid_spacing,
+                                                state.grid_snap_enabled,
+                                            );
+                                            let (diameter, layer) =
+                                                (state.silk_dot_diameter, state.silk_layer);
+                                            match state.try_mutate_doc_ok(|doc| {
+                                                doc.try_place_silk_dot(board_pos, diameter, layer)
+                                            }) {
+                                                Ok(_) => state.silk_dot_message = None,
+                                                Err(e) => {
+                                                    state.silk_dot_message = Some(e.to_string())
+                                                }
+                                            }
                                         }
                                     }
-                                    if response.drag_stopped() {
-                                        state.finish_trace_drag();
+                                }
+                                Tool::Select => {
+                                    if response.drag_started() {
+                                        if let Some(board_pos) = hover_board {
+                                            state.begin_drag(board_pos);
+                                        }
                                     }
-                                } else if response.dragged() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
-                                }
-                                if response.clicked() {
-                                    if let Some(board_pos) = hover_board {
-                                        state.handle_select_click(board_pos);
+                                    if state.dragging.is_some()
+                                        || state.silk_text_dragging.is_some()
+                                    {
+                                        if response.dragged() {
+                                            if let Some(board_pos) = hover_board {
+                                                state.update_drag(board_pos);
+                                            }
+                                        }
+                                        if response.drag_stopped() {
+                                            state.finish_drag();
+                                        }
+                                    } else if state.trace_dragging.is_some() {
+                                        if response.dragged() {
+                                            if let Some(board_pos) = hover_board {
+                                                state.update_trace_drag(board_pos);
+                                            }
+                                        }
+                                        if response.drag_stopped() {
+                                            state.finish_trace_drag();
+                                        }
+                                    } else if response.dragged() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
                                     }
-                                }
-                            }
-                            Tool::Connect => {
-                                if response.dragged() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
-                                }
-                                if response.clicked() {
-                                    let pad_id = hover_board.and_then(|p| state.doc.pad_at(p));
-                                    let unassign = ui.input(|i| i.modifiers.shift);
-                                    state.handle_connect_click(pad_id, unassign);
-                                }
-                            }
-                            Tool::Route => {
-                                if response.dragged() && state.routing.is_none() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
-                                }
-                                if let (Some(routing), Some(board_pos)) =
-                                    (&mut state.routing, hover_board)
-                                {
-                                    routing.update(&state.doc, board_pos);
-                                }
-                                if response.clicked() {
-                                    if let Some(board_pos) = hover_board {
-                                        state.handle_route_click(board_pos);
-                                    } else {
-                                        state.routing = None;
+                                    if response.clicked() {
+                                        if let Some(board_pos) = hover_board {
+                                            state.handle_select_click(board_pos);
+                                        }
                                     }
                                 }
-                            }
-                            Tool::PlaceVia => {
-                                if response.dragged() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
-                                }
-                                if response.clicked() {
-                                    if let Some(board_pos) = hover_board {
-                                        state.handle_place_via_click(board_pos);
+                                Tool::Connect => {
+                                    if response.dragged() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
+                                    }
+                                    if response.clicked() {
+                                        let pad_id = hover_board.and_then(|p| state.doc.pad_at(p));
+                                        let unassign = ui.input(|i| i.modifiers.shift);
+                                        state.handle_connect_click(pad_id, unassign);
                                     }
                                 }
-                            }
-                            Tool::DrawZone => {
-                                if response.dragged() {
-                                    state.camera.center_mm -= state
-                                        .camera
-                                        .screen_delta_to_board_mm(response.drag_delta());
+                                Tool::Route => {
+                                    if response.dragged() && state.routing.is_none() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
+                                    }
+                                    if let (Some(routing), Some(board_pos)) =
+                                        (&mut state.routing, hover_board)
+                                    {
+                                        routing.update(&state.doc, board_pos);
+                                    }
+                                    if response.clicked() {
+                                        if let Some(board_pos) = hover_board {
+                                            state.handle_route_click(board_pos);
+                                        } else {
+                                            state.routing = None;
+                                        }
+                                    }
                                 }
-                                if response.clicked() {
-                                    if let Some(board_pos) = hover_board {
-                                        state.handle_draw_zone_click(board_pos);
+                                Tool::PlaceVia => {
+                                    if response.dragged() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
+                                    }
+                                    if response.clicked() {
+                                        if let Some(board_pos) = hover_board {
+                                            state.handle_place_via_click(board_pos);
+                                        }
+                                    }
+                                }
+                                Tool::DrawZone => {
+                                    if response.dragged() {
+                                        state.camera.center_mm -= state
+                                            .camera
+                                            .screen_delta_to_board_mm(response.drag_delta());
+                                    }
+                                    if response.clicked() {
+                                        if let Some(board_pos) = hover_board {
+                                            state.handle_draw_zone_click(board_pos);
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                    if scroll != 0.0 && response.hovered() {
-                        state.camera.zoom_by((1.0 + scroll * 0.001).clamp(0.5, 2.0));
-                    }
-
-                    let painter = ui.painter_at(rect);
-                    painter.rect_filled(rect, 0.0, CANVAS_BACKGROUND);
-                    draw_board_substrate(&painter, rect, &state.camera, &state.doc.outline);
-                    if state.grid_snap_enabled {
-                        draw_placement_grid(&painter, rect, &state.camera, state.grid_spacing);
-                    }
-
-                    let mut hidden_ids: Vec<ItemId> = state
-                        .dragging
-                        .as_ref()
-                        .and_then(|d| state.doc.footprints.iter().find(|f| f.id == d.id))
-                        .map(|f| f.pad_item_ids.clone())
-                        .unwrap_or_default();
-                    if let Some(drag) = &state.trace_dragging {
-                        hidden_ids.extend_from_slice(drag.removed_ids());
-                    }
-                    let items: Vec<Item> = state
-                        .doc
-                        .node
-                        .iter_with_ids()
-                        .filter(|(id, _)| !hidden_ids.contains(id))
-                        .map(|(_, item)| item.clone())
-                        .collect();
-                    // Pads are drawn by `draw_footprint_details` below instead
-                    // of generically here, so every pad gets its *real*
-                    // shape/number/pin-1 marker rather than a plain circle --
-                    // see that function's doc comment.
-                    let board_layers = LayerToggles {
-                        pads: false,
-                        ..state.layers
-                    };
-                    alladin_render::draw_board(
-                        &painter,
-                        rect,
-                        &state.camera,
-                        &state.doc.outline,
-                        &items,
-                        &board_layers,
-                        state.highlighted_net,
-                    );
-                    let dragging_id = state.dragging.as_ref().map(|d| d.id);
-                    draw_footprint_details(
-                        &painter,
-                        rect,
-                        &state.camera,
-                        &state.doc,
-                        &state.templates,
-                        &state.layers,
-                        dragging_id,
-                        state.highlighted_net,
-                    );
-                    // The one currently being dragged (if any) is
-                    // skipped here -- it's drawn instead by the
-                    // red/green `draw_silk_text_ghost` below, following
-                    // the live cursor, same "hide the real thing, show
-                    // only the ghost" convention `hidden_ids`/`dragging_id`
-                    // above already use for a footprint mid-drag.
-                    let dragging_silk_text_id = state.silk_text_dragging.as_ref().map(|d| d.id);
-                    for text in &state.doc.silk_texts {
-                        if Some(text.id) != dragging_silk_text_id {
-                            draw_silk_text(&painter, rect, &state.camera, text);
+                        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                        if scroll != 0.0 && response.hovered() {
+                            state.camera.zoom_by((1.0 + scroll * 0.001).clamp(0.5, 2.0));
                         }
-                    }
-                    let dragging_silk_dot_id = state.silk_dot_dragging.as_ref().map(|d| d.id);
-                    for dot in &state.doc.silk_dots {
-                        if Some(dot.id) != dragging_silk_dot_id {
-                            draw_silk_dot_circle(
-                                &painter,
-                                rect,
-                                &state.camera,
-                                &dot.circle(),
-                                Color32::from_rgb(220, 220, 220),
-                            );
-                        }
-                    }
-                    // Pin-1 markers: same silk-white ink as free dots --
-                    // on the fabricated board they're indistinguishable,
-                    // so the preview doesn't invent a difference either.
-                    for fp in &state.doc.footprints {
-                        if let Some(circle) = fp.pin1_marker_circle() {
-                            draw_silk_dot_circle(
-                                &painter,
-                                rect,
-                                &state.camera,
-                                &circle,
-                                Color32::from_rgb(220, 220, 220),
-                            );
-                        }
-                    }
-                    if state.show_ratsnest {
-                        draw_ratsnest(&painter, rect, &state.camera, &state.doc);
-                    }
 
-                    if let Some(pad_id) = state.pending_connect {
-                        draw_pending_pin(&painter, rect, &state.camera, &state.doc.node, pad_id);
-                    }
-                    if let Some(routing) = &state.routing {
-                        draw_routing_preview(&painter, rect, &state.camera, &state.doc, routing);
-                    }
-                    if let Tool::DrawZone = state.tool {
-                        draw_zone_preview(
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, 0.0, CANVAS_BACKGROUND);
+                        draw_board_substrate(&painter, rect, &state.camera, &state.doc.outline);
+                        if state.grid_snap_enabled {
+                            draw_placement_grid(&painter, rect, &state.camera, state.grid_spacing);
+                        }
+
+                        let mut hidden_ids: Vec<ItemId> = state
+                            .dragging
+                            .as_ref()
+                            .and_then(|d| state.doc.footprints.iter().find(|f| f.id == d.id))
+                            .map(|f| f.pad_item_ids.clone())
+                            .unwrap_or_default();
+                        if let Some(drag) = &state.trace_dragging {
+                            hidden_ids.extend_from_slice(drag.removed_ids());
+                        }
+                        let items: Vec<Item> = state
+                            .doc
+                            .node
+                            .iter_with_ids()
+                            .filter(|(id, _)| !hidden_ids.contains(id))
+                            .map(|(_, item)| item.clone())
+                            .collect();
+                        // Pads are drawn by `draw_footprint_details` below instead
+                        // of generically here, so every pad gets its *real*
+                        // shape/number/pin-1 marker rather than a plain circle --
+                        // see that function's doc comment.
+                        let board_layers = LayerToggles {
+                            pads: false,
+                            ..state.layers
+                        };
+                        alladin_render::draw_board(
                             &painter,
                             rect,
                             &state.camera,
-                            &state.zone_points,
-                            hover_board,
+                            &state.doc.outline,
+                            &items,
+                            &board_layers,
+                            state.highlighted_net,
                         );
-                    }
-                    if let Some(drag) = &state.trace_dragging {
-                        draw_trace_drag_preview(&painter, rect, &state.camera, drag);
-                    }
-
-                    if let Some(id) = state.selected {
-                        if state.dragging.is_none() {
-                            if let Some(fp) = state.doc.footprints.iter().find(|f| f.id == id) {
-                                let ring_ids: Vec<ItemId> = fp
-                                    .pad_item_ids
-                                    .iter()
-                                    .chain(&fp.hole_item_ids)
-                                    .copied()
-                                    .collect();
-                                draw_selection_ring(
+                        let dragging_id = state.dragging.as_ref().map(|d| d.id);
+                        draw_footprint_details(
+                            &painter,
+                            rect,
+                            &state.camera,
+                            &state.doc,
+                            &state.templates,
+                            &state.layers,
+                            dragging_id,
+                            state.highlighted_net,
+                        );
+                        // The one currently being dragged (if any) is
+                        // skipped here -- it's drawn instead by the
+                        // red/green `draw_silk_text_ghost` below, following
+                        // the live cursor, same "hide the real thing, show
+                        // only the ghost" convention `hidden_ids`/`dragging_id`
+                        // above already use for a footprint mid-drag.
+                        let dragging_silk_text_id = state.silk_text_dragging.as_ref().map(|d| d.id);
+                        for text in &state.doc.silk_texts {
+                            if Some(text.id) != dragging_silk_text_id {
+                                draw_silk_text(&painter, rect, &state.camera, text);
+                            }
+                        }
+                        let dragging_silk_dot_id = state.silk_dot_dragging.as_ref().map(|d| d.id);
+                        for dot in &state.doc.silk_dots {
+                            if Some(dot.id) != dragging_silk_dot_id {
+                                draw_silk_dot_circle(
                                     &painter,
                                     rect,
                                     &state.camera,
-                                    &state.doc.node,
-                                    &ring_ids,
+                                    &dot.circle(),
+                                    Color32::from_rgb(220, 220, 220),
                                 );
                             }
                         }
-                    }
-                    if let Some(id) = state.selected_item {
-                        if state.trace_dragging.is_none() {
-                            draw_item_selection_highlight(
+                        // Pin-1 markers: same silk-white ink as free dots --
+                        // on the fabricated board they're indistinguishable,
+                        // so the preview doesn't invent a difference either.
+                        for fp in &state.doc.footprints {
+                            if let Some(circle) = fp.pin1_marker_circle() {
+                                draw_silk_dot_circle(
+                                    &painter,
+                                    rect,
+                                    &state.camera,
+                                    &circle,
+                                    Color32::from_rgb(220, 220, 220),
+                                );
+                            }
+                        }
+                        if state.show_ratsnest {
+                            draw_ratsnest(&painter, rect, &state.camera, &state.doc);
+                        }
+
+                        if let Some(pad_id) = state.pending_connect {
+                            draw_pending_pin(
+                                &painter,
+                                rect,
+                                &state.camera,
+                                &state.doc.node,
+                                pad_id,
+                            );
+                        }
+                        if let Some(routing) = &state.routing {
+                            draw_routing_preview(
                                 &painter,
                                 rect,
                                 &state.camera,
                                 &state.doc,
-                                id,
+                                routing,
                             );
                         }
-                    }
-                    if let Some(id) = state.selected_silk_text {
-                        if state.silk_text_dragging.is_none() {
-                            if let Some(text) = state.doc.silk_texts.iter().find(|t| t.id == id) {
-                                let points = silk_text_outline_px(rect, &state.camera, text);
-                                painter.add(egui::Shape::closed_line(
-                                    points,
-                                    Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
-                                ));
-                            }
+                        if let Tool::DrawZone = state.tool {
+                            draw_zone_preview(
+                                &painter,
+                                rect,
+                                &state.camera,
+                                &state.zone_points,
+                                hover_board,
+                            );
                         }
-                    }
-                    if let Some(id) = state.selected_silk_dot {
-                        if state.silk_dot_dragging.is_none() {
-                            if let Some(dot) = state.doc.silk_dots.iter().find(|d| d.id == id) {
-                                let center = state.camera.board_to_screen(rect, dot.position);
-                                let radius_px = (dot.diameter as f32 / 2.0 / MM as f32
-                                    * state.camera.pixels_per_mm)
-                                    .max(1.5)
-                                    + 3.0;
-                                painter.circle_stroke(
-                                    center,
-                                    radius_px,
-                                    Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
-                                );
-                            }
+                        if let Some(drag) = &state.trace_dragging {
+                            draw_trace_drag_preview(&painter, rect, &state.camera, drag);
                         }
-                    }
 
-                    if let Tool::Place(i) = state.tool {
-                        if let Some(board_pos) = hover_board {
-                            let board_pos = snap_to_grid_point(
-                                board_pos,
-                                state.grid_spacing,
-                                state.grid_snap_enabled,
-                            );
-                            let template = &state.templates[i];
-                            if state.matrix_rows.max(1) * state.matrix_cols.max(1) > 1 {
-                                let (center, snap_x, snap_y) = state.snap_matrix_center(board_pos);
-                                let positions = state.matrix_ghost_positions(center);
-                                let valid = state
-                                    .doc
-                                    .check_matrix_placement(
-                                        template,
-                                        &positions,
-                                        state.place_rotation_deg,
-                                    )
-                                    .is_ok();
-                                let ghost_items: Vec<Item> = positions
-                                    .iter()
-                                    .flat_map(|&p| {
-                                        world_items(template, p, state.place_rotation_deg)
-                                    })
-                                    .collect();
-                                draw_ghost(&painter, rect, &state.camera, &ghost_items, valid);
-                                if let Some(bounds) = state.board_bounds() {
-                                    draw_matrix_snap_guides(
+                        if let Some(id) = state.selected {
+                            if state.dragging.is_none() {
+                                if let Some(fp) = state.doc.footprints.iter().find(|f| f.id == id) {
+                                    let ring_ids: Vec<ItemId> = fp
+                                        .pad_item_ids
+                                        .iter()
+                                        .chain(&fp.hole_item_ids)
+                                        .copied()
+                                        .collect();
+                                    draw_selection_ring(
                                         &painter,
                                         rect,
                                         &state.camera,
-                                        bounds,
-                                        snap_x,
-                                        snap_y,
+                                        &state.doc.node,
+                                        &ring_ids,
                                     );
                                 }
-                            } else {
-                                let ghost_items =
-                                    world_items(template, board_pos, state.place_rotation_deg);
+                            }
+                        }
+                        if let Some(id) = state.selected_item {
+                            if state.trace_dragging.is_none() {
+                                draw_item_selection_highlight(
+                                    &painter,
+                                    rect,
+                                    &state.camera,
+                                    &state.doc,
+                                    id,
+                                );
+                            }
+                        }
+                        if let Some(id) = state.selected_silk_text {
+                            if state.silk_text_dragging.is_none() {
+                                if let Some(text) = state.doc.silk_texts.iter().find(|t| t.id == id)
+                                {
+                                    let points = silk_text_outline_px(rect, &state.camera, text);
+                                    painter.add(egui::Shape::closed_line(
+                                        points,
+                                        Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
+                                    ));
+                                }
+                            }
+                        }
+                        if let Some(id) = state.selected_silk_dot {
+                            if state.silk_dot_dragging.is_none() {
+                                if let Some(dot) = state.doc.silk_dots.iter().find(|d| d.id == id) {
+                                    let center = state.camera.board_to_screen(rect, dot.position);
+                                    let radius_px = (dot.diameter as f32 / 2.0 / MM as f32
+                                        * state.camera.pixels_per_mm)
+                                        .max(1.5)
+                                        + 3.0;
+                                    painter.circle_stroke(
+                                        center,
+                                        radius_px,
+                                        Stroke::new(2.0, Color32::from_rgb(255, 220, 0)),
+                                    );
+                                }
+                            }
+                        }
+
+                        if let Tool::Place(i) = state.tool {
+                            if let Some(board_pos) = hover_board {
+                                let board_pos = snap_to_grid_point(
+                                    board_pos,
+                                    state.grid_spacing,
+                                    state.grid_snap_enabled,
+                                );
+                                let template = &state.templates[i];
+                                if state.matrix_rows.max(1) * state.matrix_cols.max(1) > 1 {
+                                    let (center, snap_x, snap_y) =
+                                        state.snap_matrix_center(board_pos);
+                                    let positions = state.matrix_ghost_positions(center);
+                                    let valid = state
+                                        .doc
+                                        .check_matrix_placement(
+                                            template,
+                                            &positions,
+                                            state.place_rotation_deg,
+                                        )
+                                        .is_ok();
+                                    let ghost_items: Vec<Item> = positions
+                                        .iter()
+                                        .flat_map(|&p| {
+                                            world_items(template, p, state.place_rotation_deg)
+                                        })
+                                        .collect();
+                                    draw_ghost(&painter, rect, &state.camera, &ghost_items, valid);
+                                    if let Some(bounds) = state.board_bounds() {
+                                        draw_matrix_snap_guides(
+                                            &painter,
+                                            rect,
+                                            &state.camera,
+                                            bounds,
+                                            snap_x,
+                                            snap_y,
+                                        );
+                                    }
+                                } else {
+                                    let ghost_items =
+                                        world_items(template, board_pos, state.place_rotation_deg);
+                                    let valid = state
+                                        .doc
+                                        .check_placement(
+                                            template,
+                                            board_pos,
+                                            state.place_rotation_deg,
+                                            None,
+                                        )
+                                        .is_ok();
+                                    draw_ghost(&painter, rect, &state.camera, &ghost_items, valid);
+                                }
+                            }
+                        }
+                        if let Tool::PlaceSilkText = state.tool {
+                            if let Some(board_pos) = hover_board {
+                                let board_pos = snap_to_grid_point(
+                                    board_pos,
+                                    state.grid_spacing,
+                                    state.grid_snap_enabled,
+                                );
+                                let ghost = crate::board_doc::SilkText {
+                                    id: crate::board_doc::SilkTextId(0),
+                                    text: if state.silk_text_input.trim().is_empty() {
+                                        "?".to_string()
+                                    } else {
+                                        state.silk_text_input.clone()
+                                    },
+                                    position: board_pos,
+                                    rotation_deg: state.silk_text_place_rotation_deg,
+                                    layer: state.silk_layer,
+                                    height: state.silk_text_height,
+                                    line_width: crate::board_doc::DEFAULT_SILK_LINE_WIDTH,
+                                };
+                                let valid = !state.silk_text_input.trim().is_empty()
+                                    && state
+                                        .doc
+                                        .check_silk_text_placement(
+                                            &state.silk_text_input,
+                                            board_pos,
+                                            state.silk_text_place_rotation_deg,
+                                            state.silk_layer,
+                                            state.silk_text_height,
+                                        )
+                                        .is_ok();
+                                draw_silk_text_ghost(&painter, rect, &state.camera, &ghost, valid);
+                            }
+                        }
+                        if let Tool::PlaceSilkDot = state.tool {
+                            if let Some(board_pos) = hover_board {
+                                let board_pos = snap_to_grid_point(
+                                    board_pos,
+                                    state.grid_spacing,
+                                    state.grid_snap_enabled,
+                                );
+                                let circle = alladin_geom::Circle::new(
+                                    board_pos,
+                                    state.silk_dot_diameter / 2,
+                                );
                                 let valid = state
                                     .doc
-                                    .check_placement(
-                                        template,
+                                    .check_silk_dot_placement(
                                         board_pos,
-                                        state.place_rotation_deg,
-                                        None,
-                                    )
-                                    .is_ok();
-                                draw_ghost(&painter, rect, &state.camera, &ghost_items, valid);
-                            }
-                        }
-                    }
-                    if let Tool::PlaceSilkText = state.tool {
-                        if let Some(board_pos) = hover_board {
-                            let board_pos = snap_to_grid_point(
-                                board_pos,
-                                state.grid_spacing,
-                                state.grid_snap_enabled,
-                            );
-                            let ghost = crate::board_doc::SilkText {
-                                id: crate::board_doc::SilkTextId(0),
-                                text: if state.silk_text_input.trim().is_empty() {
-                                    "?".to_string()
-                                } else {
-                                    state.silk_text_input.clone()
-                                },
-                                position: board_pos,
-                                rotation_deg: state.silk_text_place_rotation_deg,
-                                layer: state.silk_layer,
-                                height: state.silk_text_height,
-                                line_width: crate::board_doc::DEFAULT_SILK_LINE_WIDTH,
-                            };
-                            let valid = !state.silk_text_input.trim().is_empty()
-                                && state
-                                    .doc
-                                    .check_silk_text_placement(
-                                        &state.silk_text_input,
-                                        board_pos,
-                                        state.silk_text_place_rotation_deg,
+                                        state.silk_dot_diameter,
                                         state.silk_layer,
-                                        state.silk_text_height,
                                     )
                                     .is_ok();
-                            draw_silk_text_ghost(&painter, rect, &state.camera, &ghost, valid);
-                        }
-                    }
-                    if let Tool::PlaceSilkDot = state.tool {
-                        if let Some(board_pos) = hover_board {
-                            let board_pos = snap_to_grid_point(
-                                board_pos,
-                                state.grid_spacing,
-                                state.grid_snap_enabled,
-                            );
-                            let circle =
-                                alladin_geom::Circle::new(board_pos, state.silk_dot_diameter / 2);
-                            let valid = state
-                                .doc
-                                .check_silk_dot_placement(
-                                    board_pos,
-                                    state.silk_dot_diameter,
-                                    state.silk_layer,
-                                )
-                                .is_ok();
-                            draw_silk_dot_ghost(&painter, rect, &state.camera, &circle, valid);
-                        }
-                    }
-                    if let Some(dragging) = &state.dragging {
-                        let template = &state.templates[dragging.template_index];
-                        let ghost_items = world_items(
-                            template,
-                            dragging.candidate_position,
-                            dragging.rotation_deg,
-                        );
-                        draw_ghost(&painter, rect, &state.camera, &ghost_items, dragging.valid);
-                    }
-                    if let Some(drag) = &state.silk_text_dragging {
-                        if let Some(original) =
-                            state.doc.silk_texts.iter().find(|t| t.id == drag.id)
-                        {
-                            let ghost = crate::board_doc::SilkText {
-                                id: drag.id,
-                                text: original.text.clone(),
-                                position: drag.candidate_position,
-                                rotation_deg: drag.rotation_deg,
-                                layer: original.layer,
-                                height: original.height,
-                                line_width: original.line_width,
-                            };
-                            draw_silk_text_ghost(&painter, rect, &state.camera, &ghost, drag.valid);
-                        }
-                    }
-                    if let Some(drag) = &state.silk_dot_dragging {
-                        if let Some(original) = state.doc.silk_dots.iter().find(|d| d.id == drag.id)
-                        {
-                            let circle = alladin_geom::Circle::new(
-                                drag.candidate_position,
-                                original.diameter / 2,
-                            );
-                            draw_silk_dot_ghost(&painter, rect, &state.camera, &circle, drag.valid);
-                        }
-                    }
-                    if let Some(pending) = &state.pending_pin_via {
-                        let template = &state.templates[pending.template_index];
-                        let mut ghost_items =
-                            world_items(template, pending.candidate_position, pending.rotation_deg);
-                        let via_center = pending.candidate_position.add(pending.via_offset);
-                        ghost_items.push(Item::Pad {
-                            shape: PadShape::Circle(alladin_geom::Circle::new(
-                                via_center,
-                                pending.diameter / 2,
-                            )),
-                            net: None,
-                            layer: LayerId::FCu,
-                            zone_connection: ZoneConnection::Thermal,
-                            hole_diameter: None,
-                        });
-                        draw_ghost(&painter, rect, &state.camera, &ghost_items, pending.valid);
-                    }
-                });
-
-                // Neither delete button removes anything itself
-                // anymore -- it only stages the request here, and
-                // `draw_delete_confirmation_window` (below) is what
-                // actually calls `self.parts_db.delete_part`/
-                // `delete_category_tree` once the user explicitly
-                // confirms. See [`PendingDelete`]'s own doc comment.
-                if let Some((index, db_id, name)) = delete_part_requested {
-                    state.pending_delete = Some(PendingDelete::Part { index, db_id, name });
-                }
-                if let Some((prefix, count)) = delete_category_requested {
-                    state.pending_delete = Some(PendingDelete::Category { prefix, count });
-                }
-                if create_part_requested {
-                    if let Some(form) = state.add_part_form.take() {
-                        let hole =
-                            (form.hole_diameter_mm > 0.0).then_some(form.hole_diameter_mm as f64);
-                        let template = footprint::straight_row_template_with_hole(
-                            form.name.clone(),
-                            form.reference_prefix.clone(),
-                            form.pin_count,
-                            form.pitch_mm as f64,
-                            form.pad_radius_mm as f64,
-                            hole,
-                        );
-                        let category = (!form.category.trim().is_empty())
-                            .then(|| form.category.trim().to_string());
-                        match self.parts_db.insert_part_categorized(
-                            &form.name,
-                            &form.reference_prefix,
-                            &form.description,
-                            None,
-                            &template.pads,
-                            &[],
-                            false,
-                            None,
-                            category.as_deref(),
-                        ) {
-                            Ok(record) => {
-                                state.templates.push(record.template);
-                                state.template_origin.push(Some(record.id));
-                                state.template_hover.push(if form.description.is_empty() {
-                                    None
-                                } else {
-                                    Some(form.description.clone())
-                                });
-                                state.template_category.push(record.category);
+                                draw_silk_dot_ghost(&painter, rect, &state.camera, &circle, valid);
                             }
-                            Err(e) => state.io_message = Some(format!("Couldn't save part: {e}")),
                         }
-                    }
-                }
-
-                #[cfg(not(target_arch = "wasm32"))]
-                if open_requested {
-                    if let Some(path) = board_file_dialog().pick_file() {
-                        let (templates, _, _, _) = load_templates(&self.parts_db);
-                        match load_from_path(&path, &templates, &self.parts_db) {
-                            Ok((doc, merge)) => {
-                                remember_last_board(&path);
-                                let (templates, template_origin, template_hover, template_category) =
-                                    load_templates(&self.parts_db);
-                                let mut opened = EditorState::new(
-                                    doc,
-                                    templates,
-                                    template_origin,
-                                    template_hover,
-                                    template_category,
+                        if let Some(dragging) = &state.dragging {
+                            let template = &state.templates[dragging.template_index];
+                            let ghost_items = world_items(
+                                template,
+                                dragging.candidate_position,
+                                dragging.rotation_deg,
+                            );
+                            draw_ghost(&painter, rect, &state.camera, &ghost_items, dragging.valid);
+                        }
+                        if let Some(drag) = &state.silk_text_dragging {
+                            if let Some(original) =
+                                state.doc.silk_texts.iter().find(|t| t.id == drag.id)
+                            {
+                                let ghost = crate::board_doc::SilkText {
+                                    id: drag.id,
+                                    text: original.text.clone(),
+                                    position: drag.candidate_position,
+                                    rotation_deg: drag.rotation_deg,
+                                    layer: original.layer,
+                                    height: original.height,
+                                    line_width: original.line_width,
+                                };
+                                draw_silk_text_ghost(
+                                    &painter,
+                                    rect,
+                                    &state.camera,
+                                    &ghost,
+                                    drag.valid,
                                 );
-                                opened.set_file_path(path);
-                                if let Some((n, skip)) = merge {
-                                    if n > 0 || skip > 0 {
-                                        opened.lcsc_message = Some((
-                                            true,
-                                            format!(
-                                                "Board parts: imported {n}, already had {skip}."
-                                            ),
-                                        ));
-                                    }
-                                }
-                                pending_screen = Some(Screen::Editor(opened));
                             }
-                            Err(e) => {
-                                state.io_message = Some(format!("Couldn't open board: {e}"));
+                        }
+                        if let Some(drag) = &state.silk_dot_dragging {
+                            if let Some(original) =
+                                state.doc.silk_dots.iter().find(|d| d.id == drag.id)
+                            {
+                                let circle = alladin_geom::Circle::new(
+                                    drag.candidate_position,
+                                    original.diameter / 2,
+                                );
+                                draw_silk_dot_ghost(
+                                    &painter,
+                                    rect,
+                                    &state.camera,
+                                    &circle,
+                                    drag.valid,
+                                );
+                            }
+                        }
+                        if let Some(pending) = &state.pending_pin_via {
+                            let template = &state.templates[pending.template_index];
+                            let mut ghost_items = world_items(
+                                template,
+                                pending.candidate_position,
+                                pending.rotation_deg,
+                            );
+                            let via_center = pending.candidate_position.add(pending.via_offset);
+                            ghost_items.push(Item::Pad {
+                                shape: PadShape::Circle(alladin_geom::Circle::new(
+                                    via_center,
+                                    pending.diameter / 2,
+                                )),
+                                net: None,
+                                layer: LayerId::FCu,
+                                zone_connection: ZoneConnection::Thermal,
+                                hole_diameter: None,
+                            });
+                            draw_ghost(&painter, rect, &state.camera, &ghost_items, pending.valid);
+                        }
+                    });
+
+                    // Neither delete button removes anything itself
+                    // anymore -- it only stages the request here, and
+                    // `draw_delete_confirmation_window` (below) is what
+                    // actually calls `parts_db.delete_part`/
+                    // `delete_category_tree` once the user explicitly
+                    // confirms. See [`PendingDelete`]'s own doc comment.
+                    if let Some((index, db_id, name)) = delete_part_requested {
+                        state.pending_delete = Some(PendingDelete::Part { index, db_id, name });
+                    }
+                    if let Some((prefix, count)) = delete_category_requested {
+                        state.pending_delete = Some(PendingDelete::Category { prefix, count });
+                    }
+                    if create_part_requested {
+                        if let Some(form) = state.add_part_form.take() {
+                            let hole = (form.hole_diameter_mm > 0.0)
+                                .then_some(form.hole_diameter_mm as f64);
+                            let template = footprint::straight_row_template_with_hole(
+                                form.name.clone(),
+                                form.reference_prefix.clone(),
+                                form.pin_count,
+                                form.pitch_mm as f64,
+                                form.pad_radius_mm as f64,
+                                hole,
+                            );
+                            let category = (!form.category.trim().is_empty())
+                                .then(|| form.category.trim().to_string());
+                            match parts_db.insert_part_categorized(
+                                &form.name,
+                                &form.reference_prefix,
+                                &form.description,
+                                None,
+                                &template.pads,
+                                &[],
+                                false,
+                                None,
+                                category.as_deref(),
+                            ) {
+                                Ok(record) => {
+                                    state.templates.push(record.template);
+                                    state.template_origin.push(Some(record.id));
+                                    state.template_hover.push(if form.description.is_empty() {
+                                        None
+                                    } else {
+                                        Some(form.description.clone())
+                                    });
+                                    state.template_category.push(record.category);
+                                }
+                                Err(e) => {
+                                    state.io_message = Some(format!("Couldn't save part: {e}"))
+                                }
                             }
                         }
                     }
-                }
-                #[cfg(target_arch = "wasm32")]
-                if open_requested {
-                    self.wasm_pending.open_board =
-                        Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if save_requested || save_as_requested {
-                    let path = if save_as_requested {
-                        None
-                    } else {
-                        state.file_path.clone()
-                    };
-                    let path = path.or_else(|| board_file_dialog().save_file());
-                    if let Some(path) = path {
-                        match save_to_path(
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if open_requested {
+                        desktop_file_job = Some(DesktopFileJob::OpenBoard);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    if open_requested {
+                        self.wasm_pending.open_board =
+                            Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if save_requested || save_as_requested {
+                        let existing = if save_as_requested {
+                            None
+                        } else {
+                            state.file_path.clone()
+                        };
+                        if let Some(path) = existing {
+                            match save_to_path(
+                                &state.doc,
+                                &path,
+                                &state.templates,
+                                &state.template_origin,
+                                &parts_db,
+                            ) {
+                                Ok(()) => {
+                                    remember_last_board(&path);
+                                    state.set_file_path(path);
+                                    state.io_message = None;
+                                }
+                                Err(e) => {
+                                    state.io_message = Some(format!("Couldn't save board: {e}"))
+                                }
+                            }
+                        } else {
+                            desktop_file_job = Some(DesktopFileJob::SaveBoardAs);
+                        }
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    if save_requested || save_as_requested {
+                        let name = state
+                            .file_path
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "board.json".to_string());
+                        match crate::parts_transfer::snapshots_used_on_board(
                             &state.doc,
-                            &path,
                             &state.templates,
                             &state.template_origin,
-                            &self.parts_db,
+                            &parts_db,
                         ) {
-                            Ok(()) => {
-                                remember_last_board(&path);
-                                state.set_file_path(path);
-                                state.io_message = None;
+                            Ok(embedded) => {
+                                let json = crate::persistence::to_json(&state.doc, &embedded);
+                                crate::web_io::download_bytes(&name, json.into_bytes());
+                                state.set_file_path(PathBuf::from(&name));
+                                state.io_message = Some(format!("Download started: {name}"));
                             }
                             Err(e) => state.io_message = Some(format!("Couldn't save board: {e}")),
                         }
                     }
-                }
-                #[cfg(target_arch = "wasm32")]
-                if save_requested || save_as_requested {
-                    let name = state
-                        .file_path
-                        .as_ref()
-                        .and_then(|p| p.file_name())
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "board.json".to_string());
-                    match crate::parts_transfer::snapshots_used_on_board(
-                        &state.doc,
-                        &state.templates,
-                        &state.template_origin,
-                        &self.parts_db,
-                    ) {
-                        Ok(embedded) => {
-                            let json = crate::persistence::to_json(&state.doc, &embedded);
-                            crate::web_io::download_bytes(&name, json.into_bytes());
-                            state.set_file_path(PathBuf::from(&name));
-                            state.io_message = Some(format!("Download started: {name}"));
-                        }
-                        Err(e) => state.io_message = Some(format!("Couldn't save board: {e}")),
-                    }
-                }
 
-                #[cfg(not(target_arch = "wasm32"))]
-                if export_manufacturing_requested {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        state.export_manufacturing_files_sync(dir, &self.parts_db);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if export_manufacturing_requested {
+                        desktop_file_job = Some(DesktopFileJob::ExportManufacturing);
                     }
-                }
-                #[cfg(target_arch = "wasm32")]
-                if export_manufacturing_requested {
-                    let stem = state
-                        .file_path
-                        .as_ref()
-                        .and_then(|p| p.file_stem())
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("board");
-                    let bom_csv = crate::bom::to_csv(&crate::bom::build_bom_rows(
-                        &state.doc,
-                        &state.templates,
-                        &state.template_origin,
-                        &self.parts_db,
-                    ));
-                    match crate::native_gerber::export_manufacturing_zip_bytes(
-                        &state.doc,
-                        &state.templates,
-                        stem,
-                        &bom_csv,
-                    ) {
-                        Ok(bytes) => {
-                            crate::web_io::download_bytes(
-                                &format!("{stem}_manufacturing.zip"),
-                                bytes,
-                            );
-                            state.io_message =
-                                Some(format!("Download started: {stem}_manufacturing.zip"));
-                        }
-                        Err(e) => {
-                            state.io_message =
-                                Some(format!("Couldn't export manufacturing files: {e}"))
+                    #[cfg(target_arch = "wasm32")]
+                    if export_manufacturing_requested {
+                        let stem = state
+                            .file_path
+                            .as_ref()
+                            .and_then(|p| p.file_stem())
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("board");
+                        let bom_csv = crate::bom::to_csv(&crate::bom::build_bom_rows(
+                            &state.doc,
+                            &state.templates,
+                            &state.template_origin,
+                            &parts_db,
+                        ));
+                        match crate::native_gerber::export_manufacturing_zip_bytes(
+                            &state.doc,
+                            &state.templates,
+                            stem,
+                            &bom_csv,
+                        ) {
+                            Ok(bytes) => {
+                                crate::web_io::download_bytes(
+                                    &format!("{stem}_manufacturing.zip"),
+                                    bytes,
+                                );
+                                state.io_message =
+                                    Some(format!("Download started: {stem}_manufacturing.zip"));
+                            }
+                            Err(e) => {
+                                state.io_message =
+                                    Some(format!("Couldn't export manufacturing files: {e}"))
+                            }
                         }
                     }
-                }
 
-                if new_board_requested {
-                    self.clear_new_board_dxf();
-                    pending_screen = Some(Screen::NewBoard(NewBoardParams::default()));
+                    if new_board_requested {
+                        reset_new_board_dxf = true;
+                        pending_screen = Some(Screen::NewBoard(NewBoardParams::default()));
+                    }
                 }
             }
         }
+        if let Some(screen) = pending_screen {
+            world.screen = screen;
+        }
+        drop(world);
+
+        if reset_new_board_dxf {
+            self.clear_new_board_dxf();
+        }
+        #[cfg(target_arch = "wasm32")]
         if let Some(err) = pending_dxf_read_err {
-            self.new_board_dxf = None;
-            self.new_board_dxf_label = None;
+            self.clear_new_board_dxf();
             self.new_board_dxf_message = Some((false, err));
         }
+        #[cfg(target_arch = "wasm32")]
         if let Some((name, bytes)) = pending_dxf_file {
             self.apply_dxf_bytes(&name, &bytes);
         }
-        if let Some(screen) = pending_screen {
-            self.screen = screen;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(job) = desktop_file_job {
+            if self.desktop_io.is_none() {
+                self.desktop_io = Some(spawn_desktop_file_job(job, self.world.clone()));
+            }
+        }
+    }
+}
+
+/// Drains MCP queries on their own OS thread so [`PcbApp::ui`] can
+/// block in a native file dialog without silencing the AI. Takes
+/// [`McpWorld`]'s mutex only for the duration of one handler.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_mcp_pump(
+    rx: mpsc::Receiver<crate::mcp::McpQuery>,
+    world: std::sync::Arc<std::sync::Mutex<McpWorld>>,
+) {
+    std::thread::Builder::new()
+        .name("alladin-mcp-pump".into())
+        .spawn(move || {
+            while let Ok(query) = rx.recv() {
+                let mut world = world.lock().unwrap_or_else(|p| p.into_inner());
+                let McpWorld { screen, parts_db } = &mut *world;
+                handle_mcp_query(query, screen, parts_db);
+            }
+        })
+        .expect("alladin-mcp-pump thread");
+}
+
+/// Runs one native file dialog (and manufacturing write) on a worker
+/// thread. [`PcbApp::ui`] keeps pumping; the result is applied on a
+/// later frame via [`apply_desktop_io_result`].
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_desktop_file_job(
+    job: DesktopFileJob,
+    world: std::sync::Arc<std::sync::Mutex<McpWorld>>,
+) -> mpsc::Receiver<DesktopIoResult> {
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("alladin-desktop-io".into())
+        .spawn(move || {
+            let result = match job {
+                DesktopFileJob::OpenBoard => {
+                    DesktopIoResult::OpenBoard(board_file_dialog().pick_file())
+                }
+                DesktopFileJob::SaveBoardAs => {
+                    DesktopIoResult::SaveBoardAs(board_file_dialog().save_file())
+                }
+                DesktopFileJob::ExportManufacturing => {
+                    let snapshot = {
+                        let world = world.lock().unwrap_or_else(|p| p.into_inner());
+                        export_snapshot(&world)
+                    };
+                    let dir = rfd::FileDialog::new().pick_folder();
+                    let message = match (snapshot, dir) {
+                        (Some(snap), Some(dir)) => Some(match export_manufacturing_files_to_dir(
+                            &snap.doc,
+                            &snap.templates,
+                            &snap.file_path,
+                            &dir,
+                            &snap.bom_csv,
+                        ) {
+                            Ok(files) => format!(
+                                "Wrote manufacturing files:\n  {}\n  {}\n  {}",
+                                files.gerber_zip.display(),
+                                files.position_csv.display(),
+                                files.bom_csv.display(),
+                            ),
+                            Err(e) => format!("Couldn't export manufacturing files: {e}"),
+                        }),
+                        _ => None,
+                    };
+                    DesktopIoResult::ExportManufacturing { message }
+                }
+                DesktopFileJob::ImportDxf => {
+                    let picked = rfd::FileDialog::new()
+                        .add_filter("DXF outline", &["dxf"])
+                        .pick_file();
+                    DesktopIoResult::ImportDxf(picked.map(|path| {
+                        let name = path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("outline.dxf")
+                            .to_string();
+                        std::fs::read(&path)
+                            .map(|bytes| (name, bytes))
+                            .map_err(|e| format!("Couldn't read DXF: {e}"))
+                    }))
+                }
+                DesktopFileJob::ExportParts { json } => DesktopIoResult::ExportParts {
+                    path: rfd::FileDialog::new()
+                        .add_filter("Alladin parts", &["json"])
+                        .set_file_name("alladin-parts.json")
+                        .save_file(),
+                    json,
+                },
+                DesktopFileJob::ImportParts => {
+                    let path = rfd::FileDialog::new()
+                        .add_filter("Alladin parts", &["json"])
+                        .pick_file();
+                    DesktopIoResult::ImportParts(path.map(|path| {
+                        std::fs::read_to_string(&path)
+                            .map_err(|e| format!("Couldn't read parts file: {e}"))
+                    }))
+                }
+            };
+            let _ = tx.send(result);
+        })
+        .expect("alladin-desktop-io thread");
+    rx
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct ExportSnapshot {
+    doc: BoardDoc,
+    templates: Vec<FootprintTemplate>,
+    file_path: Option<PathBuf>,
+    bom_csv: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_snapshot(world: &McpWorld) -> Option<ExportSnapshot> {
+    let Screen::Editor(state) = &world.screen else {
+        return None;
+    };
+    let bom_csv = crate::bom::to_csv(&crate::bom::build_bom_rows(
+        &state.doc,
+        &state.templates,
+        &state.template_origin,
+        &world.parts_db,
+    ));
+    Some(ExportSnapshot {
+        doc: state.doc.clone(),
+        templates: state.templates.clone(),
+        file_path: state.file_path.clone(),
+        bom_csv,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_desktop_io_result(app: &mut PcbApp, result: DesktopIoResult) {
+    match result {
+        DesktopIoResult::OpenBoard(path) => {
+            let mut world = app.lock_world();
+            if let Some(path) = path {
+                match editor_from_path(path, &world.parts_db) {
+                    Ok(opened) => world.screen = Screen::Editor(opened),
+                    Err(e) => {
+                        if let Screen::Editor(state) = &mut world.screen {
+                            state.io_message = Some(format!("Couldn't open board: {e}"));
+                        } else {
+                            eprintln!("Couldn't open board: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        DesktopIoResult::SaveBoardAs(path) => {
+            let Some(path) = path else {
+                return;
+            };
+            let mut world = app.lock_world();
+            let McpWorld { screen, parts_db } = &mut *world;
+            let Screen::Editor(state) = screen else {
+                return;
+            };
+            match save_to_path(
+                &state.doc,
+                &path,
+                &state.templates,
+                &state.template_origin,
+                parts_db,
+            ) {
+                Ok(()) => {
+                    remember_last_board(&path);
+                    state.set_file_path(path);
+                    state.io_message = None;
+                }
+                Err(e) => state.io_message = Some(format!("Couldn't save board: {e}")),
+            }
+        }
+        DesktopIoResult::ExportManufacturing { message } => {
+            if let Some(message) = message {
+                let mut world = app.lock_world();
+                if let Screen::Editor(state) = &mut world.screen {
+                    state.io_message = Some(message);
+                }
+            }
+        }
+        DesktopIoResult::ImportDxf(picked) => match picked {
+            None => {}
+            Some(Ok((name, bytes))) => app.apply_dxf_bytes(&name, &bytes),
+            Some(Err(e)) => {
+                app.clear_new_board_dxf();
+                app.new_board_dxf_message = Some((false, e));
+            }
+        },
+        DesktopIoResult::ExportParts { path, json } => {
+            let mut world = app.lock_world();
+            if let (Some(path), Screen::Editor(state)) = (path, &mut world.screen) {
+                match std::fs::write(&path, json.as_bytes()) {
+                    Ok(()) => {
+                        state.lcsc_message =
+                            Some((true, format!("Exported parts to {}", path.display())))
+                    }
+                    Err(e) => {
+                        state.lcsc_message = Some((false, format!("Couldn't export parts: {e}")))
+                    }
+                }
+            }
+        }
+        DesktopIoResult::ImportParts(read) => {
+            let mut world = app.lock_world();
+            let McpWorld { screen, parts_db } = &mut *world;
+            let Screen::Editor(state) = screen else {
+                return;
+            };
+            match read {
+                None => {}
+                Some(Err(e)) => {
+                    state.lcsc_message = Some((false, e));
+                }
+                Some(Ok(json)) => match crate::parts_transfer::import_library_json(parts_db, &json)
+                {
+                    Ok((n, skip)) => {
+                        let (templates, origin, hover, category) = load_templates(parts_db);
+                        state.templates = templates;
+                        state.template_origin = origin;
+                        state.template_hover = hover;
+                        state.template_category = category;
+                        state.lcsc_message = Some((
+                            true,
+                            format!("Imported {n} part(s), skipped {skip} duplicate(s)."),
+                        ));
+                    }
+                    Err(e) => {
+                        state.lcsc_message = Some((false, format!("Couldn't import parts: {e}")));
+                    }
+                },
+            }
         }
     }
 }
@@ -6804,45 +7048,43 @@ fn suggest_route_handle(
     };
     let net = net_record.id;
 
-    let resolve = |pin: &Option<String>,
-                   point: &Option<Vec<f64>>,
-                   which: &str|
-     -> Result<Point, String> {
-        if let Some(spec) = pin {
-            let (reference, number) = spec.split_once('.').ok_or_else(|| {
-                format!(
+    let resolve =
+        |pin: &Option<String>, point: &Option<Vec<f64>>, which: &str| -> Result<Point, String> {
+            if let Some(spec) = pin {
+                let (reference, number) = spec.split_once('.').ok_or_else(|| {
+                    format!(
                     "{which}_pin must look like \"U1.14\" (footprint reference, dot, pad number)"
                 )
-            })?;
-            let pad = state
-                .doc
-                .find_pad(&state.templates, reference, number)
-                .ok_or_else(|| format!("no such pin: {reference} pin {number}"))?;
-            let (center, _, pad_net) = state
-                .doc
-                .pad_endpoint(pad)
-                .ok_or_else(|| format!("{spec} is not a live pad"))?;
-            if pad_net != Some(net) {
-                return Err(format!(
+                })?;
+                let pad = state
+                    .doc
+                    .find_pad(&state.templates, reference, number)
+                    .ok_or_else(|| format!("no such pin: {reference} pin {number}"))?;
+                let (center, _, pad_net) = state
+                    .doc
+                    .pad_endpoint(pad)
+                    .ok_or_else(|| format!("{spec} is not a live pad"))?;
+                if pad_net != Some(net) {
+                    return Err(format!(
                     "{spec} is not on net {} -- connect_pins first, or route from the right pin",
                     args.net
                 ));
+                }
+                Ok(center)
+            } else if let Some(p) = point {
+                if p.len() != 2 {
+                    return Err(format!("{which}_mm must be [x_mm, y_mm]"));
+                }
+                Ok(Point::new(
+                    (p[0] * MM as f64).round() as Unit,
+                    (p[1] * MM as f64).round() as Unit,
+                ))
+            } else {
+                Err(format!(
+                    "give {which}_pin (\"REF.PIN\") or {which}_mm ([x, y])"
+                ))
             }
-            Ok(center)
-        } else if let Some(p) = point {
-            if p.len() != 2 {
-                return Err(format!("{which}_mm must be [x_mm, y_mm]"));
-            }
-            Ok(Point::new(
-                (p[0] * MM as f64).round() as Unit,
-                (p[1] * MM as f64).round() as Unit,
-            ))
-        } else {
-            Err(format!(
-                "give {which}_pin (\"REF.PIN\") or {which}_mm ([x, y])"
-            ))
-        }
-    };
+        };
     let start = match resolve(&args.start_pin, &args.start_mm, "start") {
         Ok(p) => p,
         Err(e) => return error_json(e),
@@ -7246,13 +7488,7 @@ mod mcp_handler_tests {
     }
 
     fn two_pin_test_template() -> crate::footprint::FootprintTemplate {
-        crate::footprint::straight_row_template(
-            "test-2pin".into(),
-            "P".into(),
-            2,
-            2.54,
-            0.45,
-        )
+        crate::footprint::straight_row_template("test-2pin".into(), "P".into(), 2, 2.54, 0.45)
     }
 
     fn editor_screen_with_two_pin() -> Screen {
@@ -7773,5 +8009,33 @@ mod mcp_handler_tests {
         assert!(parts
             .iter()
             .all(|p| p["name"].is_string() && p["pad_count"].is_number()));
+    }
+
+    #[test]
+    fn mcp_pump_answers_list_parts_without_running_ui() {
+        let parts_db = PartsDb::open_in_memory().unwrap();
+        let world = std::sync::Arc::new(std::sync::Mutex::new(super::McpWorld {
+            screen: editor_screen(),
+            parts_db,
+        }));
+        let (tx, rx) = std::sync::mpsc::channel();
+        super::spawn_mcp_pump(rx, world);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let json = rt.block_on(async {
+            let (reply, reply_rx) = tokio::sync::oneshot::channel();
+            tx.send(crate::mcp::McpQuery::ListParts { reply }).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
+                .await
+                .expect("pump must answer without PcbApp::ui")
+                .expect("reply channel")
+        });
+        let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            listed["parts"].as_array().unwrap().len() >= 1,
+            "unexpected: {listed}"
+        );
     }
 }
