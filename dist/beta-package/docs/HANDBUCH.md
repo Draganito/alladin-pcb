@@ -495,6 +495,12 @@ Bestellablauf bei JLCPCB:
 5. In der Bestückungsvorschau (2D/3D) die Ausrichtung gepolter
    Bauteile kontrollieren (Pin-1-Marker), dann bestellen.
 
+Die SMT-DFM-Ansicht desselben Exports (Darkroom-LED-Panel) — kein
+Kollisions- oder Pad-Fehler, weil die Regeln schon beim Platzieren
+greifen:
+
+![JLCPCB SMT DFM, Darkroom-LED-Panel](jlcpcb-smt-dfm-darkroom.png)
+
 Vorher: einmal „Refill zones" und speichern.
 
 

@@ -258,6 +258,12 @@ regelkonform. Vor der Bestellung trotzdem drei Dinge prüfen:
    Platinenkontur, die Lagen und die Ausrichtung gepolter Bauteile
    (Pin-1-Marker) kontrollieren.
 
+Dasselbe Board (Darkroom-LED-Panel) in JLCPCBs SMT-DFM: Kollision,
+Pad-Abstand und Kontur bleiben bei 0, weil Alladin ungültige
+Platzierung nicht zulässt.
+
+![JLCPCB SMT DFM, Darkroom-LED-Panel](docs/jlcpcb-smt-dfm-darkroom.png)
+
 ## 13. Fertigungsdaten erzeugen
 
 Oben auf **„Export manufacturing files…"** klicken und einen Ordner

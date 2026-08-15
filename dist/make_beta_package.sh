@@ -54,6 +54,7 @@ for f in \
     ./usr/share/doc/alladin-pcb/LIESMICH.txt \
     ./usr/share/doc/alladin-pcb/LICENSE.txt \
     ./usr/share/doc/alladin-pcb/docs/screenshot.png \
+    ./usr/share/doc/alladin-pcb/docs/jlcpcb-smt-dfm-darkroom.png \
     ./usr/share/doc/alladin-pcb/docs/HANDBUCH.md \
     ./usr/share/doc/alladin-pcb/docs/MANUAL.md \
     ./usr/share/doc/alladin-pcb/docs/hershey-USE_RESTRICTION.txt

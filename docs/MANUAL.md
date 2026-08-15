@@ -475,6 +475,12 @@ Ordering at JLCPCB:
 5. In the placement preview (2D/3D), check the orientation of polarized
    parts (pin-1 markers), then order.
 
+The SMT DFM view of that same export (darkroom LED panel) — no
+collision or pad-spacing errors, because the rules already ran at
+placement time:
+
+![JLCPCB SMT DFM, darkroom LED panel](jlcpcb-smt-dfm-darkroom.png)
+
 Before all this: hit "Refill zones" once and save.
 
 

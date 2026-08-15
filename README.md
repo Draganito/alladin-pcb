@@ -19,6 +19,12 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 
 ![Alladin PCB](docs/screenshot.png)
 
+The same board in JLCPCB's SMT DFM viewer. Assembly checks stay clean
+because illegal poses never land on the board — that is
+correct-by-construction in practice:
+
+![JLCPCB SMT DFM on the darkroom LED panel](docs/jlcpcb-smt-dfm-darkroom.png)
+
 ## Download (precompiled, nothing to build)
 
 Grab the ready-to-run beta from the
