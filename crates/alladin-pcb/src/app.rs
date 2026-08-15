@@ -38,10 +38,13 @@ enum ZoneRefillEvent {
     Finished { doc: BoardDoc, errors: Vec<String> },
 }
 
-/// In-flight "Refill zones" job. While active, board edits are locked and
-/// a toolbar progress bar is shown. Desktop fills on a worker thread
-/// (same idea as LCSC download); WASM advances one zone per egui frame
-/// so the single-threaded event loop can breathe.
+/// In-flight "Refill zones" job. While active, board writes (GUI and
+/// MCP) are locked — the desktop worker fills a clone and assigns it
+/// back, so a concurrent edit would be overwritten. Disk reload is
+/// paused the same way. A generation check on finish is the safety
+/// net if a write slips through: the filled clone is discarded.
+/// Desktop fills on a worker thread; WASM advances one zone per egui
+/// frame so the single-threaded event loop can breathe.
 enum ZoneRefillJob {
     /// One [`BoardDoc::refill_zone`] per frame — WASM path.
     #[cfg(target_arch = "wasm32")]
@@ -56,6 +59,7 @@ enum ZoneRefillJob {
     #[cfg(not(target_arch = "wasm32"))]
     Background {
         before: BoardDoc,
+        started_at_generation: u64,
         rx: mpsc::Receiver<ZoneRefillEvent>,
         done: usize,
         total: usize,
@@ -438,6 +442,10 @@ pub(crate) struct EditorState {
     zone_message: Option<String>,
     /// Non-blocking "Refill zones" job, if any — see [`ZoneRefillJob`].
     zone_refill: Option<ZoneRefillJob>,
+    /// Bumped on every successful board mutation (and undo/redo/reload)
+    /// so a finishing desktop refill can refuse to assign its clone
+    /// over a board that changed while the worker ran.
+    edit_generation: u64,
     /// The text an active [`Tool::PlaceSilkText`] session will place on
     /// the next click -- freely editable in the side panel the whole
     /// time the tool is active, so the user can place several
@@ -813,6 +821,7 @@ impl EditorState {
             zone_layer: LayerId::FCu,
             zone_message: None,
             zone_refill: None,
+            edit_generation: 0,
             silk_text_input: String::new(),
             silk_layer: LayerId::FCu,
             silk_text_message: None,
@@ -845,11 +854,16 @@ impl EditorState {
     /// Records `before` (a clone of [`Self::doc`] taken *before* a
     /// successful mutation) onto the undo stack and clears redo.
     fn record_undo(&mut self, before: BoardDoc) {
+        self.bump_edit_generation();
         self.redo_stack.clear();
         self.undo_stack.push_back(before);
         while self.undo_stack.len() > UNDO_LIMIT {
             self.undo_stack.pop_front();
         }
+    }
+
+    fn bump_edit_generation(&mut self) {
+        self.edit_generation = self.edit_generation.wrapping_add(1);
     }
 
     /// Runs `f` on the live doc; if it returns `Ok`, pushes the pre-
@@ -896,6 +910,9 @@ impl EditorState {
 
     /// Unconditional mutation (BoardDoc methods that always succeed).
     fn mutate_doc(&mut self, f: impl FnOnce(&mut BoardDoc)) {
+        if self.zone_refill_active() {
+            return;
+        }
         let before = self.doc.clone();
         f(&mut self.doc);
         self.record_undo(before);
@@ -942,6 +959,7 @@ impl EditorState {
         };
         self.cancel_transient_gestures();
         self.clear_selection();
+        self.bump_edit_generation();
         let current = std::mem::replace(&mut self.doc, prev);
         self.redo_stack.push_back(current);
         while self.redo_stack.len() > UNDO_LIMIT {
@@ -957,6 +975,7 @@ impl EditorState {
         };
         self.cancel_transient_gestures();
         self.clear_selection();
+        self.bump_edit_generation();
         let current = std::mem::replace(&mut self.doc, next);
         self.undo_stack.push_back(current);
         while self.undo_stack.len() > UNDO_LIMIT {
@@ -1433,6 +1452,7 @@ impl EditorState {
         self.routing = None;
         self.pending_connect = None;
         self.clear_selection();
+        self.bump_edit_generation();
         self.doc = doc;
         self.templates = templates;
         self.template_origin = template_origin;
@@ -1776,6 +1796,12 @@ impl EditorState {
 
     /// (Re)creates or removes the whole-board solid plane on `layer` synchronously.
     fn set_layer_plane(&mut self, layer: LayerId, net: Option<NetId>) {
+        if self.zone_refill_active() {
+            self.zone_message = Some(
+                "Can't change planes while zones are refilling.".to_string(),
+            );
+            return;
+        }
         let before = self.doc.clone();
         let old_zones = match layer {
             LayerId::FCu => std::mem::take(&mut self.front_plane_zones),
@@ -1847,6 +1873,7 @@ impl EditorState {
             });
             self.zone_refill = Some(ZoneRefillJob::Background {
                 before,
+                started_at_generation: self.edit_generation,
                 rx,
                 done: 0,
                 total,
@@ -1916,6 +1943,7 @@ impl EditorState {
         {
             let ZoneRefillJob::Background {
                 before,
+                started_at_generation,
                 rx,
                 mut done,
                 mut total,
@@ -1928,6 +1956,12 @@ impl EditorState {
                         self.zone_message = Some(format!("Refilling zones\u{2026} {done}/{total}"));
                     }
                     Ok(ZoneRefillEvent::Finished { doc, errors }) => {
+                        if self.edit_generation != started_at_generation {
+                            self.zone_message = Some(
+                                "Zone refill discarded \u{2014} the board changed during the fill. Click Refill zones again.".to_string(),
+                            );
+                            break;
+                        }
                         self.record_undo(before);
                         self.doc = doc;
                         self.sync_plane_zones_from_doc();
@@ -1945,6 +1979,7 @@ impl EditorState {
                     Err(mpsc::TryRecvError::Empty) => {
                         self.zone_refill = Some(ZoneRefillJob::Background {
                             before,
+                            started_at_generation,
                             rx,
                             done,
                             total,
@@ -1952,8 +1987,10 @@ impl EditorState {
                         break;
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        self.doc = before;
-                        self.sync_plane_zones_from_doc();
+                        if self.edit_generation == started_at_generation {
+                            self.doc = before;
+                            self.sync_plane_zones_from_doc();
+                        }
                         self.zone_message =
                             Some("Zone refill failed (worker ended unexpectedly).".to_string());
                         break;
@@ -3392,42 +3429,57 @@ impl eframe::App for PcbApp {
             if let Some(rx) = self.wasm_pending.open_board.take() {
                 match rx.try_recv() {
                     Ok(crate::web_io::PickedFile::Ok { name, bytes }) => {
-                        let (templates, _, _, _) = load_templates(&world.parts_db);
-                        match String::from_utf8(bytes) {
-                            Ok(json) => match load_board_json(&json, &templates, &world.parts_db) {
-                                Ok((doc, merge)) => {
-                                    let (
-                                        templates,
-                                        template_origin,
-                                        template_hover,
-                                        template_category,
-                                    ) = load_templates(&world.parts_db);
-                                    let mut opened = EditorState::new(
-                                        doc,
-                                        templates,
-                                        template_origin,
-                                        template_hover,
-                                        template_category,
-                                    );
-                                    opened.set_file_path(PathBuf::from(name));
-                                    if let Some((n, skip)) = merge {
-                                        if n > 0 || skip > 0 {
-                                            opened.lcsc_message =
-                                                Some((true, format!("Board parts: imported {n}, already had {skip}.")));
+                        if matches!(&world.screen, Screen::Editor(s) if s.zone_refill_active()) {
+                            if let Screen::Editor(state) = &mut world.screen {
+                                state.io_message = Some(
+                                    "Can't open a board while zones are refilling.".to_string(),
+                                );
+                            }
+                        } else {
+                            let (templates, _, _, _) = load_templates(&world.parts_db);
+                            match String::from_utf8(bytes) {
+                                Ok(json) => {
+                                    match load_board_json(&json, &templates, &world.parts_db) {
+                                        Ok((doc, merge)) => {
+                                            let (
+                                                templates,
+                                                template_origin,
+                                                template_hover,
+                                                template_category,
+                                            ) = load_templates(&world.parts_db);
+                                            let mut opened = EditorState::new(
+                                                doc,
+                                                templates,
+                                                template_origin,
+                                                template_hover,
+                                                template_category,
+                                            );
+                                            opened.set_file_path(PathBuf::from(name));
+                                            if let Some((n, skip)) = merge {
+                                                if n > 0 || skip > 0 {
+                                                    opened.lcsc_message = Some((
+                                                        true,
+                                                        format!(
+                                                            "Board parts: imported {n}, already had {skip}."
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                            pending_screen = Some(Screen::Editor(opened));
+                                        }
+                                        Err(e) => {
+                                            if let Screen::Editor(state) = &mut world.screen {
+                                                state.io_message =
+                                                    Some(format!("Couldn't open board: {e}"));
+                                            }
                                         }
                                     }
-                                    pending_screen = Some(Screen::Editor(opened));
                                 }
                                 Err(e) => {
                                     if let Screen::Editor(state) = &mut world.screen {
                                         state.io_message =
                                             Some(format!("Couldn't open board: {e}"));
                                     }
-                                }
-                            },
-                            Err(e) => {
-                                if let Screen::Editor(state) = &mut world.screen {
-                                    state.io_message = Some(format!("Couldn't open board: {e}"));
                                 }
                             }
                         }
@@ -3834,7 +3886,7 @@ impl eframe::App for PcbApp {
                             }
                         }
                     }
-                    if ui.input(|i| i.key_pressed(egui::Key::R)) {
+                    if !state.zone_refill_active() && ui.input(|i| i.key_pressed(egui::Key::R)) {
                         match state.tool {
                             Tool::Place(_) => {
                                 state.place_rotation_deg = (state.place_rotation_deg + 90.0) % 360.0
@@ -3851,12 +3903,12 @@ impl eframe::App for PcbApp {
                             | Tool::PlaceSilkDot => {}
                         }
                     }
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    if !state.zone_refill_active() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         if let Tool::DrawZone = state.tool {
                             state.finish_zone();
                         }
                     }
-                    if ui.input(|i| i.key_pressed(egui::Key::V)) {
+                    if !state.zone_refill_active() && ui.input(|i| i.key_pressed(egui::Key::V)) {
                         if matches!(state.tool, Tool::Route) {
                             let outcome = state.routing.as_mut().map(|routing| {
                                 let before = state.doc.clone();
@@ -3875,7 +3927,7 @@ impl eframe::App for PcbApp {
                             }
                         }
                     }
-                    if ui.input(|i| i.key_pressed(egui::Key::Space)) {
+                    if !state.zone_refill_active() && ui.input(|i| i.key_pressed(egui::Key::Space)) {
                         if let (Tool::Route, Some(routing)) = (state.tool, &mut state.routing) {
                             state.route_message = if routing.fix_corner() {
                                 None
@@ -3891,7 +3943,8 @@ impl eframe::App for PcbApp {
                     // call, so this never shadows the "delete selected
                     // footprint/trace" gesture below); otherwise it falls
                     // through to that gesture, same as Delete.
-                    if ui.input(|i| i.key_pressed(egui::Key::Backspace))
+                    if !state.zone_refill_active()
+                        && ui.input(|i| i.key_pressed(egui::Key::Backspace))
                         && matches!((state.tool, &state.routing), (Tool::Route, Some(_)))
                     {
                         if let Some(routing) = &mut state.routing {
@@ -3901,9 +3954,11 @@ impl eframe::App for PcbApp {
                                 Some("no fixed corner to undo yet".to_string())
                             };
                         }
-                    } else if ui.input(|i| {
-                        i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
-                    }) {
+                    } else if !state.zone_refill_active()
+                        && ui.input(|i| {
+                            i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                        })
+                    {
                         if let Some(id) = state.selected.take() {
                             state.mutate_doc(|doc| {
                                 doc.remove_footprint(id);
@@ -3967,11 +4022,19 @@ impl eframe::App for PcbApp {
                             state.fitted = false;
                         }
                         ui.separator();
-                        if ui.button("New board...").clicked() {
+                        if ui
+                            .add_enabled(!state.zone_refill_active(), egui::Button::new("New board..."))
+                            .on_hover_text("Board writes are paused while zones refill.")
+                            .clicked()
+                        {
                             new_board_requested = true;
                         }
                         ui.separator();
-                        if ui.button("Open...").clicked() {
+                        if ui
+                            .add_enabled(!state.zone_refill_active(), egui::Button::new("Open..."))
+                            .on_hover_text("Board writes are paused while zones refill.")
+                            .clicked()
+                        {
                             open_requested = true;
                         }
                         if ui.button("Save").clicked() {
@@ -4393,9 +4456,11 @@ impl eframe::App for PcbApp {
                         state.tool = Tool::Select;
                     }
                     if let Some(id) = to_delete {
-                        state.mutate_doc(|doc| {
-                            doc.remove_footprint(id);
-                        });
+                        if !state.zone_refill_active() {
+                            state.mutate_doc(|doc| {
+                                doc.remove_footprint(id);
+                            });
+                        }
                         if state.selected == Some(id) {
                             state.clear_selection();
                         }
@@ -4592,24 +4657,31 @@ impl eframe::App for PcbApp {
                         }
                     });
                     if let Some((id, typed_name)) = net_rename_to_commit {
-                        let previous = previous_names.get(&id).cloned().unwrap_or_default();
-                        if typed_name.trim() == previous {
-                            if let Some(net) = state.doc.nets.iter_mut().find(|n| n.id == id) {
-                                net.name = previous;
-                            }
+                        if state.zone_refill_active() {
+                            state.net_message = Some(
+                                "Can't rename a net while zones are refilling.".to_string(),
+                            );
                         } else {
-                            let mut before = state.doc.clone();
-                            if let Some(net) = before.nets.iter_mut().find(|n| n.id == id) {
-                                net.name = previous.clone();
-                            }
-                            if let Err(e) = state.doc.rename_net(id, &typed_name) {
-                                state.net_message = Some(format!("Couldn't rename net: {e}"));
+                            let previous = previous_names.get(&id).cloned().unwrap_or_default();
+                            if typed_name.trim() == previous {
                                 if let Some(net) = state.doc.nets.iter_mut().find(|n| n.id == id) {
                                     net.name = previous;
                                 }
                             } else {
-                                state.record_undo(before);
-                                state.net_message = None;
+                                let mut before = state.doc.clone();
+                                if let Some(net) = before.nets.iter_mut().find(|n| n.id == id) {
+                                    net.name = previous.clone();
+                                }
+                                if let Err(e) = state.doc.rename_net(id, &typed_name) {
+                                    state.net_message = Some(format!("Couldn't rename net: {e}"));
+                                    if let Some(net) = state.doc.nets.iter_mut().find(|n| n.id == id)
+                                    {
+                                        net.name = previous;
+                                    }
+                                } else {
+                                    state.record_undo(before);
+                                    state.net_message = None;
+                                }
                             }
                         }
                     }
@@ -5524,11 +5596,11 @@ impl eframe::App for PcbApp {
                     }
 
                     #[cfg(not(target_arch = "wasm32"))]
-                    if open_requested {
+                    if open_requested && !state.zone_refill_active() {
                         desktop_file_job = Some(DesktopFileJob::OpenBoard);
                     }
                     #[cfg(target_arch = "wasm32")]
-                    if open_requested {
+                    if open_requested && !state.zone_refill_active() {
                         self.wasm_pending.open_board =
                             Some(crate::web_io::pick_file("Alladin PCB board", &["json"]));
                     }
@@ -5623,7 +5695,7 @@ impl eframe::App for PcbApp {
                         }
                     }
 
-                    if new_board_requested {
+                    if new_board_requested && !state.zone_refill_active() {
                         reset_new_board_dxf = true;
                         pending_screen = Some(Screen::NewBoard(NewBoardParams::default()));
                     }
@@ -5792,6 +5864,14 @@ fn apply_desktop_io_result(app: &mut PcbApp, result: DesktopIoResult) {
     match result {
         DesktopIoResult::OpenBoard(path) => {
             let mut world = app.lock_world();
+            if matches!(&world.screen, Screen::Editor(s) if s.zone_refill_active()) {
+                if let Screen::Editor(state) = &mut world.screen {
+                    state.io_message = Some(
+                        "Can't open a board while zones are refilling.".to_string(),
+                    );
+                }
+                return;
+            }
             if let Some(path) = path {
                 match editor_from_path(path, &world.parts_db) {
                     Ok(opened) => world.screen = Screen::Editor(opened),
@@ -6317,6 +6397,9 @@ pub(crate) fn download_lcsc_part_write(
 /// [`crate::mcp::McpQuery::ConnectPins`]'s handler.
 #[cfg(not(target_arch = "wasm32"))]
 fn connect_pins_write(screen: &mut Screen, args: crate::mcp::ConnectPinsArgs) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6543,6 +6626,9 @@ fn place_footprint_write(
     screen: &mut Screen,
     args: crate::mcp::PlaceFootprintArgs,
 ) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6612,6 +6698,9 @@ fn set_zone_connection_write(
     screen: &mut Screen,
     args: crate::mcp::SetZoneConnectionArgs,
 ) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6658,6 +6747,9 @@ fn move_footprint_write(
     screen: &mut Screen,
     args: crate::mcp::MoveFootprintArgs,
 ) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6716,6 +6808,9 @@ fn probe_placement_json(
 /// [`crate::mcp::McpQuery::PlaceParts`]'s handler -- atomic multi-place.
 #[cfg(not(target_arch = "wasm32"))]
 fn place_parts_write(screen: &mut Screen, args: crate::mcp::PlacePartsArgs) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6732,6 +6827,9 @@ fn place_parts_write(screen: &mut Screen, args: crate::mcp::PlacePartsArgs) -> s
 /// [`crate::mcp::McpQuery::MoveParts`]'s handler -- atomic multi-move.
 #[cfg(not(target_arch = "wasm32"))]
 fn move_parts_write(screen: &mut Screen, args: crate::mcp::MovePartsArgs) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6754,6 +6852,9 @@ fn remove_footprint_write(
     screen: &mut Screen,
     args: crate::mcp::RemoveFootprintArgs,
 ) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6783,6 +6884,9 @@ fn disconnect_pin_write(
     screen: &mut Screen,
     args: crate::mcp::DisconnectPinArgs,
 ) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6819,6 +6923,9 @@ fn add_pin_stitching_via_write(
     screen: &mut Screen,
     args: crate::mcp::AddPinStitchingViaArgs,
 ) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6922,6 +7029,9 @@ fn add_pin_stitching_via_write(
 /// delegates to [`BoardDoc::rename_net`].
 #[cfg(not(target_arch = "wasm32"))]
 fn rename_net_write(screen: &mut Screen, args: crate::mcp::RenameNetArgs) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6972,6 +7082,9 @@ fn probe_route_json(screen: &Screen, args: crate::mcp::ProbeRouteArgs) -> serde_
 /// [`probe_route_json`], then `add_track_path` / `try_add_via` through undo.
 #[cfg(not(target_arch = "wasm32"))]
 fn commit_route_write(screen: &mut Screen, args: crate::mcp::CommitRouteArgs) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -6995,6 +7108,9 @@ fn commit_route_write(screen: &mut Screen, args: crate::mcp::CommitRouteArgs) ->
 /// [`crate::mcp::McpQuery::RipupWire`]'s handler.
 #[cfg(not(target_arch = "wasm32"))]
 fn ripup_wire_write(screen: &mut Screen, args: crate::mcp::RipupWireArgs) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -7027,6 +7143,11 @@ fn suggest_route_handle(
     args: crate::mcp::SuggestRouteArgs,
 ) -> serde_json::Value {
     use crate::mcp_routing::{self, SuggestOptions};
+    if args.commit == Some(true) {
+        if let Some(err) = board_write_lock_error(screen) {
+            return err;
+        }
+    }
     let Screen::Editor(state) = screen else {
         return no_board_open_json_error();
     };
@@ -7186,6 +7307,9 @@ fn new_board_write(
     parts_db: &PartsDb,
     args: crate::mcp::NewBoardArgs,
 ) -> serde_json::Value {
+    if let Some(err) = board_write_lock_error(screen) {
+        return err;
+    }
     if matches!(screen, Screen::Editor(_)) && !args.replace_current.unwrap_or(false) {
         return error_json(
             "a board is already open -- pass replace_current=true to discard it (ask the human first: unsaved work and undo history would be gone)",
@@ -7230,6 +7354,24 @@ fn new_board_write(
         template_category,
     ));
     serde_json::json!({ "ok": true, "width_mm": args.width_mm, "height_mm": args.height_mm, "layer_count": 2, "copper_weight_oz": match copper_weight { CopperWeight::OneOz => 1, CopperWeight::TwoOz => 2 } })
+}
+
+/// Shared MCP/GUI copy while a desktop zone-refill worker owns the board.
+#[cfg(not(target_arch = "wasm32"))]
+const ZONE_REFILL_LOCK_MSG: &str =
+    "zone refill is running -- board writes are locked until it finishes (retry in a few seconds)";
+
+/// `Some(error_json)` while [`EditorState::zone_refill_active`], so a
+/// write cannot land on the live doc and then be stomped by the
+/// worker's finished clone.
+#[cfg(not(target_arch = "wasm32"))]
+fn board_write_lock_error(screen: &Screen) -> Option<serde_json::Value> {
+    match screen {
+        Screen::Editor(state) if state.zone_refill_active() => {
+            Some(error_json(ZONE_REFILL_LOCK_MSG))
+        }
+        _ => None,
+    }
 }
 
 /// `{ "error": message }` -- the one JSON shape every write handler
@@ -8026,6 +8168,113 @@ mod mcp_handler_tests {
         assert!(
             listed["parts"].as_array().unwrap().len() >= 1,
             "unexpected: {listed}"
+        );
+    }
+
+    fn hang_zone_refill(screen: &mut Screen) {
+        let Screen::Editor(state) = screen else {
+            panic!("expected editor");
+        };
+        let (_tx, rx) = std::sync::mpsc::channel();
+        state.zone_refill = Some(ZoneRefillJob::Background {
+            before: state.doc.clone(),
+            started_at_generation: state.edit_generation,
+            rx,
+            done: 0,
+            total: 1,
+        });
+    }
+
+    #[test]
+    fn mcp_board_writes_are_refused_while_zone_refill_runs() {
+        let mut screen = editor_screen();
+        let template = a_template_with_pads(&screen, 1);
+        hang_zone_refill(&mut screen);
+
+        let placed = place(&mut screen, &template, 0.0, 0.0);
+        assert!(
+            placed["error"]
+                .as_str()
+                .unwrap()
+                .contains("zone refill is running"),
+            "unexpected: {placed}"
+        );
+        let Screen::Editor(state) = &screen else {
+            panic!("expected editor");
+        };
+        assert!(
+            state.doc.footprints.is_empty(),
+            "a refused place must not land on the live doc"
+        );
+
+        let summary = board_summary_json(&screen);
+        assert!(
+            summary.get("error").is_none(),
+            "reads must keep working during refill: {summary}"
+        );
+
+        let parts_db = PartsDb::open_in_memory().unwrap();
+        let created = new_board_write(
+            &mut screen,
+            &parts_db,
+            crate::mcp::NewBoardArgs {
+                width_mm: 40.0,
+                height_mm: 40.0,
+                layer_count: None,
+                copper_weight_oz: None,
+                corner_radius_mm: None,
+                replace_current: Some(true),
+            },
+        );
+        assert!(
+            created["error"]
+                .as_str()
+                .unwrap()
+                .contains("zone refill is running"),
+            "unexpected: {created}"
+        );
+    }
+
+    #[test]
+    fn finishing_zone_refill_discards_clone_if_the_board_changed() {
+        let ctx = egui::Context::default();
+        let Screen::Editor(mut state) = editor_screen() else {
+            panic!("expected editor");
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started_at_generation = state.edit_generation;
+        state.zone_refill = Some(ZoneRefillJob::Background {
+            before: state.doc.clone(),
+            started_at_generation,
+            rx,
+            done: 0,
+            total: 1,
+        });
+        // A write that slipped past the lock (or a future missed path)
+        // must not be overwritten by the worker's clone.
+        state.bump_edit_generation();
+        let mut filled = state.doc.clone();
+        filled.copper_weight = CopperWeight::TwoOz;
+        tx.send(ZoneRefillEvent::Finished {
+            doc: filled,
+            errors: Vec::new(),
+        })
+        .unwrap();
+        state.poll_zone_refill(&ctx);
+        assert!(state.zone_refill.is_none());
+        assert_eq!(
+            state.doc.copper_weight,
+            CopperWeight::OneOz,
+            "changed board must keep the live doc, not the worker clone"
+        );
+        assert!(
+            state
+                .zone_message
+                .as_deref()
+                .unwrap_or("")
+                .contains("discarded"),
+            "unexpected: {:?}",
+            state.zone_message
         );
     }
 }
