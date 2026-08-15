@@ -8,7 +8,7 @@
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
-use alladin_core::{Item, LayerId, ZoneConnection};
+use alladin_core::{Item, LayerId};
 use alladin_geom::{Point, Unit, MM};
 use alladin_gerber::{
     set_generation_software, Circle as GerberCircle, DrillKind, ExcellonFile, GerberLayer, Oblong,
@@ -47,6 +47,7 @@ fn fab_point(p: Point) -> Point {
 pub enum NativeGerberError {
     Io(std::io::Error),
     Zip(zip::result::ZipError),
+    Refused(String),
 }
 
 impl std::fmt::Display for NativeGerberError {
@@ -54,6 +55,7 @@ impl std::fmt::Display for NativeGerberError {
         match self {
             NativeGerberError::Io(e) => write!(f, "filesystem error: {e}"),
             NativeGerberError::Zip(e) => write!(f, "zip error: {e}"),
+            NativeGerberError::Refused(e) => write!(f, "{e}"),
         }
     }
 }
@@ -88,6 +90,7 @@ pub fn export_manufacturing_files_native(
     out_dir: &Path,
     bom_csv_contents: &str,
 ) -> Result<ManufacturingFiles, NativeGerberError> {
+    manufacturing_export_preflight(doc, templates)?;
     set_generation_software("Dragan Bojovic", "Alladin PCB", env!("CARGO_PKG_VERSION"));
     std::fs::create_dir_all(out_dir)?;
 
@@ -106,6 +109,32 @@ pub fn export_manufacturing_files_native(
         position_csv,
         bom_csv,
     })
+}
+
+/// Refuses a fab export that would silently ship stale pours or drop
+/// footprints whose templates are missing from the library.
+pub fn manufacturing_export_preflight(
+    doc: &BoardDoc,
+    templates: &[FootprintTemplate],
+) -> Result<(), NativeGerberError> {
+    if doc.zones_are_stale() {
+        return Err(NativeGerberError::Refused(
+            "zones are stale -- refill them before exporting manufacturing files".into(),
+        ));
+    }
+    let missing: Vec<String> = doc
+        .footprints
+        .iter()
+        .filter(|fp| !templates.iter().any(|t| t.name == fp.template_name))
+        .map(|fp| format!("{} ({})", fp.reference, fp.template_name))
+        .collect();
+    if !missing.is_empty() {
+        return Err(NativeGerberError::Refused(format!(
+            "missing footprint template(s): {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 fn build_gerber_files(
@@ -443,6 +472,7 @@ pub fn export_manufacturing_zip_bytes(
     stem: &str,
     bom_csv_contents: &str,
 ) -> Result<Vec<u8>, NativeGerberError> {
+    manufacturing_export_preflight(doc, templates)?;
     set_generation_software("Dragan Bojovic", "Alladin PCB", env!("CARGO_PKG_VERSION"));
     let mut files = build_gerber_files(doc, templates, stem);
     files.push(NamedFile {
@@ -467,7 +497,7 @@ mod tests {
     use super::*;
     use crate::board_doc::{CopperWeight, LayerCount, NewBoardParams};
     use crate::footprint::PadTemplate;
-    use alladin_core::LayerId;
+    use alladin_core::{LayerId, ZoneConnection};
 
     fn empty_board() -> BoardDoc {
         NewBoardParams {
@@ -655,6 +685,27 @@ mod tests {
         assert!(
             cpl.contains("C1,1.000000,-2.000000,Top,-90.000000"),
             "got:\n{cpl}"
+        );
+    }
+
+    #[test]
+    fn export_refuses_a_footprint_whose_template_is_missing() {
+        let mut board = empty_board();
+        let template = crate::footprint::straight_row_template(
+            "orphan".into(),
+            "R".into(),
+            2,
+            2.54,
+            0.45,
+        );
+        board
+            .try_place_footprint(&template, Point::new(0, 0), 0.0)
+            .unwrap();
+        let err = manufacturing_export_preflight(&board, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing footprint template") && msg.contains("orphan"),
+            "unexpected: {msg}"
         );
     }
 }

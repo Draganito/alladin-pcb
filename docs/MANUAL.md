@@ -1,6 +1,6 @@
 # Alladin PCB — The Manual
 
-The complete A-to-Z user manual, as of v0.2.0-beta.1.
+The complete A-to-Z user manual, as of v0.3.0-beta.1.
 Deutsche Fassung: [HANDBUCH.md](HANDBUCH.md). For a guided, hands-on
 introduction with a worked example see
 [ANLEITUNG_FUER_ANFAENGER.md](../ANLEITUNG_FUER_ANFAENGER.md) (German) —
@@ -129,8 +129,7 @@ The start screen "Alladin PCB — New board" (also reachable later via
 |---|---|---|
 | "Import outline DXF…" | Optional board outline from LibreCAD/FreeCAD (closed `LWPOLYLINE`, or one closed ring of `LINE`/`ARC` segments; bulges/arcs tessellated). Dimensions then come from the DXF; corner radius is unused. | — |
 | "Width (mm)" / "Height (mm)" | Outer board dimensions (1–500 mm), ignored when a DXF outline is loaded | 50 × 30 |
-| "Layers" | 1 or 2 copper layers | 2 |
-| "Copper weight" | "1oz" or "2oz". Determines the binding minimum clearance: 0.10 mm (1 oz) or 0.16 mm (2 oz) — per JLCPCB rules, not switchable anywhere in the program. | 1oz |
+| "Copper weight" | "1oz" or "2oz". Determines the binding minimum clearance: 0.10 mm (1 oz) or 0.16 mm (2 oz) — per JLCPCB rules, not switchable anywhere in the program. Boards are always 2-layer (F.Cu + B.Cu). | 1oz |
 | "Corner radius (mm)" | Corner radius of the board outline, 0 = rectangular (unused with DXF) | 1.0 |
 
 "Create board" creates the board and enters the editor. Invalid values
@@ -439,7 +438,7 @@ never changed):
 
 - **"Save"** writes to the current path (first time acts like "Save
   As..."), **"Save As..."** writes to a new name, **"Open..."** loads
-  an Alladin `.json` file (file dialog filter "Aladin PCB board",
+  an Alladin `.json` file (file dialog filter "Alladin PCB board",
   `*.json`). Errors appear in red ("Couldn't open/save board: …").
   Save also embeds the non-builtin parts used on the board (see
   chapter 16).
@@ -454,7 +453,9 @@ never changed):
 ## 15. Exporting manufacturing files and ordering at JLCPCB
 
 Click **"Export manufacturing files..."**, choose a target folder —
-Alladin natively (without KiCad) writes three files:
+Alladin natively (without KiCad) writes three files. Export is refused
+if zones are stale (use "Refill zones") or a footprint template is
+missing, rather than writing an incomplete zip.
 
 | File | Contents |
 |---|---|
@@ -580,7 +581,7 @@ With no arguments the GUI starts. With a subcommand Alladin runs headless:
 
 | Command | Purpose |
 |---|---|
-| `new-board <path>` | Create an empty board (`--width-mm`, `--height-mm`, `--layers`, `--copper-oz`, `--corner-radius-mm`) |
+| `new-board <path>` | Create an empty board (`--width-mm`, `--height-mm`, `--layers 2`, `--copper-oz`, `--corner-radius-mm`) |
 | `download-part <C-Nr>` | Download an LCSC part into the parts DB |
 | `connect <board> <ref1> <pin1> <ref2> <pin2>` | Join two pins onto the same net |
 | `list-nets <board>` | List nets |
@@ -648,7 +649,7 @@ layer or more room, never "pull harder".
   display of selected objects.
 - **No KiCad import/export in the UI.** Alladin `.json` is the only board format; manufacturing is native.
 - **No built-in DRC button** — unnecessary by construction (chapter 1).
-- **1–2 copper layers, JLCPCB rule set.** More layers or other
+- **2 copper layers, JLCPCB rule set.** More layers or other
   manufacturers' rule sets are currently out of scope.
 
 ## 22. Glossary

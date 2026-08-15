@@ -1,6 +1,6 @@
 # Alladin PCB — Das Handbuch
 
-Vollständige Bedienungsanleitung von A bis Z, Stand v0.2.0-beta.1.
+Vollständige Bedienungsanleitung von A bis Z, Stand v0.3.0-beta.1.
 English version: [MANUAL.md](MANUAL.md).
 Die Oberfläche der App ist auf Englisch; Knopfbeschriftungen werden hier
 immer in Anführungszeichen mit dem englischen Original zitiert, z. B.
@@ -134,8 +134,7 @@ Der Startbildschirm „Alladin PCB — New board" (später jederzeit über
 |---|---|---|
 | „Import outline DXF…" | Optionale Platinenkontur aus LibreCAD/FreeCAD (geschlossene `LWPOLYLINE` oder ein geschlossener Ring aus `LINE`/`ARC`; Bögen/Bulges werden tesselliert). Maße kommen dann aus der DXF; Eckenradius entfällt. | — |
 | „Width (mm)" / „Height (mm)" | Außenmaße der Platine (1–500 mm), unbenutzt wenn DXF geladen | 50 × 30 |
-| „Layers" | 1 oder 2 Kupferlagen | 2 |
-| „Copper weight" | Kupfergewicht „1oz" oder „2oz". Bestimmt den verbindlichen Mindestabstand: 0,10 mm (1 oz) bzw. 0,16 mm (2 oz) — nach JLCPCB-Regeln, im ganzen Programm nicht abschaltbar. | 1oz |
+| „Copper weight" | Kupfergewicht „1oz" oder „2oz". Bestimmt den verbindlichen Mindestabstand: 0,10 mm (1 oz) bzw. 0,16 mm (2 oz) — nach JLCPCB-Regeln, im ganzen Programm nicht abschaltbar. Boards sind immer 2-lagig (F.Cu + B.Cu). | 1oz |
 | „Corner radius (mm)" | Eckenradius der Platinenkontur, 0 = rechteckig (unbenutzt mit DXF) | 1,0 |
 
 „Create board" legt das Board an und wechselt in den Editor. Bei
@@ -456,7 +455,7 @@ In der Werkzeugleiste, gültig für alles **künftig** verlegte Kupfer
 
 - **„Save"** speichert unter dem aktuellen Pfad (beim ersten Mal wie
   „Save As..."), **„Save As..."** unter neuem Namen, **„Open..."** lädt
-  eine Alladin-`.json`-Datei (Dateidialog-Filter „Aladin PCB board",
+  eine Alladin-`.json`-Datei (Dateidialog-Filter „Alladin PCB board",
   `*.json`). Fehler erscheinen rot („Couldn't open/save board: …").
   Beim Speichern werden genutzte Nicht-Builtin-Parts mitgeschrieben
   (siehe Kapitel 16).
@@ -473,7 +472,9 @@ In der Werkzeugleiste, gültig für alles **künftig** verlegte Kupfer
 ## 15. Fertigungsdaten exportieren und bei JLCPCB bestellen
 
 **„Export manufacturing files..."** klicken, Zielordner wählen —
-Alladin schreibt nativ (ohne KiCad) drei Dateien:
+Alladin schreibt nativ (ohne KiCad) drei Dateien. Sind Zonen veraltet
+(„Refill zones") oder fehlt ein Footprint-Template, wird der Export
+abgelehnt statt still unvollständige Gerbers zu schreiben.
 
 | Datei | Inhalt |
 |---|---|
@@ -604,7 +605,7 @@ Ohne Argumente startet die GUI. Mit Unterbefehl läuft Alladin headless:
 
 | Befehl | Zweck |
 |---|---|
-| `new-board <path>` | Leeres Board anlegen (`--width-mm`, `--height-mm`, `--layers`, `--copper-oz`, `--corner-radius-mm`) |
+| `new-board <path>` | Leeres Board anlegen (`--width-mm`, `--height-mm`, `--layers 2`, `--copper-oz`, `--corner-radius-mm`) |
 | `download-part <C-Nr>` | LCSC-Teil in die Parts-DB laden |
 | `connect <board> <ref1> <pin1> <ref2> <pin2>` | Zwei Pins auf dasselbe Netz legen |
 | `list-nets <board>` | Netze auflisten |
@@ -674,8 +675,8 @@ mehr Platz, nie „fester ziehen".
   das einzige Board-Format; die Fertigung läuft nativ.
 - **Kein eingebauter DRC-Knopf** — per Konstruktion unnötig
   (Kapitel 1).
-- **1–2 Kupferlagen, JLCPCB-Regelwerk.** Mehr Lagen oder andere
-  Fertiger-Regelsätze sind derzeit nicht vorgesehen.
+- **2 Kupferlagen, JLCPCB-Regelwerk.** Mehr Lagen oder andere
+  Fertiger-Regelsätze sind nicht vorgesehen.
 
 ## 22. Glossar
 

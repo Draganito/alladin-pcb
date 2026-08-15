@@ -2291,7 +2291,7 @@ enum DesktopIoResult {
 #[cfg(not(target_arch = "wasm32"))]
 fn board_file_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
-        .add_filter("Aladin PCB board", &["json"])
+        .add_filter("Alladin PCB board", &["json"])
         .set_file_name("board.json")
 }
 
@@ -3577,16 +3577,6 @@ impl eframe::App for PcbApp {
                         } else {
                             ui.add(egui::DragValue::new(&mut params.height_mm).range(1.0..=500.0).speed(0.5));
                         }
-                        ui.end_row();
-
-                        ui.label("Layers");
-                        egui::ComboBox::from_id_salt("layer_count")
-                            .selected_text(format!("{}", params.layer_count))
-                            .show_ui(ui, |ui| {
-                                for option in LayerCount::ALL {
-                                    ui.selectable_value(&mut params.layer_count, option, format!("{option}"));
-                                }
-                            });
                         ui.end_row();
 
                         ui.label("Copper weight");
@@ -7205,7 +7195,7 @@ fn new_board_write(
         None | Some(2) => {}
         Some(n) => {
             return error_json(format!(
-                "layer_count {n} is not supported -- only 2-layer boards work end-to-end today"
+                "layer_count {n} is not supported -- Alladin is 2-layer only"
             ))
         }
     }

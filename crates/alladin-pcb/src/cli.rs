@@ -28,6 +28,7 @@ pub enum Command {
         width_mm: f32,
         #[arg(long, default_value_t = 30.0)]
         height_mm: f32,
+        /// Must be 2. Alladin is 2-layer only; older `--layers 1` is rejected.
         #[arg(long, default_value_t = LayerCount::Two)]
         layers: LayerCount,
         #[arg(long = "copper-oz", default_value_t = CopperWeight::OneOz)]

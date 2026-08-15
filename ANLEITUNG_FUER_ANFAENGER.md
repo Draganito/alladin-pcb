@@ -65,7 +65,7 @@ Direkt nach dem Start siehst du den Bildschirm „New board":
    oder FreeCAD (eine `LWPOLYLINE`, oder ein Ring aus `LINE`/`ARC`).
    Dann kommen die Maße aus der DXF; Width/Height/Corner radius entfallen.
 2. Sonst: **Width (mm)** / **Height (mm)** — Außenmaße, z.B. `40` x `30`.
-3. **Layers** — für ein normales 2-Layer-Board bei der Standardeinstellung lassen.
+3. **Copper weight** — `1oz` oder `2oz` (bestimmt die JLCPCB-Abstände). Boards sind immer 2-lagig.
 4. **Corner radius (mm)** — abgerundete Ecken, `0` für rechteckig (nur ohne DXF).
 5. Auf **„Create board"** klicken.
 

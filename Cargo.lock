@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "alladin-core"
-version = "0.2.0-beta.1"
+version = "0.3.0-beta.1"
 dependencies = [
  "alladin-geom",
  "rstar",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "alladin-geom"
-version = "0.2.0-beta.1"
+version = "0.3.0-beta.1"
 dependencies = [
  "i_overlay",
  "rstar",
@@ -170,14 +170,14 @@ dependencies = [
 
 [[package]]
 name = "alladin-gerber"
-version = "0.2.0-beta.1"
+version = "0.3.0-beta.1"
 dependencies = [
  "alladin-geom",
 ]
 
 [[package]]
 name = "alladin-pcb"
-version = "0.2.0-beta.1"
+version = "0.3.0-beta.1"
 dependencies = [
  "alladin-core",
  "alladin-geom",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "alladin-render"
-version = "0.2.0-beta.1"
+version = "0.3.0-beta.1"
 dependencies = [
  "alladin-core",
  "alladin-geom",

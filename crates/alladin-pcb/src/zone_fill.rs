@@ -23,7 +23,9 @@
 
 use alladin_core::{thermal, Item, LayerId, NetId, Node, PadShape, RuleResolver, ZoneConnection};
 use alladin_geom::fill;
-use alladin_geom::{Circle, Point, Polygon, Unit, MM};
+use alladin_geom::{Point, Polygon, Unit, MM};
+#[cfg(test)]
+use alladin_geom::Circle;
 
 /// Pour keep-out from the absolute board outline. Same 1.0 mm comfort
 /// as MCP routing's edge default (fab hard floor for pads/tracks/vias
@@ -31,7 +33,7 @@ use alladin_geom::{Circle, Point, Polygon, Unit, MM};
 pub const ZONE_EDGE_COMFORT_MARGIN: Unit = MM;
 
 use crate::thermal_relief::{
-    first_illegal_thermal_on_layer, free_spoke_directions_in_node, pad_extent_along, pad_local_x,
+    first_illegal_thermal_on_layer, pad_extent_along, pad_local_x,
     self_exclude, MIN_FREE_SPOKE_DIRS,
 };
 
@@ -333,6 +335,7 @@ pub fn fill_zone(
 }
 
 /// [`fill_zone`] with self-center-only excludes (no multi-pad siblings).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn fill_zone_simple(
     outline: &Polygon,
     layer: LayerId,
@@ -357,6 +360,7 @@ pub fn fill_zone_simple(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::thermal_relief::free_spoke_directions_in_node;
     use alladin_core::{JlcpcbClearance, NetClass};
     use alladin_geom::{Segment, MM};
 

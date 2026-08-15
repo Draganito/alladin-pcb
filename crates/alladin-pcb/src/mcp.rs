@@ -214,7 +214,7 @@ pub struct RenameNetArgs {
 pub struct NewBoardArgs {
     pub width_mm: f64,
     pub height_mm: f64,
-    /// Copper layers; only 2 is supported end-to-end today. Omit for 2.
+    /// Copper layers. Alladin is 2-layer only; omit or pass 2.
     pub layer_count: Option<u8>,
     /// JLCPCB copper weight profile, 1 or 2 (oz). Omit for 1.
     pub copper_weight_oz: Option<u8>,

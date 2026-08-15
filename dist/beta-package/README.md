@@ -6,7 +6,7 @@ Correct-by-construction PCB editor: real **JLCPCB** design rules enforced
 live while you place and route. Desktop AI via an embedded **MCP** surface.
 Written in Rust. Builds as a native desktop app and (experimental) WASM web shell.
 
-Aimed at ESP32 / smart-home / small robotics-style 1–2 layer boards, not
+Aimed at ESP32 / smart-home / small robotics-style 2-layer boards, not
 as a full professional EDA suite.
 
 **License: [AGPL-3.0-only](LICENSE)** — Copyright © 2026 Dragan Bojovic.
@@ -66,7 +66,7 @@ cargo build --release -p alladin-pcb
 Tests:
 
 ```bash
-cargo test -p alladin-pcb
+cargo test --workspace
 ```
 
 ## Try the web demo (experimental)
@@ -106,8 +106,8 @@ verify its own work — read-only: `board_summary`, `get_footprints`,
 `place_footprint`, `move_footprint`, `place_parts`, `move_parts`,
 `remove_footprint`, `connect_pins`, `disconnect_pin`,
 `add_pin_stitching_via`, `rename_net`, `set_zone_connection`,
-`save_board`, `commit_route`, `ripup_wire`. Every write runs through the same DFM gates and Ctrl+Z undo
-history as GUI gestures. Zone fill stays in the GUI (no autorouter).
+`save_board`, `commit_route`, `ripup_wire`. Board writes run through the same DFM gates and Ctrl+Z undo
+history as GUI gestures (parts-library and file open/reload are outside undo). Zone fill stays in the GUI (no autorouter).
 
 Copy the *contents* of [`contrib/cursor-setup/`](contrib/cursor-setup)
 (`.cursor/` **and** `.cursorignore`) into the folder you open in Cursor:

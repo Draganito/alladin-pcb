@@ -300,7 +300,7 @@ pub enum LoadError {
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoadError::Parse(e) => write!(f, "not a valid Aladin PCB file: {e}"),
+            LoadError::Parse(e) => write!(f, "not a valid Alladin PCB file: {e}"),
             LoadError::UnsupportedVersion(v) => write!(
                 f,
                 "unsupported file version {v} (this build supports {FORMAT_VERSION})"
@@ -317,17 +317,10 @@ fn layer_count_to_u8(count: LayerCount) -> u8 {
     count.as_u8()
 }
 
-fn layer_count_from_u8(value: u8) -> LayerCount {
-    match value {
-        1 => LayerCount::One,
-        // `4` was a real, saveable `LayerCount::Four` before that
-        // variant was removed (see its own former doc comment: it was
-        // never wired to anything beyond its own label, so a 4-layer
-        // save has always been electrically identical to a 2-layer
-        // one) -- falls back here rather than becoming a load error,
-        // since there is nothing behaviourally different to recover.
-        _ => LayerCount::Two,
-    }
+fn layer_count_from_u8(_value: u8) -> LayerCount {
+    // Historical saves stored `1` (unused 1-layer label) or `4`
+    // (unused Four variant). Both were electrically 2-layer.
+    LayerCount::Two
 }
 
 fn copper_weight_to_u8(weight: CopperWeight) -> u8 {
@@ -341,7 +334,7 @@ fn copper_weight_from_u8(value: u8) -> CopperWeight {
     }
 }
 
-/// Serializes `doc` to Aladin PCB's own JSON save format (pretty-printed,
+/// Serializes `doc` to Alladin PCB's own JSON save format (pretty-printed,
 /// so a saved board is diffable/readable -- there is no performance
 /// pressure at hobby-board scale to justify a denser encoding).
 /// `embedded_parts` should be the non-builtin templates used on `doc`

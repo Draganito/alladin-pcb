@@ -642,6 +642,7 @@ fn mounting_hole_template(screw_size: &str, drill: Unit) -> FootprintTemplate {
 /// to let a user register their own simple through-hole parts
 /// (resistors, headers, ...) by hand; full LCSC/EasyEDA downloads live
 /// in `crate::lcsc`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn straight_row_template(
     name: String,
     reference_prefix: String,

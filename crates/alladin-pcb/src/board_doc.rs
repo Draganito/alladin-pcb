@@ -21,29 +21,19 @@ use crate::thermal_relief::{
 };
 use crate::zone_fill;
 
-/// Board layer count `alladin-pcb`'s "New board" dialog offers. Only 1/2
-/// layers today -- a hobbyist-focused subset of what real fab houses
-/// support, not a technical ceiling in `alladin_core::LayerId` (which is
-/// itself only `FCu`/`BCu`; >2 layers needs inner-layer modelling first).
-/// A `Four` variant existed here before, but was never wired beyond its
-/// own outline/label -- picking "4" produced a board electrically
-/// identical to a 2-layer one under a misleading label, so it was
-/// removed.
+/// Alladin boards are always 2-layer (F.Cu + B.Cu). `alladin_core::LayerId`
+/// has no inner layers; a historical `One` / `Four` label was never
+/// wired to different geometry. Old saves that stored `1` or `4` load
+/// as [`LayerCount::Two`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerCount {
-    One,
     Two,
 }
 
 impl LayerCount {
     pub fn as_u8(self) -> u8 {
-        match self {
-            LayerCount::One => 1,
-            LayerCount::Two => 2,
-        }
+        2
     }
-
-    pub const ALL: [LayerCount; 2] = [LayerCount::One, LayerCount::Two];
 }
 
 impl std::fmt::Display for LayerCount {
@@ -53,17 +43,16 @@ impl std::fmt::Display for LayerCount {
 }
 
 /// Round-trips with [`Display`](std::fmt::Display) above -- what
-/// `crate::cli`'s `new-board --layers` flag parses against, so an AI or
-/// script driving the CLI can pass the exact same `"1"`/`"2"` a human
-/// sees in the GUI's own layer-count dropdown.
+/// `crate::cli`'s `new-board --layers` flag parses against.
 impl std::str::FromStr for LayerCount {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "1" => Ok(LayerCount::One),
             "2" => Ok(LayerCount::Two),
-            other => Err(format!("invalid layer count \"{other}\" -- must be 1 or 2")),
+            other => Err(format!(
+                "invalid layer count \"{other}\" -- Alladin is 2-layer only"
+            )),
         }
     }
 }
@@ -4185,6 +4174,7 @@ impl BoardDoc {
     /// [`Self::refill_zone`] for every zone currently on the board -- the
     /// "Refill zones" UI action, for when several pours need to catch up
     /// with the board at once rather than one at a time.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn refill_all_zones(&mut self) -> Result<(), zone_fill::FillZoneError> {
         for id in self.zones.iter().map(|z| z.id).collect::<Vec<_>>() {
             self.refill_zone(id)?;
@@ -7302,13 +7292,15 @@ mod tests {
 
     #[test]
     fn layer_count_from_str_round_trips_with_display() {
-        for count in LayerCount::ALL {
-            assert_eq!(count.to_string().parse::<LayerCount>(), Ok(count));
-        }
+        assert_eq!(
+            LayerCount::Two.to_string().parse::<LayerCount>(),
+            Ok(LayerCount::Two)
+        );
     }
 
     #[test]
     fn layer_count_from_str_rejects_anything_else() {
+        assert!("1".parse::<LayerCount>().is_err());
         assert!("3".parse::<LayerCount>().is_err());
         assert!("".parse::<LayerCount>().is_err());
     }

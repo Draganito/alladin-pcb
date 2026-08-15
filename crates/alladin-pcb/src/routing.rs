@@ -7,7 +7,9 @@
 //! [`TraceDrag`] lets an existing segment be moved: neighbouring elbows
 //! adapt, vertex count stays constant, other tracks are left alone.
 
-use alladin_core::{Item, ItemId, JlcpcbDfm, LayerId, NetClass, NetId, ZoneConnection};
+use alladin_core::{Item, ItemId, JlcpcbDfm, LayerId, NetClass, NetId};
+#[cfg(test)]
+use alladin_core::ZoneConnection;
 use alladin_geom::{segment_within_outline_with_clearance, Point, Polygon, Unit};
 
 use crate::board_doc::{BoardDoc, PlacementError, DEFAULT_VIA_DIAMETER, DEFAULT_VIA_DRILL};

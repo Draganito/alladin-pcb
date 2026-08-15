@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn dumps_a_via_and_a_trace_with_x2_attributes() {
-        set_generation_software("Dragan Bojovic", "Alladin PCB", "0.2.0-beta.1");
+        set_generation_software("Dragan Bojovic", "Alladin PCB", env!("CARGO_PKG_VERSION"));
         let mut layer = GerberLayer::new("Copper,L1,Top,Signal", false);
         layer.add_pad(PadMaster::Circle(Circle::new(MM / 2, "ViaPad")), Point::new(MM, MM), 0.0);
         layer.add_trace_line(Point::new(0, 0), Point::new(2 * MM, 0), MM / 4, "Conductor");
